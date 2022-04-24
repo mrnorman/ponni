@@ -51,6 +51,9 @@ namespace pinni {
       using yakl::c::parallel_for;
       using yakl::c::SimpleBounds;
 
+      YAKL_SCOPE( layers     , this->layers     );
+      YAKL_SCOPE( num_layers , this->num_layers );
+
       if (num_layers == 0) yakl::yakl_throw("Error: model is empty");
 
       int num_inputs  = input.dimension[0];
@@ -74,7 +77,7 @@ namespace pinni {
         // Get the size of the temporary array(s)
         int tmp_size = layers(0).get_num_outputs();
         for (int i=1; i < num_layers-1; i++) {
-          tmp_size = max( tmp_size , layers(i).get_num_ouputs() );
+          tmp_size = std::max( tmp_size , layers(i).get_num_outputs() );
         }
 
         if (num_layers == 2) {  // For two layers, we only need one temporary array
@@ -91,7 +94,7 @@ namespace pinni {
           real2d tmp2("tmp2",tmp_size,num_batches);
           parallel_for( SimpleBounds<1>(num_batches) , YAKL_LAMBDA (int ibatch) {
             // First layer
-            layers(0).apply_serial( input , tmp1 );
+            layers(0).apply_serial( input , tmp1 , ibatch );
             bool result_in_tmp1 = true;
             // Middle layers
             for (int i=1; i < num_layers-1; i++) {

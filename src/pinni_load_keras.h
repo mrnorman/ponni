@@ -38,16 +38,10 @@ namespace pinni {
         auto g_id = H5Gopen( file , group_name.c_str() , H5P_DEFAULT );
 
         // Open and read the HDF5 kernel dataset
-        yakl::Array<float,2,yakl::memHost,yakl::styleC> kernel_file("kernel_file",num_outputs,num_inputs);
+        yakl::Array<float,2,yakl::memHost,yakl::styleC> kernel("kernel_file",num_inputs,num_outputs);
         auto d_id = H5Dopen( g_id , "kernel:0" , H5P_DEFAULT );
-        H5Dread( d_id , H5T_NATIVE_FLOAT , H5S_ALL , H5S_ALL , H5P_DEFAULT , kernel_file.data() );
+        H5Dread( d_id , H5T_NATIVE_FLOAT , H5S_ALL , H5S_ALL , H5P_DEFAULT , kernel.data() );
         H5Dclose( d_id );
-        yakl::Array<float,2,yakl::memHost,yakl::styleC> kernel("kernel",num_inputs,num_outputs);
-        for (int irow = 0; irow < num_outputs; irow++) {
-          for (int icol = 0; icol < num_inputs; icol++) {
-            kernel(icol,irow) = kernel_file(irow,icol);
-          }
-        }
 
         // Open and read the HDF5 bias dataset
         yakl::Array<float,1,yakl::memHost,yakl::styleC> bias("bias",num_outputs);
