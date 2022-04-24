@@ -5,11 +5,16 @@
 
 namespace pinni {
 
-  template <int MAX_LAYERS=10>
+  template <int MAX_LAYERS>
   class Sequential {
   protected:
     yakl::SArray<Layer,1,MAX_LAYERS> layers;
     int                              num_layers;
+
+    void copy_data(Sequential const &rhs) {
+      this->num_layers = rhs.num_layers;
+      this->layers     = rhs.layers    ;
+    }
 
   public:
 
@@ -19,6 +24,11 @@ namespace pinni {
       for (int i=0; i < num_layers; i++) { layers(i) = Layer(); }
       num_layers = 0; 
     }
+
+    YAKL_INLINE Sequential                  (Sequential const  &rhs) { copy_data(rhs); }
+    YAKL_INLINE Sequential                  (Sequential const &&rhs) { copy_data(rhs); }
+    YAKL_INLINE Sequential const & operator=(Sequential const  &rhs) { if (this == &rhs) return *this; copy_data(rhs); return *this; }
+    YAKL_INLINE Sequential const & operator=(Sequential const &&rhs) { if (this == &rhs) return *this; copy_data(rhs); return *this; }
 
 
     void add_layer( Layer const &layer ) {
@@ -103,6 +113,26 @@ namespace pinni {
 
 
     Layer get_last_layer() { return layers(num_layers-1); }
+
+
+    void print() {
+      std::cout << "Sequential model has " << num_layers << " layers:\n";
+      for (int i=0; i < num_layers; i++) {
+        std::cout << "  " << std::setw(3) << std::right << i+1 << ": "
+                  << std::setw(15) << std::left << layers(i).get_type_str() << " with "
+                  << layers(i).get_num_inputs() << " inputs and "
+                  << layers(i).get_num_outputs() << " outputs.\n";
+      }
+    }
+
+
+    void print_verbose() {
+      std::cout << "Sequential model has " << num_layers << " layers:\n";
+      for (int i=0; i < num_layers; i++) {
+        std::cout << "  " << i << ": ";
+        layers(i).print_verbose();
+      }
+    }
 
 
   };

@@ -3,11 +3,6 @@
 
 namespace pinni {
 
-  int constexpr UNINITIALIZED              = -1;
-  int constexpr TYPE_DENSE                 =  1;
-  int constexpr TYPE_ACTIVATION_RELU       =  2;
-  int constexpr TYPE_ACTIVATION_LEAKY_RELU =  3;
-
   class Layer {
   protected:
     
@@ -79,6 +74,12 @@ namespace pinni {
     YAKL_INLINE int get_num_inputs () const { return this->num_inputs ; }
     YAKL_INLINE int get_num_outputs() const { return this->num_outputs; }
     YAKL_INLINE int get_type       () const { return this->type       ; }
+    std::string get_type_str() const {
+      if      (type == TYPE_DENSE                ) { return "Dense"    ; }
+      else if (type == TYPE_ACTIVATION_RELU      ) { return "ReLU"     ; }
+      else if (type == TYPE_ACTIVATION_LEAKY_RELU) { return "LeakyReLU"; }
+      return "";
+    }
 
 
     // Apply this layer serially over the inputs for this batch index
@@ -137,6 +138,22 @@ namespace pinni {
       }
       output(irow,ibatch) = tmp + bias(irow);
     }
+    void print_verbose_dense() const {
+      std::cout << "    kernel:\n";
+      auto kernel_host = kernel.createHostCopy();
+      for (int irow=0; irow < num_outputs; irow++) {
+        std::cout << "      ";
+        for (int icol=0; icol < num_inputs; icol++) {
+          std::cout << std::setw(12) << kernel_host(icol,irow) << "  ";
+        }
+        std::cout << "\n";
+      }
+      std::cout << "    bias:\n";
+      auto bias_host = bias.createHostCopy();
+      for (int irow=0; irow < num_outputs; irow++) {
+        std::cout << "      " << std::setw(12) << bias_host(irow) << "\n";
+      }
+    }
 
 
     // ReLU
@@ -147,6 +164,7 @@ namespace pinni {
     YAKL_INLINE void apply_activation_relu_1( realConst2d input , real2d const &output , int ibatch , int irow ) const {
       output(irow,ibatch) = std::max( input(irow,ibatch) , static_cast<real>(0.) );
     }
+    void print_verbose_activation_relu() const {}
 
 
     // LeakyReLU
@@ -158,6 +176,19 @@ namespace pinni {
     }
     YAKL_INLINE void apply_activation_leaky_relu_1( realConst2d input , real2d const &output , int ibatch , int irow ) const {
       output(irow,ibatch) = input(irow,ibatch) >= 0 ? input(irow,ibatch) : params(0) * input(irow,ibatch);
+    }
+    void print_verbose_activation_leaky_relu() const {
+      std::cout << "    slope: " << std::setw(12) << params.createHostCopy()(0) << "\n";
+    }
+
+
+    void print_verbose() const {
+      std::cout << std::setw(15) << std::left << get_type_str() << " with "
+                << num_inputs << " inputs and "
+                << num_outputs << " outputs.\n";
+      if      (type == TYPE_DENSE                ) { print_verbose_dense                (); }
+      else if (type == TYPE_ACTIVATION_RELU      ) { print_verbose_activation_relu      (); }
+      else if (type == TYPE_ACTIVATION_LEAKY_RELU) { print_verbose_activation_leaky_relu(); }
     }
 
   };

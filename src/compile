@@ -1,0 +1,3 @@
+#!/bin/bash
+
+g++ -DYAKL_DEBUG -O0 -g -I/usr/include/hdf5/serial -std=c++17 ~/YAKL/src/YAKL.cpp -I ~/YAKL/src test.cpp -ljsoncpp -L/usr/lib/x86_64-linux-gnu/hdf5/serial -lhdf5
