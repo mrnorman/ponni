@@ -3,18 +3,13 @@
 
 namespace pinni {
 
-  int constexpr PINNI_UNINITIALIZED              = -1;
-  int constexpr PINNI_TYPE_DENSE                 =  1;
-  int constexpr PINNI_TYPE_ACTIVATION_RELU       =  2;
-  int constexpr PINNI_TYPE_ACTIVATION_LEAKY_RELU =  3;
+  int constexpr UNINITIALIZED              = -1;
+  int constexpr TYPE_DENSE                 =  1;
+  int constexpr TYPE_ACTIVATION_RELU       =  2;
+  int constexpr TYPE_ACTIVATION_LEAKY_RELU =  3;
 
-  class NN_Node {
+  class Layer {
   protected:
-    typedef float real;
-    typedef yakl::Array<real      ,1,yakl::memDevice,yakl::styleC> real1d     ;
-    typedef yakl::Array<real      ,2,yakl::memDevice,yakl::styleC> real2d     ;
-    typedef yakl::Array<real const,1,yakl::memDevice,yakl::styleC> realConst1d;
-    typedef yakl::Array<real const,2,yakl::memDevice,yakl::styleC> realConst2d;
     
     real2d kernel;      // Matrix kernel for dense layers in column,row format
     real1d bias;        // Bias vector for dense layers
@@ -23,34 +18,34 @@ namespace pinni {
     int    num_inputs;  // How many inputs we expect to apply this node on
     int    num_outputs; // How many outputs we expect to apply this node on
 
-    void copy_data(NN_Node const &rhs) {
-      this->kernel            = rhs.kernel           ;
-      this->bias              = rhs.bias             ;
-      this->activation_params = rhs.activation_params;
-      this->type              = rhs.type             ;
-      this->num_inputs        = rhs.num_inputs       ;
-      this->num_outputs       = rhs.num_outputs      ;
+    YAKL_INLINE void copy_data(Layer const &rhs) {
+      this->kernel      = rhs.kernel     ;
+      this->bias        = rhs.bias       ;
+      this->params      = rhs.params     ;
+      this->type        = rhs.type       ;
+      this->num_inputs  = rhs.num_inputs ;
+      this->num_outputs = rhs.num_outputs;
     }
 
   public:
     
-    NN_Node() {
-      this->type        = PINNI_UNINITIALIZED;
+    YAKL_INLINE Layer() {
+      this->type        = UNINITIALIZED;
       this->num_inputs  = -1;
       this->num_outputs = -1;
     }
-    ~NN_Node() {
-      kernel            = real2d();
-      bias              = real1d();
-      params            = real1d();
-      this->type        = PINNI_UNINITIALIZED;
+    YAKL_INLINE ~Layer() {
+      this->kernel      = real2d();
+      this->bias        = real1d();
+      this->params      = real1d();
+      this->type        = UNINITIALIZED;
       this->num_inputs  = -1;
       this->num_outputs = -1;
     }
-    YAKL_INLINE NN_Node                  (NN_Node const  &rhs) { copy_data(rhs) };
-    YAKL_INLINE NN_Node                  (NN_Node const &&rhs) { copy_data(rhs) };
-    YAKL_INLINE NN_Node const & operator=(NN_Node const  &rhs) { if (this == &rhs) return *this; copy_data(rhs); return *this; }
-    YAKL_INLINE NN_Node const & operator=(NN_Node const &&rhs) { if (this == &rhs) return *this; copy_data(rhs); return *this; }
+    YAKL_INLINE Layer                  (Layer const  &rhs) { copy_data(rhs); }
+    YAKL_INLINE Layer                  (Layer const &&rhs) { copy_data(rhs); }
+    YAKL_INLINE Layer const & operator=(Layer const  &rhs) { if (this == &rhs) return *this; copy_data(rhs); return *this; }
+    YAKL_INLINE Layer const & operator=(Layer const &&rhs) { if (this == &rhs) return *this; copy_data(rhs); return *this; }
 
 
     // Modifiers
@@ -78,31 +73,31 @@ namespace pinni {
 
 
     // Accessors
-    real2d get_kernel     () const { return this->kernel     ; }
-    real1d get_bias       () const { return this->bias       ; }
-    int    get_num_inputs () const { return this->num_inputs ; }
-    int    get_num_outputs() const { return this->num_outputs; }
-    real1d get_params     () const { return this->params     ; }
-    int    get_type       () const { return this->type       ; }
+    real2d get_kernel() const { return this->kernel     ; }
+    real1d get_bias  () const { return this->bias       ; }
+    real1d get_params() const { return this->params     ; }
+    YAKL_INLINE int get_num_inputs () const { return this->num_inputs ; }
+    YAKL_INLINE int get_num_outputs() const { return this->num_outputs; }
+    YAKL_INLINE int get_type       () const { return this->type       ; }
 
 
     // Apply this layer serially over the inputs for this batch index
     // For serial applications, the "row / num_output" index is first, and the batch index is last
     YAKL_INLINE void apply_serial( realConst2d input , real2d const &output , int ibatch ) const {
       for (int irow = 0; irow < output.dimension[0]; irow++) {
-        apply_1( intput , output , ibatch , irow );
+        apply_1( input , output , ibatch , irow );
       }
     }
 
 
     std::string validate() const {
-      if (type == PINNI_UNINITIALIZED) return "Node not initialized";
+      if (type == UNINITIALIZED) return "Node not initialized";
       if (num_inputs  <= 0) return "Node's num_inputs not initialized";
       if (num_outputs <= 0) return "Node's num_outputs not initialized";
-      if      (type == PINNI_TYPE_DENSE                ) { return validate_dense                (); }
-      else if (type == PINNI_TYPE_ACTIVATION_RELU      ) { return validate_activation_relu      (); }
-      else if (type == PINNI_TYPE_ACTIVATION_LEAKY_RELU) { return validate_activation_leaky_relu(); }
-      else                                               { return "Invalid node type"; }
+      if      (type == TYPE_DENSE                ) { return validate_dense                (); }
+      else if (type == TYPE_ACTIVATION_RELU      ) { return validate_activation_relu      (); }
+      else if (type == TYPE_ACTIVATION_LEAKY_RELU) { return validate_activation_leaky_relu(); }
+      else                                         { return "Invalid node type"; }
       return "";
     }
 
@@ -111,15 +106,15 @@ namespace pinni {
       // This is purposefully structured this way becuase eventually, we'll have a templated bitmask
       // to determine which layers to enable and which to disable. With if constexpr, we'll be able to
       // allow the compiler to exclude code we don't need for skinnier kerenls.
-      if (this->type == PINNI_TYPE_DENSE) {
+      if (this->type == TYPE_DENSE) {
         apply_dense_1( input , output , ibatch , irow );
         return;
       }
-      if (this->type == PINNI_TYPE_ACTIVATION_RELU) {
+      if (this->type == TYPE_ACTIVATION_RELU) {
         apply_activation_relu_1( input , output , ibatch , irow );
         return;
       }
-      if (this->type == PINNI_TYPE_ACTIVATION_LEAKY_RELU) {
+      if (this->type == TYPE_ACTIVATION_LEAKY_RELU) {
         apply_activation_leaky_relu_1( input , output , ibatch , irow );
         return;
       }
@@ -127,7 +122,7 @@ namespace pinni {
 
 
     // Dense
-    std::string validate_dens() {
+    std::string validate_dense() const {
       if ( ! kernel.initialized() ) return "Dense Node kernel matrix not initialized";
       if ( ! bias.initialized() ) return "Dense Node bias vector not initialized";
       if ( kernel.dimension[0] != num_inputs) return "Dense Node kernel matrix # columns != num_inputs";
@@ -145,17 +140,17 @@ namespace pinni {
 
 
     // ReLU
-    std::string validate_activation_relu() {
+    std::string validate_activation_relu() const {
       if ( num_inputs != num_outputs ) return "ReLU Node inputs != outputs";
       return "";
     }
     YAKL_INLINE void apply_activation_relu_1( realConst2d input , real2d const &output , int ibatch , int irow ) const {
-      output(irow,ibatch) = std::max( input(irow,ibatch) , 0._fp );
+      output(irow,ibatch) = std::max( input(irow,ibatch) , static_cast<real>(0.) );
     }
 
 
     // LeakyReLU
-    std::string validate_activation_relu() {
+    std::string validate_activation_leaky_relu() const {
       if ( num_inputs != num_outputs ) return "LeakyReLU Node inputs != outputs";
       if ( ! params.initialized() ) return "LeakyReLU Node params not initialized";
       if ( params.dimension[0] != 1 ) return "LeakyReLU Node params has more than one element";
