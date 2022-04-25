@@ -11,7 +11,7 @@ namespace pinni {
     yakl::SArray<Layer,1,MAX_LAYERS> layers;
     int                              num_layers;
 
-    void copy_data(Sequential const &rhs) {
+    YAKL_INLINE void copy_data(Sequential const &rhs) {
       this->num_layers = rhs.num_layers;
       this->layers     = rhs.layers    ;
     }
