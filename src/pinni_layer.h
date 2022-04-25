@@ -6,9 +6,9 @@ namespace pinni {
   class Layer {
   protected:
     
-    real2d kernel;      // Matrix kernel for dense layers in column,row format
-    real1d bias;        // Bias vector for dense layers
-    real1d params;      // Miscellaneous parameters for things like activation functions
+    realConst2d kernel;      // Matrix kernel for dense layers in column,row format
+    realConst1d bias;        // Bias vector for dense layers
+    realConst1d params;      // Miscellaneous parameters for things like activation functions
     int    type;        // What is the operation being performed by this node?
     int    num_inputs;  // How many inputs we expect to apply this node on
     int    num_outputs; // How many outputs we expect to apply this node on
@@ -30,9 +30,9 @@ namespace pinni {
       this->num_outputs = -1;
     }
     YAKL_INLINE ~Layer() {
-      this->kernel      = real2d();
-      this->bias        = real1d();
-      this->params      = real1d();
+      this->kernel      = realConst2d();
+      this->bias        = realConst1d();
+      this->params      = realConst1d();
       this->type        = UNINITIALIZED;
       this->num_inputs  = -1;
       this->num_outputs = -1;
@@ -44,12 +44,12 @@ namespace pinni {
 
 
     // Modifiers
-    void set_kernel( real2d const &kernel ) {
+    void set_kernel( realConst2d kernel ) {
       this->kernel      = kernel;
       this->num_inputs  = kernel.dimension[0];
       this->num_outputs = kernel.dimension[1];
     }
-    void set_bias( real1d const &bias ) {
+    void set_bias( realConst1d bias ) {
       this->bias = bias;
       this->num_outputs = bias.dimension[0];
     }
@@ -59,7 +59,7 @@ namespace pinni {
     void set_num_outputs( int num_outputs ) {
       this->num_outputs  = num_outputs;
     }
-    void set_params( real1d const &params ) {
+    void set_params( realConst1d params ) {
       this->params = params;
     }
     void set_type( int type ) {
@@ -68,9 +68,9 @@ namespace pinni {
 
 
     // Accessors
-    real2d get_kernel() const { return this->kernel     ; }
-    real1d get_bias  () const { return this->bias       ; }
-    real1d get_params() const { return this->params     ; }
+    realConst2d get_kernel() const { return this->kernel     ; }
+    realConst1d get_bias  () const { return this->bias       ; }
+    realConst1d get_params() const { return this->params     ; }
     YAKL_INLINE int get_num_inputs () const { return this->num_inputs ; }
     YAKL_INLINE int get_num_outputs() const { return this->num_outputs; }
     YAKL_INLINE int get_type       () const { return this->type       ; }
