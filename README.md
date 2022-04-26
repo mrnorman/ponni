@@ -1,2 +1,2 @@
-# pinni
-Portable In-loop Neural Network Inferencing
+# PONNI
+Portable Online Neural Network Inferencing
