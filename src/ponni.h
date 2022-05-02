@@ -3,7 +3,7 @@
 
 #include "YAKL.h"
 
-namespace pinni {
+namespace ponni {
   typedef float real;
 
   typedef yakl::Array<real      ,1,yakl::memDevice,yakl::styleC> real1d     ;
@@ -18,5 +18,5 @@ namespace pinni {
   int constexpr TYPE_ACTIVATION_LEAKY_RELU =  3;
 }
 
-#include "pinni_sequential.h"
+#include "ponni_sequential.h"
 

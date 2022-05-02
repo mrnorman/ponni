@@ -1,11 +1,11 @@
 
-#include "pinni.h"
-#include "pinni_load_keras.h"
+#include "ponni.h"
+#include "ponni_load_keras.h"
 
 int main( int argc , char **argv ) {
   yakl::init();
   {
-    auto model = pinni::load_keras_model<10>( argv[1] , argv[2] );
+    auto model = ponni::load_keras_model<10>( argv[1] , argv[2] );
     model.print_verbose();
 
     yakl::Array<float,2,yakl::memHost,yakl::styleC> inputs("inputs",12,1);

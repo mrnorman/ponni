@@ -1,7 +1,7 @@
 
 #pragma once
 
-namespace pinni {
+namespace ponni {
 
   class Layer {
   protected:

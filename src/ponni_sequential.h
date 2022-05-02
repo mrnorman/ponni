@@ -1,9 +1,9 @@
 
 #pragma once
 
-#include "pinni_layer.h"
+#include "ponni_layer.h"
 
-namespace pinni {
+namespace ponni {
 
   template <int MAX_LAYERS>
   class Sequential {

@@ -1,12 +1,12 @@
 
 #pragma once
 
-#include "pinni.h"
+#include "ponni.h"
 #include <fstream>
 #include <hdf5.h>
 #include <jsoncpp/json/json.h>
 
-namespace pinni {
+namespace ponni {
 
   template <int MAX_LAYERS>
   inline Sequential<MAX_LAYERS> load_keras_model( std::string model_json , std::string weights_h5 ) {
@@ -16,7 +16,7 @@ namespace pinni {
 
     auto file = H5Fopen( weights_h5.c_str() , H5F_ACC_RDONLY , H5P_DEFAULT );
 
-    pinni::Sequential<MAX_LAYERS> model;
+    ponni::Sequential<MAX_LAYERS> model;
 
     auto layers = root["config"]["layers"];
     int num_prev_outputs;
@@ -50,8 +50,8 @@ namespace pinni {
         H5Dclose( d_id );
 
         // Create and add the layer
-        pinni::Layer mylayer;
-        mylayer.set_type       ( pinni::TYPE_DENSE         );
+        ponni::Layer mylayer;
+        mylayer.set_type       ( ponni::TYPE_DENSE         );
         mylayer.set_num_inputs ( num_inputs                );
         mylayer.set_num_outputs( num_outputs               );
         mylayer.set_kernel     ( kernel.createDeviceCopy() );
@@ -68,8 +68,8 @@ namespace pinni {
         yakl::Array<float,1,yakl::memHost,yakl::styleC> params("params",1);
         params(0) = alpha;
 
-        pinni::Layer mylayer;
-        mylayer.set_type       ( pinni::TYPE_ACTIVATION_LEAKY_RELU );
+        ponni::Layer mylayer;
+        mylayer.set_type       ( ponni::TYPE_ACTIVATION_LEAKY_RELU );
         mylayer.set_num_inputs ( num_inputs                        );
         mylayer.set_num_outputs( num_outputs                       );
         mylayer.set_params     ( params.createDeviceCopy()         );
