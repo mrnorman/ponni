@@ -16,7 +16,7 @@ namespace ponni {
 
     auto file = H5Fopen( weights_h5.c_str() , H5F_ACC_RDONLY , H5P_DEFAULT );
 
-    ponni::Sequential<MAX_LAYERS> model;
+    Sequential<MAX_LAYERS> model;
 
     auto layers = root["config"]["layers"];
     int num_prev_outputs;
@@ -49,14 +49,20 @@ namespace ponni {
         H5Dread( d_id , H5T_NATIVE_FLOAT , H5S_ALL , H5S_ALL , H5P_DEFAULT , bias.data() );
         H5Dclose( d_id );
 
-        // Create and add the layer
-        ponni::Layer mylayer;
-        mylayer.set_type       ( ponni::TYPE_DENSE         );
-        mylayer.set_num_inputs ( num_inputs                );
-        mylayer.set_num_outputs( num_outputs               );
-        mylayer.set_kernel     ( kernel.createDeviceCopy() );
-        mylayer.set_bias       ( bias.createDeviceCopy()   );
-        model.add_layer( mylayer );
+        // Create and add the matmul layer
+        {
+          Layer mylayer;
+          mylayer.init( TYPE_DENSE_MATMUL , num_inputs , num_outputs , kernel.collapse().createDeviceCopy() );
+          model.add_layer( mylayer );
+        }
+
+        // Create and add the bias layer
+        {
+          Layer mylayer;
+          mylayer.init( TYPE_DENSE_ADD_BIAS , num_outputs , num_outputs , bias.createDeviceCopy() );
+          model.add_layer( mylayer );
+        }
+
         num_prev_outputs = num_outputs;
 
       } else if (class_name == "LeakyReLU") {
@@ -68,11 +74,8 @@ namespace ponni {
         yakl::Array<float,1,yakl::memHost,yakl::styleC> params("params",1);
         params(0) = alpha;
 
-        ponni::Layer mylayer;
-        mylayer.set_type       ( ponni::TYPE_ACTIVATION_LEAKY_RELU );
-        mylayer.set_num_inputs ( num_inputs                        );
-        mylayer.set_num_outputs( num_outputs                       );
-        mylayer.set_params     ( params.createDeviceCopy()         );
+        Layer mylayer;
+        mylayer.init( TYPE_ACT_LEAKY_RELU , num_inputs , num_outputs , params.createDeviceCopy() );
         model.add_layer( mylayer );
 
       } else {

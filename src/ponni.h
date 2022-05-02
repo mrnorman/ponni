@@ -12,10 +12,11 @@ namespace ponni {
   typedef yakl::Array<real const,1,yakl::memDevice,yakl::styleC> realConst1d;
   typedef yakl::Array<real const,2,yakl::memDevice,yakl::styleC> realConst2d;
 
-  int constexpr UNINITIALIZED              = -1;
-  int constexpr TYPE_DENSE                 =  1;
-  int constexpr TYPE_ACTIVATION_RELU       =  2;
-  int constexpr TYPE_ACTIVATION_LEAKY_RELU =  3;
+  int constexpr UNINITIALIZED       = -1;
+  int constexpr TYPE_DENSE_MATMUL   =  1;
+  int constexpr TYPE_DENSE_ADD_BIAS =  2;
+  int constexpr TYPE_ACT_RELU       =  3;
+  int constexpr TYPE_ACT_LEAKY_RELU =  4;
 }
 
 #include "ponni_sequential.h"

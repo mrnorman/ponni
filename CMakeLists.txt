@@ -1,5 +1,5 @@
 
-add_library(pinni INTERFACE)
-target_link_libraries(pinni INTERFACE yakl)
-target_include_directories(pinni INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_library(ponni INTERFACE)
+target_link_libraries(ponni INTERFACE yakl)
+target_include_directories(ponni INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 

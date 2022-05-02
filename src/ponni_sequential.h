@@ -27,19 +27,18 @@ namespace ponni {
 
     YAKL_INLINE Sequential                  (Sequential const  &rhs) { copy_data(rhs); }
     YAKL_INLINE Sequential                  (Sequential const &&rhs) { copy_data(rhs); }
-    YAKL_INLINE Sequential const & operator=(Sequential const  &rhs) { if (this == &rhs) return *this; copy_data(rhs); return *this; }
-    YAKL_INLINE Sequential const & operator=(Sequential const &&rhs) { if (this == &rhs) return *this; copy_data(rhs); return *this; }
+    YAKL_INLINE Sequential const & operator=(Sequential const  &rhs) { if (this != &rhs) copy_data(rhs); return *this; }
+    YAKL_INLINE Sequential const & operator=(Sequential const &&rhs) { if (this != &rhs) copy_data(rhs); return *this; }
 
 
     void add_layer( Layer const &layer ) {
-      auto msg = layer.validate();  if (msg != "") yakl::yakl_throw(msg.c_str());
       if ( num_layers > 0 ) {
         if ( layers(num_layers-1).get_num_outputs() != layer.get_num_inputs() ) {
           yakl::yakl_throw("Error: previous layer's # inputs != this layer's # outputs");
         }
       }
       if (num_layers == MAX_LAYERS) {
-        yakl::yakl_throw("Error: Trying to add too many layers. Please increase MAX_LAYERS template parameter");
+        yakl::yakl_throw("Error: Trying to add too many layers. Please increase the MAX_LAYERS template parameter");
       }
       layers(num_layers) = layer;
       num_layers++;
@@ -47,7 +46,7 @@ namespace ponni {
 
 
     // Perform inference no this sequential feed-forward model parallelizing only over batches
-    real2d inference_batchparallel( realConst2d input ) const {
+    real2d inference_batch_parallel( realConst2d input ) const {
       using yakl::c::parallel_for;
       using yakl::c::SimpleBounds;
 
@@ -56,11 +55,11 @@ namespace ponni {
 
       if (num_layers == 0) yakl::yakl_throw("Error: model is empty");
 
-      int num_inputs  = input.dimension[0];
-      int num_batches = input.dimension[1];
+      int num_inputs  = layers(0           ).get_num_inputs ();
       int num_outputs = layers(num_layers-1).get_num_outputs();
+      int num_batches = input.dimension[1];
 
-      if (num_inputs != layers(0).get_num_inputs()) {
+      if (input.dimension[0] != layers(0).get_num_inputs()) {
         yakl::yakl_throw("Error: Provided # inputs differs from model's # inputs");
       }
 
@@ -69,7 +68,7 @@ namespace ponni {
       if (num_layers == 1) {  // Trivial case for one layer
 
         parallel_for( SimpleBounds<1>(num_batches) , YAKL_LAMBDA (int ibatch) {
-          layers(0).apply_serial( input , output , ibatch );
+          layers(0).apply_batch_parallel( input , output , ibatch );
         });
 
       } else {  // Two or more layers needs either one or two temporary arrays
@@ -84,8 +83,8 @@ namespace ponni {
 
           real2d tmp("tmp",tmp_size,num_batches);
           parallel_for( SimpleBounds<1>(num_batches) , YAKL_LAMBDA (int ibatch) {
-            layers(0).apply_serial( input , tmp    , ibatch );
-            layers(1).apply_serial( tmp   , output , ibatch );
+            layers(0).apply_batch_parallel( input , tmp    , ibatch );
+            layers(1).apply_batch_parallel( tmp   , output , ibatch );
           });
 
         } else {  // For three or more layers, we need two temporary arrays
@@ -93,17 +92,19 @@ namespace ponni {
           real2d tmp1("tmp1",tmp_size,num_batches);
           real2d tmp2("tmp2",tmp_size,num_batches);
           parallel_for( SimpleBounds<1>(num_batches) , YAKL_LAMBDA (int ibatch) {
+            std::cout << "Layer 0" << std::endl;
             // First layer
-            layers(0).apply_serial( input , tmp1 , ibatch );
+            layers(0).apply_batch_parallel( input , tmp1 , ibatch );
             bool result_in_tmp1 = true;
             // Middle layers
             for (int i=1; i < num_layers-1; i++) {
-              if (result_in_tmp1) { layers(i).apply_serial( tmp1 , tmp2 , ibatch );  result_in_tmp1 = false; }
-              else                { layers(i).apply_serial( tmp2 , tmp1 , ibatch );  result_in_tmp1 = true ; }
+              std::cout << "Layer " << i << std::endl;
+              if (result_in_tmp1) { layers(i).apply_batch_parallel( tmp1 , tmp2 , ibatch );  result_in_tmp1 = false; }
+              else                { layers(i).apply_batch_parallel( tmp2 , tmp1 , ibatch );  result_in_tmp1 = true ; }
             }
             // Last layer
-            if (result_in_tmp1) { layers(num_layers-1).apply_serial( tmp1 , output , ibatch ); }
-            else                { layers(num_layers-1).apply_serial( tmp2 , output , ibatch ); }
+            if (result_in_tmp1) { layers(num_layers-1).apply_batch_parallel( tmp1 , output , ibatch ); }
+            else                { layers(num_layers-1).apply_batch_parallel( tmp2 , output , ibatch ); }
           });
 
         } // if (num_layers > 2)
