@@ -92,13 +92,11 @@ namespace ponni {
           real2d tmp1("tmp1",tmp_size,num_batches);
           real2d tmp2("tmp2",tmp_size,num_batches);
           parallel_for( SimpleBounds<1>(num_batches) , YAKL_LAMBDA (int ibatch) {
-            std::cout << "Layer 0" << std::endl;
             // First layer
             layers(0).apply_batch_parallel( input , tmp1 , ibatch );
             bool result_in_tmp1 = true;
             // Middle layers
             for (int i=1; i < num_layers-1; i++) {
-              std::cout << "Layer " << i << std::endl;
               if (result_in_tmp1) { layers(i).apply_batch_parallel( tmp1 , tmp2 , ibatch );  result_in_tmp1 = false; }
               else                { layers(i).apply_batch_parallel( tmp2 , tmp1 , ibatch );  result_in_tmp1 = true ; }
             }

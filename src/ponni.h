@@ -16,7 +16,7 @@ namespace ponni {
   int constexpr TYPE_DENSE_MATMUL   =  1;
   int constexpr TYPE_DENSE_ADD_BIAS =  2;
   int constexpr TYPE_ACT_RELU       =  3;
-  int constexpr TYPE_ACT_LEAKY_RELU =  4;
+  int constexpr TYPE_ACT_SIGMOID    =  4;
 }
 
 #include "ponni_sequential.h"

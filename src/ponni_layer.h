@@ -3,7 +3,6 @@
 
 #include "layers/Dense_matmul.h"
 #include "layers/Dense_bias.h"
-#include "layers/Act_leakyrelu.h"
 #include "layers/Act_relu.h"
 
 namespace ponni {
@@ -53,14 +52,24 @@ namespace ponni {
       if      (type == TYPE_DENSE_MATMUL  ) { return "Dense Matmul"        ; }
       else if (type == TYPE_DENSE_ADD_BIAS) { return "Dense Add Bias"      ; }
       else if (type == TYPE_ACT_RELU      ) { return "Activaiton ReLU"     ; }
-      else if (type == TYPE_ACT_LEAKY_RELU) { return "Activaiton LeakyReLU"; }
       return "";
     }
 
 
     // Apply this layer by parallelizing only over batches, not over rows
     YAKL_INLINE void apply_batch_parallel( realConst2d input , real2d const &output , int ibatch ) const {
-      for (int irow = 0; irow < num_out; irow++) { apply_1(input,output,ibatch,irow); }
+      if (type == TYPE_DENSE_MATMUL  ) {
+        for (int irow=0; irow<num_out; irow++) { Dense_matmul::apply_1(wts,num_in,num_out,input,output,ibatch,irow); }
+        return;
+      }
+      if (type == TYPE_DENSE_ADD_BIAS) {
+        for (int irow=0; irow<num_out; irow++) { Dense_bias  ::apply_1(wts,num_in,num_out,input,output,ibatch,irow); }
+        return;
+      }
+      if (type == TYPE_ACT_RELU      ) {
+        for (int irow=0; irow<num_out; irow++) { Act_relu    ::apply_1(wts,num_in,num_out,input,output,ibatch,irow); }
+        return;
+      }
     }
 
 
@@ -69,18 +78,13 @@ namespace ponni {
       this->num_in  = num_in ;
       this->num_out = num_out;
       this->wts     = wts    ;
-      if      (type == TYPE_DENSE_MATMUL  ) { Dense_matmul ::init(num_in,num_out,wts,ovr_wrt); }
-      else if (type == TYPE_DENSE_ADD_BIAS) { Dense_bias   ::init(num_in,num_out,wts,ovr_wrt); }
-      else if (type == TYPE_ACT_RELU      ) { Act_relu     ::init(num_in,num_out,wts,ovr_wrt); }
-      else if (type == TYPE_ACT_LEAKY_RELU) { Act_leakyrelu::init(num_in,num_out,wts,ovr_wrt); }
+      if      (type == TYPE_DENSE_MATMUL  ) { Dense_matmul::init(num_in,num_out,wts,ovr_wrt); }
+      else if (type == TYPE_DENSE_ADD_BIAS) { Dense_bias  ::init(num_in,num_out,wts,ovr_wrt); }
+      else if (type == TYPE_ACT_RELU      ) { Act_relu    ::init(num_in,num_out,wts,ovr_wrt); }
     }
 
 
     YAKL_INLINE void apply_1( realConst2d input , real2d const &output , int ibatch , int irow ) const {
-      if (type == TYPE_DENSE_MATMUL  ) { Dense_matmul ::apply_1(wts,num_in,num_out,input,output,ibatch,irow); return; }
-      if (type == TYPE_DENSE_ADD_BIAS) { Dense_bias   ::apply_1(wts,num_in,num_out,input,output,ibatch,irow); return; }
-      if (type == TYPE_ACT_RELU      ) { Act_relu     ::apply_1(wts,num_in,num_out,input,output,ibatch,irow); return; }
-      if (type == TYPE_ACT_LEAKY_RELU) { Act_leakyrelu::apply_1(wts,num_in,num_out,input,output,ibatch,irow); return; }
     }
 
 
@@ -88,10 +92,9 @@ namespace ponni {
       std::cout << std::setw(15) << std::left << get_type_str() << " with "
                 << num_in  << " inputs and "
                 << num_out << " outputs.\n";
-      if      (type == TYPE_DENSE_MATMUL  ) { Dense_matmul ::print_verbose(wts,num_in,num_out); }
-      else if (type == TYPE_DENSE_ADD_BIAS) { Dense_bias   ::print_verbose(wts,num_in,num_out); }
-      else if (type == TYPE_ACT_RELU      ) { Act_relu     ::print_verbose(wts,num_in,num_out); }
-      else if (type == TYPE_ACT_LEAKY_RELU) { Act_leakyrelu::print_verbose(wts,num_in,num_out); }
+      if      (type == TYPE_DENSE_MATMUL  ) { Dense_matmul::print_verbose(wts,num_in,num_out); }
+      else if (type == TYPE_DENSE_ADD_BIAS) { Dense_bias  ::print_verbose(wts,num_in,num_out); }
+      else if (type == TYPE_ACT_RELU      ) { Act_relu    ::print_verbose(wts,num_in,num_out); }
     }
 
   };
