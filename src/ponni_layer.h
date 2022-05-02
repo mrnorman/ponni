@@ -10,21 +10,21 @@ namespace ponni {
   class Layer {
   protected:
     
-    realConst1d wts; // Weights and parameters
+    realConst1d wts;     // Weights and parameters
     int         type;    // What is the operation being performed by this node?
     int         num_in;  // How many inputs we expect to apply this node on
     int         num_out; // How many outputs we expect to apply this node on
     bool        ovr_wrt; // Whether input vector can be overwritten
 
     YAKL_INLINE void copy_data(Layer const &rhs) {
-      this->wts     = rhs.wts            ;
-      this->type    = rhs.type           ;
-      this->num_in  = rhs.num_in         ;
-      this->num_out = rhs.num_out        ;
+      this->wts     = rhs.wts    ;
+      this->type    = rhs.type   ;
+      this->num_in  = rhs.num_in ;
+      this->num_out = rhs.num_out;
       this->ovr_wrt = rhs.ovr_wrt;
     }
 
-    void nullify() {
+    YAKL_INLINE void nullify() {
       this->wts     = realConst1d();
       this->type    = UNINITIALIZED;
       this->num_in  = -1;
@@ -49,9 +49,9 @@ namespace ponni {
     YAKL_INLINE int  get_type           () const { return this->type   ; }
     YAKL_INLINE bool get_overwrite_input() const { return this->ovr_wrt; }
     std::string      get_type_str() const {
-      if      (type == TYPE_DENSE_MATMUL  ) { return "Dense Matmul"        ; }
-      else if (type == TYPE_DENSE_ADD_BIAS) { return "Dense Add Bias"      ; }
-      else if (type == TYPE_ACT_RELU      ) { return "Activaiton ReLU"     ; }
+      if      (type == TYPE_DENSE_MATMUL  ) { return "Dense Matmul"   ; }
+      else if (type == TYPE_DENSE_ADD_BIAS) { return "Dense Add Bias" ; }
+      else if (type == TYPE_ACT_RELU      ) { return "Activaiton ReLU"; }
       return "";
     }
 

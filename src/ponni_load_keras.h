@@ -46,16 +46,20 @@ namespace ponni {
         Layer mylayer;
         mylayer.init( TYPE_DENSE_MATMUL , num_inputs , num_outputs , kernel.collapse().createDeviceCopy() );
         model.add_layer( mylayer );
+        num_prev_outputs = num_outputs;
       }
 
       // Create and add the bias layer
-      {
+      if (layer["config"]["use_bias"].asBool()) {
         Layer mylayer;
         mylayer.init( TYPE_DENSE_ADD_BIAS , num_outputs , num_outputs , bias.createDeviceCopy() );
         model.add_layer( mylayer );
       }
 
-      num_prev_outputs = num_outputs;
+      // Add an activation layer
+      if (layer["config"]["activation"] != "linear") {
+        load_layer( layer["config"]["activation"] , num_prev_outputs , model , file );
+      }
 
     } else if (class_name == "LeakyReLU") {
 
