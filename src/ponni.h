@@ -2,6 +2,8 @@
 #pragma once
 
 #include "YAKL.h"
+#include <autodiff/reverse/var.hpp>
+#include <autodiff/reverse/var/eigen.hpp>
 
 namespace ponni {
   typedef float real;
