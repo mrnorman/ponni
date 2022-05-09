@@ -42,7 +42,13 @@ namespace ponni {
     }
 
 
-    void print_verbose() { }
+    void print_verbose() const {
+      std::cout << "    weights:\n";
+      auto bias_host = params.weights.createHostCopy();
+      for (int irow=0; irow < params.num_outputs; irow++) {
+        std::cout << "      " << std::setw(12) << bias_host(irow) << "\n";
+      }
+    }
 
   };
 

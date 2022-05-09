@@ -32,7 +32,7 @@ int main( int argc , char **argv ) {
     ponni::Relu   relu  ( 10, std::numeric_limits<ponni::real>::max() , 0.1 , 0. );
 
     auto model = ponni::create_model( matvec , bias , relu );
-    model.print();
+    model.print_verbose();
   }
   yakl::finalize();
 }

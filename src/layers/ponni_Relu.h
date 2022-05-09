@@ -58,7 +58,11 @@ namespace ponni {
     }
 
 
-    void print_verbose() { }
+    void print_verbose() const {
+      std::cout << "    max_value:      " << params.max_value      << "\n";
+      std::cout << "    negative_slope: " << params.negative_slope << "\n";
+      std::cout << "    threshold:      " << params.threshold      << "\n";
+    }
 
   };
 

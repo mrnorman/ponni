@@ -46,7 +46,17 @@ namespace ponni {
     }
 
 
-    void print_verbose() { }
+    void print_verbose() const {
+      std::cout << "    weights:\n";
+      auto kernel_host = params.weights.createHostCopy();
+      for (int irow=0; irow < params.num_outputs; irow++) {
+        std::cout << "      ";
+        for (int icol=0; icol < params.num_inputs; icol++) {
+          std::cout << std::setw(12) << std::setprecision(4) << kernel_host(icol,irow) << "  ";
+        }
+        std::cout << "\n";
+      }
+    }
 
   };
 

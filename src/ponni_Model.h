@@ -118,13 +118,18 @@ namespace ponni {
     }
 
 
-    // void print_verbose() {
-    //   std::cout << "Model has " << num_layers << " layers:\n";
-    //   for (int i=0; i < num_layers; i++) {
-    //     std::cout << "  " << i << ": ";
-    //     layers(i).print_verbose();
-    //   }
-    // }
+    template <int I=0>
+    void print_verbose() const {
+      if constexpr (I==0) std::cout << "Model has " << num_layers << " layers:\n";
+      if constexpr (I < num_layers) {
+        std::cout << "  " << std::right << I+1 << ": "
+                  << std::left << std::get<I>(layers).get_label() << " with "
+                  << std::get<I>(layers).get_num_inputs() << " inputs and "
+                  << std::get<I>(layers).get_num_outputs() << " outputs.\n";
+        std::get<I>(layers).print_verbose();
+        print_verbose<I+1>();
+      }
+    }
 
 
   };
