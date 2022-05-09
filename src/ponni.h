@@ -21,5 +21,9 @@ namespace ponni {
   int constexpr TYPE_ACT_SIGMOID    =  4;
 }
 
-#include "ponni_sequential.h"
+#include "layers/ponni_Matvec.h"
+#include "layers/ponni_Bias.h"
+#include "layers/ponni_Relu.h"
+#include "ponni_Model.h"
+#include "ponni_create_model.h"
 
