@@ -20,7 +20,37 @@ namespace ponni {
 
     Matvec() {}
     Matvec(real2d const &weights) { init(weights); }
-    ~Matvec() { params.weights = real2d(); }
+    YAKL_INLINE ~Matvec() {
+      #if YAKL_CURRENTLY_ON_HOST()
+        params.weights = real2d();
+      #endif
+    }
+    YAKL_INLINE Matvec(Matvec const &rhs) {
+      this->params.num_inputs  = rhs.params.num_inputs ;
+      this->params.num_outputs = rhs.params.num_outputs;
+      this->params.weights     = rhs.params.weights    ;
+    }
+    YAKL_INLINE Matvec(Matvec const &&rhs) {
+      this->params.num_inputs  = rhs.params.num_inputs ;
+      this->params.num_outputs = rhs.params.num_outputs;
+      this->params.weights     = rhs.params.weights    ;
+    }
+    YAKL_INLINE Matvec const & operator=(Matvec const &rhs) {
+      if (this != &rhs) {
+        this->params.num_inputs  = rhs.params.num_inputs ;
+        this->params.num_outputs = rhs.params.num_outputs;
+        this->params.weights     = rhs.params.weights    ;
+      }
+      return *this;
+    }
+    YAKL_INLINE Matvec const & operator=(Matvec const &&rhs) {
+      if (this != &rhs) {
+        this->params.num_inputs  = rhs.params.num_inputs ;
+        this->params.num_outputs = rhs.params.num_outputs;
+        this->params.weights     = rhs.params.weights    ;
+      }
+      return *this;
+    }
 
 
     void init( real2d const &weights ) {
@@ -32,16 +62,15 @@ namespace ponni {
 
 
     char const * get_label      () const { return "Matvec"; }
-    int          get_num_inputs () const { return params.num_inputs ; }
-    int          get_num_outputs() const { return params.num_outputs; }
+    YAKL_INLINE int get_num_inputs () const { return params.num_inputs ; }
+    YAKL_INLINE int get_num_outputs() const { return params.num_outputs; }
 
 
     YAKL_INLINE static void compute_one_output(Params const &params, realConst2d input, real2d const &output,
                                                int ibatch, int irow) {
       auto &weights = params.weights;
-      int num_inputs = weights.dimension[0];
       real tmp = 0;
-      for (int k=0; k < num_inputs; k++) { tmp += weights(k,irow) * input(k,ibatch); }
+      for (int k=0; k < params.num_inputs; k++) { tmp += weights(k,irow) * input(k,ibatch); }
       output(irow,ibatch) = tmp;
     }
 

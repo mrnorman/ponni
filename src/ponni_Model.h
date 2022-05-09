@@ -11,7 +11,6 @@ namespace ponni {
   protected:
     TUPLE layers;
     int static constexpr num_layers = std::tuple_size<TUPLE>::value;
-    real2d tmp1, tmp2;
 
   public:
 
@@ -36,73 +35,90 @@ namespace ponni {
     }
 
 
-    // // Perform inference no this sequential feed-forward model parallelizing only over batches
-    // real2d inference_batch_parallel( realConst2d input ) const {
-    //   using yakl::c::parallel_for;
-    //   using yakl::c::SimpleBounds;
+    // Perform inference no this sequential feed-forward model parallelizing only over batches
+    real2d inference_batch_parallel( realConst2d input ) const {
+      using yakl::c::parallel_for;
+      using yakl::c::SimpleBounds;
 
-    //   YAKL_SCOPE( layers     , this->layers     );
-    //   YAKL_SCOPE( num_layers , this->num_layers );
+      YAKL_SCOPE( layers , this->layers );
 
-    //   if (num_layers == 0) yakl::yakl_throw("Error: model is empty");
+      int num_inputs  = std::get<0           >(layers).get_num_inputs ();
+      int num_outputs = std::get<num_layers-1>(layers).get_num_outputs();
+      int num_batches = input.dimension[1];
 
-    //   int num_inputs  = layers(0           ).get_num_inputs ();
-    //   int num_outputs = layers(num_layers-1).get_num_outputs();
-    //   int num_batches = input.dimension[1];
+      if (input.dimension[0] != std::get<0>(layers).get_num_inputs()) {
+        yakl::yakl_throw("Error: Provided # inputs differs from model's # inputs");
+      }
 
-    //   if (input.dimension[0] != layers(0).get_num_inputs()) {
-    //     yakl::yakl_throw("Error: Provided # inputs differs from model's # inputs");
-    //   }
+      real2d output("output",num_outputs,num_batches);
 
-    //   real2d output("output",num_outputs,num_batches);
+      if constexpr (num_layers == 1) {  // Trivial case for one layer
+        parallel_for( SimpleBounds<1>(num_batches) , YAKL_LAMBDA (int ibatch) {
+          for (int irow = 0; irow < num_outputs; irow++) {
+            std::get<0>(layers).compute_one_output( std::get<0>(layers).params , input , output , ibatch , irow );
+          }
+        });
 
-    //   if (num_layers == 1) {  // Trivial case for one layer
+      } else if constexpr (num_layers == 2) {  // Two or more layers needs either one or two temporary arrays
 
-    //     parallel_for( SimpleBounds<1>(num_batches) , YAKL_LAMBDA (int ibatch) {
-    //       layers(0).apply_batch_parallel( input , output , ibatch );
-    //     });
+        real2d tmp("tmp",get_temporary_size(),num_batches);
 
-    //   } else {  // Two or more layers needs either one or two temporary arrays
+        parallel_for( SimpleBounds<1>(num_batches) , YAKL_LAMBDA (int ibatch) {
+          for (int irow = 0; irow < std::get<0>(layers).get_num_outputs(); irow++) {
+            std::get<0>(layers).compute_one_output( std::get<0>(layers).params , input , tmp    , ibatch , irow );
+          }
+          for (int irow = 0; irow < std::get<1>(layers).get_num_outputs(); irow++) {
+            std::get<1>(layers).compute_one_output( std::get<1>(layers).params , tmp   , output , ibatch , irow );
+          }
+        });
 
-    //     // Get the size of the temporary array(s)
-    //     int tmp_size = layers(0).get_num_outputs();
-    //     for (int i=1; i < num_layers-1; i++) {
-    //       tmp_size = std::max( tmp_size , layers(i).get_num_outputs() );
-    //     }
+      } else {
 
-    //     if (num_layers == 2) {  // For two layers, we only need one temporary array
+        int temp_size = get_temporary_size();
+        real2d tmp1("tmp1",temp_size,num_batches);
+        real2d tmp2("tmp2",temp_size,num_batches);
+        bool output_in_tmp1 = false;
 
-    //       real2d tmp("tmp",tmp_size,num_batches);
-    //       parallel_for( SimpleBounds<1>(num_batches) , YAKL_LAMBDA (int ibatch) {
-    //         layers(0).apply_batch_parallel( input , tmp    , ibatch );
-    //         layers(1).apply_batch_parallel( tmp   , output , ibatch );
-    //       });
+        parallel_for( SimpleBounds<1>(num_batches) , YAKL_LAMBDA (int ibatch) {
+          traverse_layers_batch_parallel(layers,input,output,tmp1,tmp2,output_in_tmp1,ibatch);
+        });
 
-    //     } else {  // For three or more layers, we need two temporary arrays
+      }
 
-    //       real2d tmp1("tmp1",tmp_size,num_batches);
-    //       real2d tmp2("tmp2",tmp_size,num_batches);
-    //       parallel_for( SimpleBounds<1>(num_batches) , YAKL_LAMBDA (int ibatch) {
-    //         // First layer
-    //         layers(0).apply_batch_parallel( input , tmp1 , ibatch );
-    //         bool result_in_tmp1 = true;
-    //         // Middle layers
-    //         for (int i=1; i < num_layers-1; i++) {
-    //           if (result_in_tmp1) { layers(i).apply_batch_parallel( tmp1 , tmp2 , ibatch );  result_in_tmp1 = false; }
-    //           else                { layers(i).apply_batch_parallel( tmp2 , tmp1 , ibatch );  result_in_tmp1 = true ; }
-    //         }
-    //         // Last layer
-    //         if (result_in_tmp1) { layers(num_layers-1).apply_batch_parallel( tmp1 , output , ibatch ); }
-    //         else                { layers(num_layers-1).apply_batch_parallel( tmp2 , output , ibatch ); }
-    //       });
+      return output;
 
-    //     } // if (num_layers > 2)
+    } // inference_batch_parallel
 
-    //   } // if (num_layers > 1)
 
-    //   return output;
-
-    // } // inference_onelevel
+    template <int I=0>
+    YAKL_INLINE void traverse_layers_batch_parallel(TUPLE const &layers, realConst2d input_glob,
+                                                    real2d const &output_glob, real2d const &tmp1, real2d const &tmp2,
+                                                    bool output_in_tmp1 , int ibatch) const {
+      if constexpr (I == 0) {
+        for (int irow = 0; irow < std::get<I>(layers).get_num_outputs(); irow++) {
+          std::get<I>(layers).compute_one_output( std::get<I>(layers).params , input_glob , tmp1 , ibatch , irow );
+        }
+        output_in_tmp1 = true;
+        traverse_layers_batch_parallel<I+1>(layers,input_glob,output_glob,tmp1,tmp2,output_in_tmp1,ibatch);
+      } else if constexpr (I < num_layers-1) {
+        real2d in;
+        real2d out;
+        if (output_in_tmp1) { in = tmp1; out = tmp2; }
+        else                { in = tmp2; out = tmp1; }
+        for (int irow = 0; irow < std::get<I>(layers).get_num_outputs(); irow++) {
+          std::get<I>(layers).compute_one_output( std::get<I>(layers).params , in , out , ibatch , irow );
+        }
+        traverse_layers_batch_parallel<I+1>(layers,input_glob,output_glob,tmp1,tmp2,! output_in_tmp1,ibatch);
+      } else {
+        real2d in;
+        real2d out;
+        if (output_in_tmp1) { in = tmp1; }
+        else                { in = tmp2; }
+        for (int irow = 0; irow < std::get<I>(layers).get_num_outputs(); irow++) {
+          std::get<I>(layers).compute_one_output( std::get<I>(layers).params , in , output_glob , ibatch , irow );
+        }
+      }
+    }
 
 
     template <int I=0>

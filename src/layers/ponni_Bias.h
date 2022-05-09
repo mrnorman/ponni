@@ -20,7 +20,37 @@ namespace ponni {
 
     Bias() {}
     Bias(real1d const &weights) { init(weights); }
-    ~Bias() { params.weights = real1d(); }
+    YAKL_INLINE ~Bias() {
+      #if YAKL_CURRENTLY_ON_HOST()
+        params.weights = real1d();
+      #endif
+    }
+    YAKL_INLINE Bias(Bias const &rhs) {
+      this->params.num_inputs  = rhs.params.num_inputs ;
+      this->params.num_outputs = rhs.params.num_outputs;
+      this->params.weights     = rhs.params.weights    ;
+    }
+    YAKL_INLINE Bias(Bias const &&rhs) {
+      this->params.num_inputs  = rhs.params.num_inputs ;
+      this->params.num_outputs = rhs.params.num_outputs;
+      this->params.weights     = rhs.params.weights    ;
+    }
+    YAKL_INLINE Bias const & operator=(Bias const &rhs) {
+      if (this != &rhs) {
+        this->params.num_inputs  = rhs.params.num_inputs ;
+        this->params.num_outputs = rhs.params.num_outputs;
+        this->params.weights     = rhs.params.weights    ;
+      }
+      return *this;
+    }
+    YAKL_INLINE Bias const & operator=(Bias const &&rhs) {
+      if (this != &rhs) {
+        this->params.num_inputs  = rhs.params.num_inputs ;
+        this->params.num_outputs = rhs.params.num_outputs;
+        this->params.weights     = rhs.params.weights    ;
+      }
+      return *this;
+    }
 
 
     void init( real1d const &weights ) {
@@ -32,8 +62,8 @@ namespace ponni {
 
 
     char const * get_label      () const { return "Bias"; }
-    int          get_num_inputs () const { return params.num_inputs ; }
-    int          get_num_outputs() const { return params.num_outputs; }
+    YAKL_INLINE int get_num_inputs () const { return params.num_inputs ; }
+    YAKL_INLINE int get_num_outputs() const { return params.num_outputs; }
 
 
     YAKL_INLINE static void compute_one_output(Params const &params, realConst2d input, real2d const &output,

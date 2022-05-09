@@ -21,21 +21,56 @@ namespace ponni {
     Params params;
 
     Relu() {};
-    Relu( int num_inputs , real max_value = std::numeric_limits<real>::max() ,
-                           real negative_slope = 0 ,
-                           real threshold = 0 ) {
-      init(num_inputs, max_value, negative_slope, threshold);
+    Relu(int num_inputs , real negative_slope = 0 ,
+                               real max_value = std::numeric_limits<real>::max() ,
+                               real threshold = 0) {
+      init(num_inputs, negative_slope, max_value, threshold);
+    }
+    YAKL_INLINE ~Relu() { }
+    YAKL_INLINE Relu(Relu const &rhs) {
+      this->params.num_inputs     = rhs.params.num_inputs    ;
+      this->params.num_outputs    = rhs.params.num_outputs   ;
+      this->params.max_value      = rhs.params.max_value     ;
+      this->params.negative_slope = rhs.params.negative_slope;
+      this->params.threshold      = rhs.params.threshold     ;
+    }
+    YAKL_INLINE Relu(Relu const &&rhs) {
+      this->params.num_inputs     = rhs.params.num_inputs    ;
+      this->params.num_outputs    = rhs.params.num_outputs   ;
+      this->params.max_value      = rhs.params.max_value     ;
+      this->params.negative_slope = rhs.params.negative_slope;
+      this->params.threshold      = rhs.params.threshold     ;
+    }
+    YAKL_INLINE Relu const & operator=(Relu const &rhs) {
+      if (this != &rhs) {
+        this->params.num_inputs     = rhs.params.num_inputs    ;
+        this->params.num_outputs    = rhs.params.num_outputs   ;
+        this->params.max_value      = rhs.params.max_value     ;
+        this->params.negative_slope = rhs.params.negative_slope;
+        this->params.threshold      = rhs.params.threshold     ;
+      }
+      return *this;
+    }
+    YAKL_INLINE Relu const & operator=(Relu const &&rhs) {
+      if (this != &rhs) {
+        this->params.num_inputs     = rhs.params.num_inputs    ;
+        this->params.num_outputs    = rhs.params.num_outputs   ;
+        this->params.max_value      = rhs.params.max_value     ;
+        this->params.negative_slope = rhs.params.negative_slope;
+        this->params.threshold      = rhs.params.threshold     ;
+      }
+      return *this;
     }
 
 
     char const * get_label      () const { return "Relu"; }
-    int          get_num_inputs () const { return params.num_inputs ; }
-    int          get_num_outputs() const { return params.num_outputs; }
+    YAKL_INLINE int get_num_inputs () const { return params.num_inputs ; }
+    YAKL_INLINE int get_num_outputs() const { return params.num_outputs; }
 
 
-    void init(int num_inputs , real max_value = std::numeric_limits<real>::max() ,
-                               real negative_slope = 0 ,
-                               real threshold = 0 ) {
+    void init(int num_inputs , real negative_slope = 0 ,
+                               real max_value = std::numeric_limits<real>::max() ,
+                               real threshold = 0) {
       params.num_inputs     = num_inputs    ;
       params.num_outputs    = num_inputs    ;
       params.max_value      = max_value     ;
