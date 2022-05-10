@@ -94,28 +94,34 @@ namespace ponni {
     YAKL_INLINE void traverse_layers_batch_parallel(TUPLE const &layers, realConst2d input_glob,
                                                     real2d const &output_glob, real2d const &tmp1, real2d const &tmp2,
                                                     bool output_in_tmp1 , int ibatch) const {
+      auto &layer = std::get<I>(layers);
       if constexpr (I == 0) {
-        for (int irow = 0; irow < std::get<I>(layers).get_num_outputs(); irow++) {
-          std::get<I>(layers).compute_one_output( std::get<I>(layers).params , input_glob , tmp1 , ibatch , irow );
+        for (int irow = 0; irow < layer.get_num_outputs(); irow++) {
+          layer.compute_one_output( layer.params , input_glob , tmp1 , ibatch , irow );
         }
         output_in_tmp1 = true;
-        traverse_layers_batch_parallel<I+1>(layers,input_glob,output_glob,tmp1,tmp2,output_in_tmp1,ibatch);
+        traverse_layers_batch_parallel<I+1>(layers, input_glob, output_glob, tmp1, tmp2, output_in_tmp1, ibatch);
       } else if constexpr (I < num_layers-1) {
         real2d in;
         real2d out;
-        if (output_in_tmp1) { in = tmp1; out = tmp2; }
-        else                { in = tmp2; out = tmp1; }
-        for (int irow = 0; irow < std::get<I>(layers).get_num_outputs(); irow++) {
-          std::get<I>(layers).compute_one_output( std::get<I>(layers).params , in , out , ibatch , irow );
+        if constexpr (layer.overwrite_input) {
+          if (output_in_tmp1) { in = tmp1; out = tmp1; }
+          else                { in = tmp2; out = tmp2; }
+        } else {
+          if (output_in_tmp1) { in = tmp1; out = tmp2; output_in_tmp1 = false; }
+          else                { in = tmp2; out = tmp1; output_in_tmp1 = true ; }
         }
-        traverse_layers_batch_parallel<I+1>(layers,input_glob,output_glob,tmp1,tmp2,! output_in_tmp1,ibatch);
+        for (int irow = 0; irow < layer.get_num_outputs(); irow++) {
+          layer.compute_one_output( layer.params , in , out , ibatch , irow );
+        }
+        traverse_layers_batch_parallel<I+1>(layers, input_glob, output_glob, tmp1, tmp2, output_in_tmp1, ibatch);
       } else {
         real2d in;
         real2d out;
         if (output_in_tmp1) { in = tmp1; }
         else                { in = tmp2; }
-        for (int irow = 0; irow < std::get<I>(layers).get_num_outputs(); irow++) {
-          std::get<I>(layers).compute_one_output( std::get<I>(layers).params , in , output_glob , ibatch , irow );
+        for (int irow = 0; irow < layer.get_num_outputs(); irow++) {
+          layer.compute_one_output( layer.params , in , output_glob , ibatch , irow );
         }
       }
     }

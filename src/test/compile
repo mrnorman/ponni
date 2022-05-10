@@ -4,4 +4,4 @@
 
 # nvcc -O0 -g -DYAKL_DEBUG -DYAKL_ARCH_CUDA -arch=sm_61 --extended-lambda --expt-relaxed-constexpr -std=c++17 -x cu -I .. -I/usr/include/hdf5/serial -I ~/YAKL/src  -I ~/eigen -I ~/autodiff ~/YAKL/src/YAKL.cpp test.cpp -ljsoncpp -L/usr/lib/x86_64-linux-gnu/hdf5/serial -lhdf5
 
-nvcc -O3 --use_fast_math -DYAKL_ARCH_CUDA -arch=sm_61 --extended-lambda --expt-relaxed-constexpr -std=c++17 -x cu -I .. -I/usr/include/hdf5/serial -I ~/YAKL/src  -I ~/eigen -I ~/autodiff ~/YAKL/src/YAKL.cpp test.cpp -ljsoncpp -L/usr/lib/x86_64-linux-gnu/hdf5/serial -lhdf5
+nvcc -O3 -res-usage --use_fast_math -DYAKL_ARCH_CUDA -arch=sm_61 --extended-lambda --expt-relaxed-constexpr -std=c++17 -x cu -I .. -I/usr/include/hdf5/serial -I ~/YAKL/src  -I ~/eigen -I ~/autodiff ~/YAKL/src/YAKL.cpp test.cpp -ljsoncpp -L/usr/lib/x86_64-linux-gnu/hdf5/serial -lhdf5
