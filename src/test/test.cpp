@@ -25,8 +25,8 @@ int main( int argc , char **argv ) {
     ponni::load_tensorflow_h5_weights( bias_2_weights , fname , "/dense_1/dense_1" , "bias:0" );
     ponni::Bias bias_2( bias_2_weights );
 
-    auto model = ponni::create_model( matvec_1 , bias_1 , relu_1 , matvec_2 , bias_2 );
-    model.print_verbose();
+    auto inference = ponni::create_inference_model( matvec_1 , bias_1 , relu_1 , matvec_2 , bias_2 );
+    inference.print_verbose();
 
     yakl::Array<float,2,yakl::memHost,yakl::styleC> inputs("inputs",12,1);
     inputs( 0,0) = 5.08810276e-01;
@@ -42,7 +42,7 @@ int main( int argc , char **argv ) {
     inputs(10,0) = 4.29940776e-04;
     inputs(11,0) = 6.08758314e-06;
 
-    auto outputs = model.inference_batch_parallel( inputs.createDeviceCopy() );
+    auto outputs = inference.batch_parallel( inputs.createDeviceCopy() );
 
     std::cout << outputs;
 

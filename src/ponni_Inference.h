@@ -7,14 +7,14 @@ namespace ponni {
 
 
   template <class TUPLE>
-  class Model {
+  class Inference {
   protected:
     TUPLE layers;
     int static constexpr num_layers = std::tuple_size<TUPLE>::value;
 
   public:
 
-    Model(TUPLE const &layers) {
+    Inference(TUPLE const &layers) {
       this->layers = layers;
       int temp_size = get_temporary_size();
       std::cout << "Num layers: " << num_layers << std::endl;
@@ -22,7 +22,7 @@ namespace ponni {
     }
 
 
-    ~Model() {}
+    ~Inference() {}
 
 
     template <int I=0>
@@ -36,7 +36,7 @@ namespace ponni {
 
 
     // Perform inference no this sequential feed-forward model parallelizing only over batches
-    real2d inference_batch_parallel( realConst2d input ) const {
+    real2d batch_parallel( realConst2d input ) const {
       using yakl::c::parallel_for;
       using yakl::c::SimpleBounds;
 
@@ -87,7 +87,7 @@ namespace ponni {
 
       return output;
 
-    } // inference_batch_parallel
+    } // batch_parallel
 
 
     template <int I=0>
@@ -123,7 +123,7 @@ namespace ponni {
 
     template <int I=0>
     void print() const {
-      if constexpr (I==0) std::cout << "Model has " << num_layers << " layers:\n";
+      if constexpr (I==0) std::cout << "Inference model has " << num_layers << " layers:\n";
       if constexpr (I < num_layers) {
         std::cout << "  " << std::setw(3) << std::right << I+1 << ": "
                   << std::setw(15) << std::left << std::get<I>(layers).get_label() << " with "
@@ -136,7 +136,7 @@ namespace ponni {
 
     template <int I=0>
     void print_verbose() const {
-      if constexpr (I==0) std::cout << "Model has " << num_layers << " layers:\n";
+      if constexpr (I==0) std::cout << "Inference model has " << num_layers << " layers:\n";
       if constexpr (I < num_layers) {
         std::cout << "  " << std::right << I+1 << ": "
                   << std::left << std::get<I>(layers).get_label() << " with "
