@@ -6,7 +6,7 @@ int main( int argc , char **argv ) {
   {
     ponni::Matvec matvec( ponni::real2d("weights",12,10) );
     ponni::Bias   bias  ( ponni::real1d("weights",10) );
-    ponni::Relu   relu  ( 10, std::numeric_limits<ponni::real>::max() , 0.1 , 0. );
+    ponni::Relu   relu  ( 10, 0.1 );
 
     auto model = ponni::create_model( matvec , bias , relu );
     model.print_verbose();

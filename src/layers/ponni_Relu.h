@@ -22,9 +22,9 @@ namespace ponni {
 
     Relu() {};
     Relu(int num_inputs , real negative_slope = 0 ,
-                               real max_value = std::numeric_limits<real>::max() ,
-                               real threshold = 0) {
-      init(num_inputs, negative_slope, max_value, threshold);
+                          real threshold = 0 ,
+                          real max_value = std::numeric_limits<real>::max() ) {
+      init(num_inputs, negative_slope, threshold, max_value);
     }
 
 
@@ -34,8 +34,8 @@ namespace ponni {
 
 
     void init(int num_inputs , real negative_slope = 0 ,
-                               real max_value = std::numeric_limits<real>::max() ,
-                               real threshold = 0) {
+                               real threshold = 0 ,
+                               real max_value = std::numeric_limits<real>::max() ) {
       params.num_inputs     = num_inputs    ;
       params.num_outputs    = num_inputs    ;
       params.max_value      = max_value     ;
