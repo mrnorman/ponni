@@ -9,10 +9,10 @@
 namespace ponni {
 
   template <int N>
-  inline void load_weights(yakl::Array<float,N,yakl::memDevice,yakl::styleC> const &weights ,
-                           std::string file_name   ,
-                           std::string group_name  ,
-                           std::string dataset_name ) {
+  inline void load_tensorflow_h5_weights(yakl::Array<float,N,yakl::memDevice,yakl::styleC> const &weights ,
+                                         std::string file_name   ,
+                                         std::string group_name  ,
+                                         std::string dataset_name ) {
     auto f_id = H5Fopen( file_name.c_str() , H5F_ACC_RDONLY , H5P_DEFAULT );
     auto g_id = H5Gopen( f_id , group_name  .c_str() , H5P_DEFAULT );
     auto d_id = H5Dopen( g_id , dataset_name.c_str() , H5P_DEFAULT );

@@ -1,6 +1,6 @@
 
 #include "ponni.h"
-#include "ponni_load_keras.h"
+#include "ponni_load_tensorflow_h5_weights.h"
 
 int main( int argc , char **argv ) {
   yakl::init();
@@ -8,21 +8,21 @@ int main( int argc , char **argv ) {
     std::string fname = "supercell_micro_Keras_modelwt_NORMip_NORMop1000000_Nneu10.h5";
 
     ponni::real2d matvec_1_weights("matvec_1_weights",12,10);
-    ponni::load_weights( matvec_1_weights , fname , "/dense/dense" , "kernel:0" );
+    ponni::load_tensorflow_h5_weights( matvec_1_weights , fname , "/dense/dense" , "kernel:0" );
     ponni::Matvec matvec_1( matvec_1_weights );
 
     ponni::real1d bias_1_weights("bias_1_weights",10);
-    ponni::load_weights( bias_1_weights , fname , "/dense/dense" , "bias:0" );
+    ponni::load_tensorflow_h5_weights( bias_1_weights , fname , "/dense/dense" , "bias:0" );
     ponni::Bias bias_1( bias_1_weights );
 
     ponni::Relu relu_1( 10, 0.1 );
 
     ponni::real2d matvec_2_weights("matvec_2_weights",10,4);
-    ponni::load_weights( matvec_2_weights , fname , "/dense_1/dense_1" , "kernel:0" );
+    ponni::load_tensorflow_h5_weights( matvec_2_weights , fname , "/dense_1/dense_1" , "kernel:0" );
     ponni::Matvec matvec_2( matvec_2_weights );
 
     ponni::real1d bias_2_weights("bias_2_weights",4);
-    ponni::load_weights( bias_2_weights , fname , "/dense_1/dense_1" , "bias:0" );
+    ponni::load_tensorflow_h5_weights( bias_2_weights , fname , "/dense_1/dense_1" , "bias:0" );
     ponni::Bias bias_2( bias_2_weights );
 
     auto model = ponni::create_model( matvec_1 , bias_1 , relu_1 , matvec_2 , bias_2 );
