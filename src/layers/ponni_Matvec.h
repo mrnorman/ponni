@@ -20,37 +20,6 @@ namespace ponni {
 
     Matvec() {}
     Matvec(real2d const &weights) { init(weights); }
-    YAKL_INLINE ~Matvec() {
-      #if YAKL_CURRENTLY_ON_HOST()
-        params.weights = real2d();
-      #endif
-    }
-    YAKL_INLINE Matvec(Matvec const &rhs) {
-      this->params.num_inputs  = rhs.params.num_inputs ;
-      this->params.num_outputs = rhs.params.num_outputs;
-      this->params.weights     = rhs.params.weights    ;
-    }
-    YAKL_INLINE Matvec(Matvec const &&rhs) {
-      this->params.num_inputs  = rhs.params.num_inputs ;
-      this->params.num_outputs = rhs.params.num_outputs;
-      this->params.weights     = rhs.params.weights    ;
-    }
-    YAKL_INLINE Matvec const & operator=(Matvec const &rhs) {
-      if (this != &rhs) {
-        this->params.num_inputs  = rhs.params.num_inputs ;
-        this->params.num_outputs = rhs.params.num_outputs;
-        this->params.weights     = rhs.params.weights    ;
-      }
-      return *this;
-    }
-    YAKL_INLINE Matvec const & operator=(Matvec const &&rhs) {
-      if (this != &rhs) {
-        this->params.num_inputs  = rhs.params.num_inputs ;
-        this->params.num_outputs = rhs.params.num_outputs;
-        this->params.weights     = rhs.params.weights    ;
-      }
-      return *this;
-    }
 
 
     void init( real2d const &weights ) {

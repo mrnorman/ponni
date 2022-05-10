@@ -20,44 +20,13 @@ namespace ponni {
 
     Bias() {}
     Bias(real1d const &weights) { init(weights); }
-    YAKL_INLINE ~Bias() {
-      #if YAKL_CURRENTLY_ON_HOST()
-        params.weights = real1d();
-      #endif
-    }
-    YAKL_INLINE Bias(Bias const &rhs) {
-      this->params.num_inputs  = rhs.params.num_inputs ;
-      this->params.num_outputs = rhs.params.num_outputs;
-      this->params.weights     = rhs.params.weights    ;
-    }
-    YAKL_INLINE Bias(Bias const &&rhs) {
-      this->params.num_inputs  = rhs.params.num_inputs ;
-      this->params.num_outputs = rhs.params.num_outputs;
-      this->params.weights     = rhs.params.weights    ;
-    }
-    YAKL_INLINE Bias const & operator=(Bias const &rhs) {
-      if (this != &rhs) {
-        this->params.num_inputs  = rhs.params.num_inputs ;
-        this->params.num_outputs = rhs.params.num_outputs;
-        this->params.weights     = rhs.params.weights    ;
-      }
-      return *this;
-    }
-    YAKL_INLINE Bias const & operator=(Bias const &&rhs) {
-      if (this != &rhs) {
-        this->params.num_inputs  = rhs.params.num_inputs ;
-        this->params.num_outputs = rhs.params.num_outputs;
-        this->params.weights     = rhs.params.weights    ;
-      }
-      return *this;
-    }
 
 
     void init( real1d const &weights ) {
       if ( ! weights.initialized() ) yakl::yakl_throw("ERROR: Bias weights vector not initialized");
-      params.weights     = weights;
       params.num_inputs  = weights.dimension[0];
       params.num_outputs = weights.dimension[0];
+      params.weights     = weights;
     }
 
 

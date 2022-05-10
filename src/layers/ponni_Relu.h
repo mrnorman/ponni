@@ -26,41 +26,6 @@ namespace ponni {
                                real threshold = 0) {
       init(num_inputs, negative_slope, max_value, threshold);
     }
-    YAKL_INLINE ~Relu() { }
-    YAKL_INLINE Relu(Relu const &rhs) {
-      this->params.num_inputs     = rhs.params.num_inputs    ;
-      this->params.num_outputs    = rhs.params.num_outputs   ;
-      this->params.max_value      = rhs.params.max_value     ;
-      this->params.negative_slope = rhs.params.negative_slope;
-      this->params.threshold      = rhs.params.threshold     ;
-    }
-    YAKL_INLINE Relu(Relu const &&rhs) {
-      this->params.num_inputs     = rhs.params.num_inputs    ;
-      this->params.num_outputs    = rhs.params.num_outputs   ;
-      this->params.max_value      = rhs.params.max_value     ;
-      this->params.negative_slope = rhs.params.negative_slope;
-      this->params.threshold      = rhs.params.threshold     ;
-    }
-    YAKL_INLINE Relu const & operator=(Relu const &rhs) {
-      if (this != &rhs) {
-        this->params.num_inputs     = rhs.params.num_inputs    ;
-        this->params.num_outputs    = rhs.params.num_outputs   ;
-        this->params.max_value      = rhs.params.max_value     ;
-        this->params.negative_slope = rhs.params.negative_slope;
-        this->params.threshold      = rhs.params.threshold     ;
-      }
-      return *this;
-    }
-    YAKL_INLINE Relu const & operator=(Relu const &&rhs) {
-      if (this != &rhs) {
-        this->params.num_inputs     = rhs.params.num_inputs    ;
-        this->params.num_outputs    = rhs.params.num_outputs   ;
-        this->params.max_value      = rhs.params.max_value     ;
-        this->params.negative_slope = rhs.params.negative_slope;
-        this->params.threshold      = rhs.params.threshold     ;
-      }
-      return *this;
-    }
 
 
     char const * get_label      () const { return "Relu"; }
