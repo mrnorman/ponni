@@ -42,11 +42,14 @@ namespace ponni {
 
       YAKL_SCOPE( layers , this->layers );
 
-      int num_inputs  = std::get<0           >(layers).get_num_inputs ();
-      int num_outputs = std::get<num_layers-1>(layers).get_num_outputs();
+      auto &layer0     = std::get<0>(layers);
+      auto &layer_last = std::get<num_layers-1>(layers);
+
+      int num_inputs  = layer0    .get_num_inputs ();
+      int num_outputs = layer_last.get_num_outputs();
       int num_batches = input.dimension[1];
 
-      if (input.dimension[0] != std::get<0>(layers).get_num_inputs()) {
+      if (input.dimension[0] != layer0.get_num_inputs()) {
         yakl::yakl_throw("Error: Provided # inputs differs from model's # inputs");
       }
 
@@ -55,20 +58,21 @@ namespace ponni {
       if constexpr (num_layers == 1) {  // Trivial case for one layer
         parallel_for( SimpleBounds<1>(num_batches) , YAKL_LAMBDA (int ibatch) {
           for (int irow = 0; irow < num_outputs; irow++) {
-            std::get<0>(layers).compute_one_output( std::get<0>(layers).params , input , output , ibatch , irow );
+            layer0.compute_one_output( layer0.params , input , output , ibatch , irow );
           }
         });
 
       } else if constexpr (num_layers == 2) {  // Two or more layers needs either one or two temporary arrays
+        auto &layer1 = std::get<1>(layers);
 
         real2d tmp("tmp",get_temporary_size(),num_batches);
 
         parallel_for( SimpleBounds<1>(num_batches) , YAKL_LAMBDA (int ibatch) {
-          for (int irow = 0; irow < std::get<0>(layers).get_num_outputs(); irow++) {
-            std::get<0>(layers).compute_one_output( std::get<0>(layers).params , input , tmp    , ibatch , irow );
+          for (int irow = 0; irow < layer0.get_num_outputs(); irow++) {
+            layer0.compute_one_output( layer0.params , input , tmp    , ibatch , irow );
           }
-          for (int irow = 0; irow < std::get<1>(layers).get_num_outputs(); irow++) {
-            std::get<1>(layers).compute_one_output( std::get<1>(layers).params , tmp   , output , ibatch , irow );
+          for (int irow = 0; irow < layer1.get_num_outputs(); irow++) {
+            layer1.compute_one_output( layer1.params , tmp   , output , ibatch , irow );
           }
         });
 
@@ -77,10 +81,9 @@ namespace ponni {
         int temp_size = get_temporary_size();
         real2d tmp1("tmp1",temp_size,num_batches);
         real2d tmp2("tmp2",temp_size,num_batches);
-        bool output_in_tmp1 = false;
 
         parallel_for( SimpleBounds<1>(num_batches) , YAKL_LAMBDA (int ibatch) {
-          traverse_layers_batch_parallel(layers,input,output,tmp1,tmp2,output_in_tmp1,ibatch);
+          traverse_layers_batch_parallel(layers, input, output, tmp1, tmp2, ibatch);
         });
 
       }
@@ -90,38 +93,53 @@ namespace ponni {
     } // batch_parallel
 
 
-    template <int I=0>
+    template <int I=0, bool output_in_tmp1=false>
     YAKL_INLINE void traverse_layers_batch_parallel(TUPLE const &layers, realConst2d input_glob,
                                                     real2d const &output_glob, real2d const &tmp1, real2d const &tmp2,
-                                                    bool output_in_tmp1 , int ibatch) const {
-      auto &layer = std::get<I>(layers);
+                                                    int ibatch) const {
+      auto &layer       = std::get<I>(layers);
+      auto  num_outputs = layer.get_num_outputs();
+      auto &params      = layer.params;
       if constexpr (I == 0) {
-        for (int irow = 0; irow < layer.get_num_outputs(); irow++) {
-          layer.compute_one_output( layer.params , input_glob , tmp1 , ibatch , irow );
+        for (int irow = 0; irow < num_outputs; irow++) {
+          layer.compute_one_output( params , input_glob , tmp1 , ibatch , irow );
         }
-        output_in_tmp1 = true;
-        traverse_layers_batch_parallel<I+1>(layers, input_glob, output_glob, tmp1, tmp2, output_in_tmp1, ibatch);
+        traverse_layers_batch_parallel<I+1,true>(layers, input_glob, output_glob, tmp1, tmp2, ibatch);
       } else if constexpr (I < num_layers-1) {
-        real2d in;
-        real2d out;
         if constexpr (layer.overwrite_input) {
-          if (output_in_tmp1) { in = tmp1; out = tmp1; }
-          else                { in = tmp2; out = tmp2; }
+          if constexpr (output_in_tmp1) {
+            for (int irow = 0; irow < num_outputs; irow++) {
+              layer.compute_one_output( params , tmp1 , tmp1 , ibatch , irow );
+            }
+            traverse_layers_batch_parallel<I+1,true>(layers, input_glob, output_glob, tmp1, tmp2, ibatch);
+          } else {
+            for (int irow = 0; irow < num_outputs; irow++) {
+              layer.compute_one_output( params , tmp2 , tmp2 , ibatch , irow );
+            }
+            traverse_layers_batch_parallel<I+1,false>(layers, input_glob, output_glob, tmp1, tmp2, ibatch);
+          }
         } else {
-          if (output_in_tmp1) { in = tmp1; out = tmp2; output_in_tmp1 = false; }
-          else                { in = tmp2; out = tmp1; output_in_tmp1 = true ; }
+          if constexpr (output_in_tmp1) {
+            for (int irow = 0; irow < num_outputs; irow++) {
+              layer.compute_one_output( params , tmp1 , tmp2 , ibatch , irow );
+            }
+            traverse_layers_batch_parallel<I+1,false>(layers, input_glob, output_glob, tmp1, tmp2, ibatch);
+          } else {
+            for (int irow = 0; irow < num_outputs; irow++) {
+              layer.compute_one_output( params , tmp2 , tmp1 , ibatch , irow );
+            }
+            traverse_layers_batch_parallel<I+1,true>(layers, input_glob, output_glob, tmp1, tmp2, ibatch);
+          }
         }
-        for (int irow = 0; irow < layer.get_num_outputs(); irow++) {
-          layer.compute_one_output( layer.params , in , out , ibatch , irow );
-        }
-        traverse_layers_batch_parallel<I+1>(layers, input_glob, output_glob, tmp1, tmp2, output_in_tmp1, ibatch);
       } else {
-        real2d in;
-        real2d out;
-        if (output_in_tmp1) { in = tmp1; }
-        else                { in = tmp2; }
-        for (int irow = 0; irow < layer.get_num_outputs(); irow++) {
-          layer.compute_one_output( layer.params , in , output_glob , ibatch , irow );
+        if constexpr (output_in_tmp1) {
+          for (int irow = 0; irow < num_outputs; irow++) {
+            layer.compute_one_output( params , tmp1 , output_glob , ibatch , irow );
+          }
+        } else {
+          for (int irow = 0; irow < num_outputs; irow++) {
+            layer.compute_one_output( params , tmp2 , output_glob , ibatch , irow );
+          }
         }
       }
     }
