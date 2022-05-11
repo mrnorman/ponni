@@ -10,6 +10,7 @@ namespace ponni {
 
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?
+    bool static constexpr save            = false;
 
     struct Params {
       int  num_inputs;

@@ -1,34 +1,29 @@
 
-
-
 #pragma once
 // Included by ponni.h
 
 namespace ponni {
 
-  class Gaussian {
+  template <int N>
+  class Save_State {
   public:
-
+    
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?
-    bool static constexpr save            = false;
+    bool static constexpr save            = true;
+    int  static constexpr index           = N;
 
     struct Params {
-      int  num_inputs;
-      int  num_outputs;
+      int num_inputs;
+      int num_outputs;
     };
 
     Params params;
 
-    Gaussian() {};
-    Gaussian(int num_inputs) {
+    Save_State() {}
+    Save_State(int num_inputs) {
       init(num_inputs);
     }
-
-
-    char const * get_label      () const { return "Gaussian"; }
-    YAKL_INLINE int get_num_inputs () const { return params.num_inputs ; }
-    YAKL_INLINE int get_num_outputs() const { return params.num_outputs; }
 
 
     void init(int num_inputs) {
@@ -37,16 +32,21 @@ namespace ponni {
     }
 
 
+    char const * get_label      () const { return "Save_State"; }
+    YAKL_INLINE int get_num_inputs () const { return params.num_inputs ; }
+    YAKL_INLINE int get_num_outputs() const { return params.num_outputs; }
+
+
     YAKL_INLINE static void compute_one_output(Params const &params, realConst2d input, real2d const &output,
                                                int ibatch, int irow) {
-      output(irow,ibatch) = std::exp( -input(irow,ibatch)*input(irow,ibatch) );
+      output(irow,ibatch) = input(irow,ibatch);
     }
 
 
-    void print_verbose() const {
-    }
+    void print_verbose() const { }
 
   };
 
 }
+
 
