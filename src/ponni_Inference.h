@@ -56,6 +56,7 @@ namespace ponni {
       real2d output("output",num_outputs,num_batches);
 
       if constexpr (num_layers == 1) {  // Trivial case for one layer
+
         parallel_for( SimpleBounds<1>(num_batches) , YAKL_LAMBDA (int ibatch) {
           for (int irow = 0; irow < num_outputs; irow++) {
             layer0.compute_one_output( layer0.params , input , output , ibatch , irow );
@@ -63,6 +64,7 @@ namespace ponni {
         });
 
       } else if constexpr (num_layers == 2) {  // Two or more layers needs either one or two temporary arrays
+
         auto &layer1 = std::get<1>(layers);
 
         real2d tmp("tmp",get_temporary_size(),num_batches);
