@@ -36,31 +36,36 @@ int main( int argc , char **argv ) {
     Matvec               layer0 ( real2d("matrix_1",12,10) );
     Bias                 layer1 ( real1d("bias_1",10) )     ;   
     Relu                 layer2 ( 10 , 0.1 )                ;
-    Save_State<0>        layer3 ( 10 )                      ; // Save output of layer2 into saved index 0
+    Save_State<0>        layer3 ( 10 )                      ; // Save output of layer2
+                                                              //   into saved index 0.
     Matvec               layer4 ( real2d("matrix_2",10,10) );
     Bias                 layer5 ( real1d("bias_2",10) )     ;   
     Relu                 layer6 ( 10 , 0.1 )                ;
-    Binop_Add<0>         layer7 ( 10 )                      ; // Output of layer2 added to output of layer6
+    Binop_Add<0>         layer7 ( 10 )                      ; // Output of layer2 added
+                                                              //   to output of layer6.
     Matvec               layer8 ( real2d("matrix_2",10,20) );
     Bias                 layer9 ( real1d("bias_2",20) )     ;   
     Relu                 layer10( 20 , 0.1 )                ;
-    Save_State<0>        layer11( 20 )                      ; // Save output of layer11 into saved index 0
-                                                              // You can reuse saved indices to save memory
+    Save_State<0>        layer11( 20 )                      ; // Save output of layer11
+                                                              //   into saved index 0.
+                                                              // Reusing indices reduces
+                                                              //   memory usage.
     Matvec               layer12( real2d("matrix_3",20,8) ) ; 
     Bias                 layer13( real1d("bias_3",8) )      ;   
     Relu                 layer14( 8 , 0.1 )                 ;
-    Binop_Concatenate<0> layer15( 8 , 28 )                  ; // Output of layer11 concatenated after output
-                                                              // of layer 14
+    Binop_Concatenate<0> layer15( 8 , 28 )                  ; // Output of layer11
+                                                              //   concatenated after
+                                                              //   output of layer 14.
     Matvec               layer16( real2d("matrix_4",28,4) ) ; 
     Bias                 layer17( real1d("bias_4",4) )      ;   
 
-    // Load weights into layers 0, 1, 4, 5, 8, 9, 12, 13, 16, 17 from a file (typically hdf5)
+    // Load weights into layers 0, 1, 4, 5, 8, 9, 12, 13, 16, 17 from a file
     // Matrices must be in column,row format; not in row,column format
     // This is the default ordering for Keras saved weights hdf5 files
     // You must pay attention to the ordering for the weights you save from other libraries
 
     // Create an inference model to perform batched forward predictions
-    // You must place the layers yourself in this fashion. PONNI wraps these in std::tuple for you
+    // You must place the layers yourself in this fashion. PONNI wraps these in std::tuple
     //   to create an efficient model resolved at compile time with templates.
     auto model = create_inference_model( layer0  , layer1  , layer2  , layer3  , layer4  ,
                                          layer5  , layer6  , layer7  , layer8  , layer9  ,
@@ -74,7 +79,7 @@ int main( int argc , char **argv ) {
     int batch_size = [number of inputs you want to inference];
     real2d inputs ("inputs",12,num_batches);
     
-    // Populate the inputs on the GPU, or populate the inputs on the host and transfer to the GPU
+    // Populate inputs on the GPU, or populate inputs on the host and transfer to the GPU
     
     // Run the model, parallelizing the batch index only on the GPU.
     // The entire model runs in a single GPU kernel.
