@@ -10,7 +10,7 @@ PONNI currently supports:
 * A variety of activation function layers
 * The ability to concatenate or add two vectors of neurons for DenseNet and ResNet architectures, respectively
 
-An example of creating a combined DenseNet and ResNet is given below. This isn't necessarily an architecture you would find useful, but it demonstrates how to use ponni:
+An example of creating a combined DenseNet and ResNet is given below. This isn't necessarily an architecture you would find useful, but it demonstrates how to use ponni. In the example below, the kernel generated for `model.batch_parallel()` for an Nvidia sm_61 architecture only used 32 registers, meaning it will efficiently occupy the device.
 
 ```C++
 #include "ponni.h"
