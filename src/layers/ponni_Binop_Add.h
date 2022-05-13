@@ -37,8 +37,8 @@ namespace ponni {
     YAKL_INLINE int get_num_outputs() const { return params.num_outputs; }
 
 
-    YAKL_INLINE static void compute_one_output(Params const &params, realConst2d input1, realConst2d input2,
-                                               real2d const &output, int ibatch, int irow) {
+    YAKL_INLINE void compute_one_output(realConst2d input1, realConst2d input2,
+                                        real2d const &output, int ibatch, int irow) const {
       output(irow,ibatch) = input1(irow,ibatch) + input2(irow,ibatch);
     }
 
@@ -46,6 +46,9 @@ namespace ponni {
     void print_verbose() const {
       std::cout << "    adding from saved index: " << index << "\n";
     }
+
+
+    void validate() const { }
 
   };
 

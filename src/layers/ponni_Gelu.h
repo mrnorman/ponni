@@ -35,15 +35,17 @@ namespace ponni {
     }
 
 
-    YAKL_INLINE static void compute_one_output(Params const &params, realConst2d input, real2d const &output,
-                                               int ibatch, int irow) {
+    YAKL_INLINE void compute_one_output(realConst2d input, real2d const &output,
+                                        int ibatch, int irow) const {
       real x = input(irow,ibatch);
       output(irow,ibatch) = x/2*(1+std::erf(x/std::sqrt(2)));
     }
 
 
-    void print_verbose() const {
-    }
+    void print_verbose() const { }
+
+
+    void validate() const { }
 
   };
 

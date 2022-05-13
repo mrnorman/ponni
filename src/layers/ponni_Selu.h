@@ -39,8 +39,8 @@ namespace ponni {
     }
 
 
-    YAKL_INLINE static void compute_one_output(Params const &params, realConst2d input, real2d const &output,
-                                               int ibatch, int irow) {
+    YAKL_INLINE void compute_one_output(realConst2d input, real2d const &output,
+                                        int ibatch, int irow) const {
       real alpha     = params.alpha;
       real lambda    = params.lambda;
       real threshold = params.threshold;
@@ -55,6 +55,9 @@ namespace ponni {
       std::cout << "    lambda:    " << params.lambda    << "\n";
       std::cout << "    threshold: " << params.threshold << "\n";
     }
+
+
+    void validate() const { }
 
   };
 

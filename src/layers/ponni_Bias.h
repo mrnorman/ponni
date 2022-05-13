@@ -36,8 +36,8 @@ namespace ponni {
     YAKL_INLINE int get_num_outputs() const { return params.num_outputs; }
 
 
-    YAKL_INLINE static void compute_one_output(Params const &params, realConst2d input, real2d const &output,
-                                               int ibatch, int irow) {
+    YAKL_INLINE void compute_one_output(realConst2d input, real2d const &output,
+                                        int ibatch, int irow) const {
       output(irow,ibatch) = input(irow,ibatch) + params.weights(irow);
     }
 
@@ -48,6 +48,11 @@ namespace ponni {
       for (int irow=0; irow < params.num_outputs; irow++) {
         std::cout << "      " << std::setw(12) << bias_host(irow) << "\n";
       }
+    }
+
+
+    void validate() const {
+      if (! params.weights.initialized()) yakl::yakl_throw("ERROR: weights not initialized");
     }
 
   };

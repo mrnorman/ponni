@@ -38,8 +38,8 @@ namespace ponni {
     YAKL_INLINE int get_num_outputs() const { return params.num_outputs; }
 
 
-    YAKL_INLINE static void compute_one_output(Params const &params, realConst2d input1, realConst2d input2,
-                                               real2d const &output, int ibatch, int irow) {
+    YAKL_INLINE void compute_one_output(realConst2d input1, realConst2d input2,
+                                        real2d const &output, int ibatch, int irow) const {
       if (params.after) {
         int num_inputs_1 = input1.dimension[0];
         output(irow,ibatch) = irow < num_inputs_1 ? input1(irow,ibatch) : input2(irow - num_inputs_1,ibatch);
@@ -53,6 +53,9 @@ namespace ponni {
     void print_verbose() const {
       std::cout << "    concatenating saved index, " << index << ", onto the previous layer's output\n";
     }
+
+
+    void validate() const { }
 
   };
 

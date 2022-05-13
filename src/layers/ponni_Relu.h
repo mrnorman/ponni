@@ -45,8 +45,8 @@ namespace ponni {
     }
 
 
-    YAKL_INLINE static void compute_one_output(Params const &params, realConst2d input, real2d const &output,
-                                               int ibatch, int irow) {
+    YAKL_INLINE void compute_one_output(realConst2d input, real2d const &output,
+                                        int ibatch, int irow) const {
       real max_value      = params.max_value     ;
       real negative_slope = params.negative_slope;
       real threshold      = params.threshold     ;
@@ -64,6 +64,9 @@ namespace ponni {
       std::cout << "    negative_slope: " << params.negative_slope << "\n";
       std::cout << "    threshold:      " << params.threshold      << "\n";
     }
+
+
+    void validate() const { }
 
   };
 

@@ -9,4 +9,6 @@
 
 
 
-CC -O0 -g -DYAKL_DEBUG -DYAKL_ARCH_HIP -std=c++17 -I .. -I${OLCF_HDF5_ROOT}/include -D__HIP_ROCclr__ -D__HIP_ARCH_GFX90A__=1 --rocm-path=${ROCM_PATH} --offload-arch=gfx90a -x hip -I ~/YAKL/src ~/YAKL/src/YAKL.cpp test2.cpp -L${OLCF_HDF5_ROOT}/lib -lhdf5 --rocm-path=${ROCM_PATH} -L${ROCM_PATH}/lib -lamdhip64
+CC -Wno-unused-result -O0 -g -DYAKL_DEBUG -DYAKL_ARCH_HIP -std=c++17 -I .. -I${OLCF_HDF5_ROOT}/include -D__HIP_ROCclr__ -D__HIP_ARCH_GFX90A__=1 --rocm-path=${ROCM_PATH} --offload-arch=gfx90a -x hip -I ~/YAKL/src ~/YAKL/src/YAKL.cpp test2.cpp -L${OLCF_HDF5_ROOT}/lib -lhdf5 --rocm-path=${ROCM_PATH} -L${ROCM_PATH}/lib -lamdhip64
+
+

@@ -32,6 +32,7 @@ int main( int argc , char **argv ) {
                                              Matvec              ( ponni::real2d("matrix_4",28,4) )  ,
                                              Bias                ( ponni::real1d("bias_4",4) )       );
                                                    
+    inference.validate();
     inference.print_verbose();
 
     yakl::Array<float,2,yakl::memHost,yakl::styleC> inputs("inputs",12,1);
