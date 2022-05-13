@@ -15,9 +15,6 @@ An example of creating a combined DenseNet and ResNet is given below. This isn't
 ```C++
 #include "ponni.h"
 
-#include "ponni.h"
-#include "ponni_load_tensorflow_h5_weights.h"
-
 int main( int argc , char **argv ) { 
   yakl::init();
   {
@@ -37,24 +34,24 @@ int main( int argc , char **argv ) {
     // Create the layers. Each layer has its own constructor API.
     Matvec               layer0 ( real2d("matrix_1",12,10) );
     Bias                 layer1 ( real1d("bias_1",10) )     ;   
-    Relu                 layer2 ( 10 , 0.1 )                ;
+    Relu                 layer2 ( 10 , 0.1 )                ; // Leaky ReLU
     Save_State<0>        layer3 ( 10 )                      ; // Save output of layer2
                                                               //   into saved index 0.
     Matvec               layer4 ( real2d("matrix_2",10,10) );
     Bias                 layer5 ( real1d("bias_2",10) )     ;   
-    Relu                 layer6 ( 10 , 0.1 )                ;
+    Relu                 layer6 ( 10 , 0.1 )                ; // Leaky ReLU
     Binop_Add<0>         layer7 ( 10 )                      ; // Output of layer2 added
                                                               //   to output of layer6.
     Matvec               layer8 ( real2d("matrix_2",10,20) );
     Bias                 layer9 ( real1d("bias_2",20) )     ;   
-    Relu                 layer10( 20 , 0.1 )                ;
+    Relu                 layer10( 20 , 0.1 )                ; // Leaky ReLU
     Save_State<0>        layer11( 20 )                      ; // Save output of layer11
                                                               //   into saved index 0.
                                                               // Reusing indices reduces
                                                               //   memory usage.
     Matvec               layer12( real2d("matrix_3",20,8) ) ; 
     Bias                 layer13( real1d("bias_3",8) )      ;   
-    Relu                 layer14( 8 , 0.1 )                 ;
+    Relu                 layer14( 8 , 0.1 )                 ; // Leaky ReLU
     Binop_Concatenate<0> layer15( 8 , 28 )                  ; // Output of layer11
                                                               //   concatenated after
                                                               //   output of layer 14.
@@ -74,6 +71,8 @@ int main( int argc , char **argv ) {
                                          layer10 , layer11 , layer12 , layer13 , layer14 ,
                                          layer15 , layer16 , layer17 );
                                                    
+    model.validate()       // Ensure inputs and outputs all match up & layer weights
+                           //   are allocated.
     model.print()          // Prints basic information about each layer to stdout
     model.print_verbose(); // Prints detailed information about each layer to stdout
 
