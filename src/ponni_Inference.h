@@ -142,14 +142,15 @@ namespace ponni {
 
 
     template <int I=0>
-    YAKL_INLINE void traverse_layers_batch_parallel(TUPLE  const & layers      ,
-                                                    Saved  const & saved_states,
-                                                    realConst2d    input_glob  ,
-                                                    real2d const & output_glob ,
-                                                    real2d const & tmp1        ,
-                                                    real2d const & tmp2        ,
-                                                    int            ibatch      ,
-                                                    bool           output_in_tmp1 = false) const {
+    YAKL_INLINE void static traverse_layers_batch_parallel(TUPLE  const & layers      ,
+                                                           Saved  const & saved_states,
+                                                           realConst2d    input_glob  ,
+                                                           real2d const & output_glob ,
+                                                           real2d const & tmp1        ,
+                                                           real2d const & tmp2        ,
+                                                           int            ibatch      ,
+                                                           bool           output_in_tmp1 = false) {
+      using TYPE = typename std::tuple_element<I,TUPLE>::type;
       auto &layer       = std::get<I>(layers);
       auto  num_outputs = layer.get_num_outputs();
       auto &params      = layer.params;
@@ -160,7 +161,7 @@ namespace ponni {
         out = tmp1;
         output_in_tmp1 = true;
       } else if constexpr (I < num_layers-1) {
-        if constexpr (layer.overwrite_input) {
+        if constexpr (TYPE::overwrite_input) {
           if (output_in_tmp1) { in = tmp1;   out = tmp1; }
           else                { in = tmp2;   out = tmp2; }
         } else {
@@ -172,7 +173,6 @@ namespace ponni {
         else                { in = tmp2;   out = output_glob; }
       }
 
-      using TYPE = typename std::tuple_element<I,TUPLE>::type;
       if constexpr (TYPE::save) out = saved_states(TYPE::index);
 
       if constexpr (TYPE::binop) {

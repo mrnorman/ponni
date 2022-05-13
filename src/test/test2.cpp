@@ -1,6 +1,5 @@
 
 #include "ponni.h"
-#include "ponni_load_tensorflow_h5_weights.h"
 
 int main( int argc , char **argv ) {
   yakl::init();
