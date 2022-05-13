@@ -9,10 +9,24 @@ namespace ponni {
   template <class TUPLE>
   class Inference {
   protected:
-    typedef typename yakl::Array<real2d,1,yakl::memHost,yakl::styleC> Saved;
 
     TUPLE                layers;
     int static constexpr num_layers = std::tuple_size<TUPLE>::value;
+
+
+    template <int I=0>
+    int static constexpr get_num_saved_states() {
+      using TYPE = typename std::tuple_element<I,TUPLE>::type;
+      if constexpr (I < num_layers-1) {
+        if constexpr (TYPE::save) { return get_num_saved_states<I+1>() + 1; }
+        else                      { return get_num_saved_states<I+1>()    ; }
+      } else {
+        if constexpr (TYPE::save) { return 1; }
+        else                      { return 0; }
+      }
+    }
+
+    typedef typename yakl::SArray<real2d,1,get_num_saved_states()> Saved;
 
   public:
 
@@ -39,23 +53,9 @@ namespace ponni {
 
 
     template <int I=0>
-    int get_num_saved_states() const {
-      using TYPE = typename std::tuple_element<I,TUPLE>::type;
-      if constexpr (I < num_layers-1) {
-        if constexpr (TYPE::save) { return get_num_saved_states<I+1>() + 1; }
-        else                      { return get_num_saved_states<I+1>()    ; }
-      } else {
-        if constexpr (TYPE::save) { return 1; }
-        else                      { return 0; }
-      }
-    }
-
-
-    template <int I=0>
     void allocate_saved_states(Saved &saved_states, int num_batches) const {
       using TYPE = typename std::tuple_element<I,TUPLE>::type;
       auto &layer = std::get<I>(layers);
-      if constexpr (I == 0) saved_states = Saved("saved_states",get_num_saved_states());
       if constexpr (I < num_layers) {
         if constexpr (TYPE::save) {
           int constexpr index = TYPE::index;

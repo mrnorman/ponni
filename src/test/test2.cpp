@@ -5,25 +5,30 @@
 int main( int argc , char **argv ) {
   yakl::init();
   {
-    // This is the file with the saved tensorflow weights
-    std::string fname = "supercell_micro_Keras_modelwt_NORMip_NORMop1000000_Nneu10.h5";
+    using ponni::create_inference_model;
+    using ponni::Matvec;
+    using ponni::Bias;
+    using ponni::Relu;
+    using ponni::Save_State;
+    using ponni::Binop_Add;
+    using ponni::Binop_Concatenate;
 
     // Create an inference model to perform batched forward predictions
-    auto inference = ponni::create_inference_model( ponni::Matvec              ( ponni::real2d("matrix_1",12,10) ) ,
-                                                    ponni::Bias                ( ponni::real1d("bias_1",10) )      ,
-                                                    ponni::Relu                ( 10 , 0.1 )                        ,
-                                                    ponni::Save_State<0>       ( 10 )                              ,
-                                                    ponni::Matvec              ( ponni::real2d("matrix_2",10,10) ) ,
-                                                    ponni::Bias                ( ponni::real1d("bias_2",10) )      ,
-                                                    ponni::Relu                ( 10 , 0.1 )                        ,
-                                                    ponni::Binop_Add<0>        ( 10 )                              ,
-                                                    ponni::Save_State<1>       ( 10 )                              ,
-                                                    ponni::Matvec              ( ponni::real2d("matrix_3",10,8) )  ,
-                                                    ponni::Bias                ( ponni::real1d("bias_3",8) )       ,
-                                                    ponni::Relu                ( 8 , 0.1 )                         ,
-                                                    ponni::Binop_Concatenate<1>( 8 , 18 )                          ,
-                                                    ponni::Matvec              ( ponni::real2d("matrix_4",18,4) )  ,
-                                                    ponni::Bias                ( ponni::real1d("bias_4",4) )       );
+    auto inference = create_inference_model( Matvec              ( ponni::real2d("matrix_1",12,10) ) ,
+                                             Bias                ( ponni::real1d("bias_1",10) )      ,
+                                             Relu                ( 10 , 0.1 )                        ,
+                                             Save_State<0>       ( 10 )                              ,
+                                             Matvec              ( ponni::real2d("matrix_2",10,10) ) ,
+                                             Bias                ( ponni::real1d("bias_2",10) )      ,
+                                             Relu                ( 10 , 0.1 )                        ,
+                                             Binop_Add<0>        ( 10 )                              ,
+                                             Save_State<1>       ( 10 )                              ,
+                                             Matvec              ( ponni::real2d("matrix_3",10,8) )  ,
+                                             Bias                ( ponni::real1d("bias_3",8) )       ,
+                                             Relu                ( 8 , 0.1 )                         ,
+                                             Binop_Concatenate<1>( 8 , 18 )                          ,
+                                             Matvec              ( ponni::real2d("matrix_4",18,4) )  ,
+                                             Bias                ( ponni::real1d("bias_4",4) )       );
                                                    
     inference.print_verbose();
 
@@ -43,8 +48,6 @@ int main( int argc , char **argv ) {
 
     // Perform a batched inference
     auto outputs = inference.batch_parallel( inputs.createDeviceCopy() );
-
-    auto out_host = outputs.createHostCopy();
   }
   yakl::finalize();
 }
