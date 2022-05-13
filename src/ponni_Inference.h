@@ -13,16 +13,17 @@ namespace ponni {
     TUPLE                layers;
     int static constexpr num_layers = std::tuple_size<TUPLE>::value;
 
+  public:
 
     template <int I=0>
     int static constexpr get_num_saved_states() {
       using LAYER_TYPE = typename std::tuple_element<I,TUPLE>::type;
       if constexpr (I < num_layers-1) {
-        if constexpr (LAYER_TYPE::save) { return get_num_saved_states<I+1>() + 1; }
-        else                            { return get_num_saved_states<I+1>()    ; }
+        if constexpr (LAYER_TYPE::save) { return std::max( LAYER_TYPE::index+1 , get_num_saved_states<I+1>() ); }
+        else                            { return                                 get_num_saved_states<I+1>()  ; }
       } else {
-        if constexpr (LAYER_TYPE::save) { return 1; }
-        else                            { return 0; }
+        if constexpr (LAYER_TYPE::save) { return LAYER_TYPE::index+1; }
+        else                            { return 0;                   }
       }
     }
 
@@ -32,8 +33,6 @@ namespace ponni {
     };
 
     typedef typename yakl::SArray<SavedState,1,get_num_saved_states() == 0 ? 1 : get_num_saved_states()> SAVED_TYPE;
-
-  public:
 
     Inference(TUPLE const &layers) {
       this->layers = layers;
