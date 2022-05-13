@@ -37,10 +37,6 @@ namespace ponni {
 
     Inference(TUPLE const &layers) {
       this->layers = layers;
-      int temp_size = get_temporary_size();
-      std::cout << "Num layers: " << num_layers << std::endl;
-      std::cout << "temp_size: " << temp_size << std::endl;
-      std::cout << "Num saved states: " << get_num_saved_states() << std::endl;
     }
 
 
@@ -223,15 +219,22 @@ namespace ponni {
 
 
     template <int I = 0>
-    void validate() const {
-      auto &this_layer = std::get<I  >(layers);
-      this_layer.validate();
+    void validate( SAVED_TYPE saved_states = SAVED_TYPE() ) const {
+      using LAYER_TYPE = typename std::tuple_element<I,TUPLE>::type;
+      auto &this_layer = std::get<I>(layers);
+      if constexpr (LAYER_TYPE::save) saved_states(LAYER_TYPE::index).size = this_layer.get_num_inputs();
+      if constexpr (LAYER_TYPE::binop) {
+        int saved_layer_num_inputs = saved_states(LAYER_TYPE::index).size;
+        this_layer.validate(saved_layer_num_inputs);
+      } else {
+        this_layer.validate();
+      }
       if constexpr (I < num_layers-1) {
         auto &next_layer = std::get<I+1>(layers);
         if ( this_layer.get_num_outputs() != next_layer.get_num_inputs() ) {
           yakl::yakl_throw("ERROR: This layer's num outputs != next layer's num inputs");
         }
-        validate<I+1>();
+        validate<I+1>(saved_states);
       }
     }
 

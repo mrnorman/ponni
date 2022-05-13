@@ -55,7 +55,12 @@ namespace ponni {
     }
 
 
-    void validate() const { }
+    void validate(int saved_layer_num_inputs) const {
+      if ( params.num_outputs != saved_layer_num_inputs + params.num_inputs ) {
+        yakl::yakl_throw("ERROR: Binop_Concatenate: this layer's num outputs != "
+                         "this layer's num inputs + saved layer's num inputs");
+      }
+    }
 
   };
 
