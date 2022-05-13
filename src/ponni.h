@@ -43,6 +43,9 @@ namespace ponni {
 #include "layers/ponni_Prelu.h"
 #include "layers/ponni_Silu.h"
 #include "layers/ponni_Gaussian.h"
+#include "layers/ponni_Save_State.h"
+#include "layers/ponni_Binop_Add.h"
+#include "layers/ponni_Binop_Concatenate.h"
 #include "ponni_Inference.h"
 #include "ponni_create_model.h"
 

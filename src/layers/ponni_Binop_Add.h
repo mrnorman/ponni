@@ -5,12 +5,12 @@
 namespace ponni {
 
   template <int N>
-  class Save_State {
+  class Binop_Add {
   public:
     
     bool static constexpr overwrite_input = true;
-    bool static constexpr binop           = false; // Use two inputs?
-    bool static constexpr save            = true;
+    bool static constexpr binop           = true; // Use two inputs?
+    bool static constexpr save            = false;
     int  static constexpr index           = N;
 
     struct Params {
@@ -20,8 +20,8 @@ namespace ponni {
 
     Params params;
 
-    Save_State() {}
-    Save_State(int num_inputs) {
+    Binop_Add() {}
+    Binop_Add(int num_inputs) {
       init(num_inputs);
     }
 
@@ -32,19 +32,19 @@ namespace ponni {
     }
 
 
-    char const * get_label      () const { return "Save_State"; }
+    char const * get_label      () const { return "Binop_Add"; }
     YAKL_INLINE int get_num_inputs () const { return params.num_inputs ; }
     YAKL_INLINE int get_num_outputs() const { return params.num_outputs; }
 
 
-    YAKL_INLINE static void compute_one_output(Params const &params, realConst2d input, real2d const &output,
-                                               int ibatch, int irow) {
-      output(irow,ibatch) = input(irow,ibatch);
+    YAKL_INLINE static void compute_one_output(Params const &params, realConst2d input1, realConst2d input2,
+                                               real2d const &output, int ibatch, int irow) {
+      output(irow,ibatch) = input1(irow,ibatch) + input2(irow,ibatch);
     }
 
 
     void print_verbose() const {
-      std::cout << "    saving into index: " << index << "\n";
+      std::cout << "    adding from saved index: " << index << "\n";
     }
 
   };
