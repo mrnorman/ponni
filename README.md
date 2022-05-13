@@ -34,6 +34,7 @@ int main( int argc , char **argv ) {
     using yakl::c::parallel_for;
     using yakl::c::Bounds;
 
+    // Create the layers. Each layer has its own constructor API.
     Matvec               layer0 ( real2d("matrix_1",12,10) );
     Bias                 layer1 ( real1d("bias_1",10) )     ;   
     Relu                 layer2 ( 10 , 0.1 )                ;
