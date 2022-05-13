@@ -28,7 +28,8 @@ int main( int argc , char **argv ) {
     using ponni::Save_State;
     using ponni::Binop_Add;
     using ponni::Binop_Concatenate;
-    using ponni::real1d;  // All "real1d" and "real2d" arrays are in GPU device memory, not host memory
+    using ponni::real1d;  // All "real1d" and "real2d" arrays are in
+                          //   GPU device memory, not host memory.
     using ponni::real2d;
     using yakl::c::parallel_for;
     using yakl::c::Bounds;
