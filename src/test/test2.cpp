@@ -22,12 +22,15 @@ int main( int argc , char **argv ) {
                                              Bias                ( ponni::real1d("bias_2",10) )      ,
                                              Relu                ( 10 , 0.1 )                        ,
                                              Binop_Add<0>        ( 10 )                              ,
-                                             Save_State<1>       ( 10 )                              ,
-                                             Matvec              ( ponni::real2d("matrix_3",10,8) )  ,
+                                             Matvec              ( ponni::real2d("matrix_2",10,20) ) ,
+                                             Bias                ( ponni::real1d("bias_2",20) )      ,
+                                             Relu                ( 20 , 0.1 )                        ,
+                                             Save_State<0>       ( 20 )                              ,
+                                             Matvec              ( ponni::real2d("matrix_3",20,8) )  ,
                                              Bias                ( ponni::real1d("bias_3",8) )       ,
                                              Relu                ( 8 , 0.1 )                         ,
-                                             Binop_Concatenate<1>( 8 , 18 )                          ,
-                                             Matvec              ( ponni::real2d("matrix_4",18,4) )  ,
+                                             Binop_Concatenate<0>( 8 , 28 )                          ,
+                                             Matvec              ( ponni::real2d("matrix_4",28,4) )  ,
                                              Bias                ( ponni::real1d("bias_4",4) )       );
                                                    
     inference.print_verbose();

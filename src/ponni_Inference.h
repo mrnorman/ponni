@@ -26,7 +26,7 @@ namespace ponni {
       }
     }
 
-    typedef typename yakl::SArray<real2d,1,get_num_saved_states()> Saved;
+    typedef typename yakl::SArray<real2d,1,get_num_saved_states() == 0 ? 1 : get_num_saved_states()> Saved;
 
   public:
 
@@ -52,6 +52,33 @@ namespace ponni {
     }
 
 
+    template <int INDEX, int I=0>
+    int get_saved_state_size( TUPLE const &layers ) const {
+      using TYPE = typename std::tuple_element<I,TUPLE>::type;
+      auto &layer = std::get<I>( layers );
+ 
+      if constexpr (I < num_layers-1) {
+ 
+        if constexpr (TYPE::save) {
+          if constexpr (TYPE::index == INDEX) {
+            return std::max( get_saved_state_size<INDEX,I+1>(layers) , layer.get_num_outputs() );
+          }
+        }
+        return std::max( get_saved_state_size<INDEX,I+1>(layers) , 0 );
+ 
+      } else {
+ 
+        if constexpr (TYPE::save) {
+          if constexpr (TYPE::index == INDEX) {
+            return layer.get_num_outputs();
+          }
+        }
+        return 0;
+ 
+      }
+    }
+
+
     template <int I=0>
     void allocate_saved_states(Saved &saved_states, int num_batches) const {
       using TYPE = typename std::tuple_element<I,TUPLE>::type;
@@ -59,8 +86,7 @@ namespace ponni {
       if constexpr (I < num_layers) {
         if constexpr (TYPE::save) {
           int constexpr index = TYPE::index;
-          if (saved_states(index).initialized()) yakl::yakl_throw("ERROR: Two saved states have the same index");
-          saved_states(index) = real2d("saved_state",layer.get_num_outputs(),num_batches);
+          saved_states(index) = real2d("saved_state",get_saved_state_size<index>(layers),num_batches);
         }
       }
       if constexpr (I < num_layers-1) allocate_saved_states<I+1>( saved_states , num_batches );
