@@ -76,8 +76,10 @@ int main( int argc , char **argv ) {
     
     // Populate the inputs on the GPU, or populate the inputs on the host and transfer to the GPU
     
-    // Run the model, parallelizing the batch index only on the GPU
-    // Outputs are in GPU device memory, adn the output real2d array is created, allocated, and populated for you
+    // Run the model, parallelizing the batch index only on the GPU.
+    // The entire model runs in a single GPU kernel.
+    // The output real2d array is created, allocated, and populated for you.
+    // It exists in GPU device memory.
     real2d outputs = model.batch_parallel( inputs );
     
     // Do whatever you want with the model outputs here
