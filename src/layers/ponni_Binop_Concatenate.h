@@ -14,19 +14,20 @@ namespace ponni {
     int  static constexpr index           = N;
 
     struct Params {
-      int num_inputs;
-      int num_outputs;
+      int  num_inputs;
+      int  num_outputs;
+      bool after;
     };
 
     Params params;
 
     Binop_Concatenate() {}
-    Binop_Concatenate(int num_inputs, int num_outputs) {
-      init(num_inputs, num_outputs);
+    Binop_Concatenate(int num_inputs, int num_outputs, bool after=true) {
+      init(num_inputs, num_outputs, after);
     }
 
 
-    void init(int num_inputs, int num_outputs) {
+    void init(int num_inputs, int num_outputs, bool after=true) {
       params.num_inputs  = num_inputs;
       params.num_outputs = num_outputs;
     }
@@ -39,8 +40,13 @@ namespace ponni {
 
     YAKL_INLINE static void compute_one_output(Params const &params, realConst2d input1, realConst2d input2,
                                                real2d const &output, int ibatch, int irow) {
-      int num_inputs_1 = input1.dimension[0];
-      output(irow,ibatch) = irow < num_inputs_1 ? input1(irow,ibatch) : input2(irow - num_inputs_1,ibatch);
+      if (params.after) {
+        int num_inputs_1 = input1.dimension[0];
+        output(irow,ibatch) = irow < num_inputs_1 ? input1(irow,ibatch) : input2(irow - num_inputs_1,ibatch);
+      } else {
+        int num_inputs_2 = input2.dimension[0];
+        output(irow,ibatch) = irow < num_inputs_2 ? input2(irow,ibatch) : input1(irow - num_inputs_2,ibatch);
+      }
     }
 
 
