@@ -12,7 +12,7 @@ int main( int argc , char **argv ) {
     using ponni::Save_State;
     using ponni::Binop_Add;
 
-    std::string fname = "supercell_micro_PyTorch_ResNet_1000000_Nneu5_modelparameters.h5";
+    std::string fname = argv[1];
 
     // Create layers & load weights
     bool transpose = true;

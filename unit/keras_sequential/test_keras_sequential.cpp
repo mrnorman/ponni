@@ -6,7 +6,7 @@ int main( int argc , char **argv ) {
   yakl::init();
   {
     // This is the file with the saved tensorflow weights
-    std::string fname = "supercell_micro_Keras_modelwt_NORMip_NORMop1000000_Nneu10.h5";
+    std::string fname = argv[1];
 
     // Create the layers that will form the model
     ponni::Matvec matvec_1( ponni::load_h5_weights<2>( fname , "/dense/dense"     , "kernel:0" ) );
