@@ -1,6 +1,6 @@
 
 #include "ponni.h"
-#include "ponni_load_tensorflow_h5_weights.h"
+#include "ponni_load_h5_weights.h"
 
 int main( int argc , char **argv ) {
   yakl::init();
@@ -9,11 +9,11 @@ int main( int argc , char **argv ) {
     std::string fname = "supercell_micro_Keras_modelwt_NORMip_NORMop1000000_Nneu10.h5";
 
     // Create the layers that will form the model
-    ponni::Matvec matvec_1( ponni::load_tensorflow_h5_weights<2>( fname , "/dense/dense"     , "kernel:0" ) );
-    ponni::Bias   bias_1  ( ponni::load_tensorflow_h5_weights<1>( fname , "/dense/dense"     , "bias:0"   ) );
+    ponni::Matvec matvec_1( ponni::load_h5_weights<2>( fname , "/dense/dense"     , "kernel:0" ) );
+    ponni::Bias   bias_1  ( ponni::load_h5_weights<1>( fname , "/dense/dense"     , "bias:0"   ) );
     ponni::Relu   relu_1  ( 10 , 0.1 );
-    ponni::Matvec matvec_2( ponni::load_tensorflow_h5_weights<2>( fname , "/dense_1/dense_1" , "kernel:0" ) );
-    ponni::Bias   bias_2  ( ponni::load_tensorflow_h5_weights<1>( fname , "/dense_1/dense_1" , "bias:0"   ) );
+    ponni::Matvec matvec_2( ponni::load_h5_weights<2>( fname , "/dense_1/dense_1" , "kernel:0" ) );
+    ponni::Bias   bias_2  ( ponni::load_h5_weights<1>( fname , "/dense_1/dense_1" , "bias:0"   ) );
 
     // Create an inference model to perform batched forward predictions
     auto inference = ponni::create_inference_model( matvec_1 , bias_1 , relu_1 , matvec_2 , bias_2 );

@@ -5,6 +5,10 @@
 
 namespace ponni {
   typedef float real;
+  using yakl::Array;
+  using yakl::memHost;
+  using yakl::memDevice;
+  using yakl::styleC;
 
   typedef yakl::Array<real      ,1,yakl::memDevice,yakl::styleC> real1d;
   typedef yakl::Array<real      ,2,yakl::memDevice,yakl::styleC> real2d;
