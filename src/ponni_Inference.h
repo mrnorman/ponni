@@ -27,12 +27,25 @@ namespace ponni {
       }
     }
 
+
+    template <int I=0>
+    int constexpr get_temporary_size(int max_outputs=0) const {
+      if constexpr (I < num_layers-2) {
+        return get_temporary_size<I+1>( std::max( std::get<I>(layers).get_num_outputs() , max_outputs ) );
+      } else {
+        return std::max( std::get<I>(layers).get_num_outputs() , max_outputs );
+      }
+    }
+
+
     struct SavedState {
       real2d state;
       int    size;
     };
 
+
     typedef typename yakl::SArray<SavedState,1,get_num_saved_states() == 0 ? 1 : get_num_saved_states()> SAVED_TYPE;
+
 
     Inference(TUPLE const &layers) {
       this->layers = layers;
@@ -40,16 +53,6 @@ namespace ponni {
 
 
     ~Inference() {}
-
-
-    template <int I=0>
-    int get_temporary_size(int max_outputs=0) const {
-      if constexpr (I < num_layers-2) {
-        return get_temporary_size<I+1>( std::max( std::get<I>(layers).get_num_outputs() , max_outputs ) );
-      } else {
-        return std::max( std::get<I>(layers).get_num_outputs() , max_outputs );
-      }
-    }
 
 
     template <int INDEX, int I=0>
