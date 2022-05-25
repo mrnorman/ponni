@@ -33,12 +33,18 @@ namespace ponni {
     }
 
 
-    char const * get_label      () const { return "Binop_Concatenate"; }
+    char const * get_label         () const { return "Binop_Concatenate"; }
     YAKL_INLINE int get_num_inputs () const { return params.num_inputs ; }
     YAKL_INLINE int get_num_outputs() const { return params.num_outputs; }
 
 
-    YAKL_INLINE void compute_one_output(realConst2d input1, realConst2d input2,
+    YAKL_INLINE void compute_all_outputs(real2d const &input1, real2d const &input2, real2d const &output,
+                                         int ibatch) const {
+      for (int irow = 0; irow < params.num_outputs; irow++) { compute_one_output(input1, input2, output, ibatch, irow); }
+    }
+
+
+    YAKL_INLINE void compute_one_output(real2d const &input1, real2d const &input2,
                                         real2d const &output, int ibatch, int irow) const {
       if (params.after) {
         int num_inputs_1 = input1.dimension[0];

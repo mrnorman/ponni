@@ -97,7 +97,7 @@ namespace ponni {
 
 
     // Perform inference no this sequential feed-forward model parallelizing only over batches
-    real2d batch_parallel( realConst2d input ) const {
+    real2d batch_parallel( real2d const &input ) const {
       using yakl::c::parallel_for;
       using yakl::c::SimpleBounds;
 
@@ -122,9 +122,7 @@ namespace ponni {
       if constexpr (num_layers == 1) {  // Trivial case for one layer
 
         parallel_for( SimpleBounds<1>(num_batches) , YAKL_LAMBDA (int ibatch) {
-          for (int irow = 0; irow < num_outputs; irow++) {
-            layer0.compute_one_output(input, output, ibatch, irow);
-          }
+          layer0.compute_all_outputs(input, output, ibatch);
         });
 
       } else {
@@ -147,7 +145,7 @@ namespace ponni {
     template <int I=0>
     YAKL_INLINE void static traverse_layers_batch_parallel(TUPLE      const & layers      ,
                                                            SAVED_TYPE const & saved_states,
-                                                           realConst2d        input_glob  ,
+                                                           real2d     const & input_glob  ,
                                                            real2d     const & output_glob ,
                                                            real2d     const & tmp1        ,
                                                            real2d     const & tmp2        ,
@@ -156,8 +154,8 @@ namespace ponni {
       using LAYER_TYPE = typename std::tuple_element<I,TUPLE>::type;
       auto &layer       = std::get<I>(layers);
       auto  num_outputs = layer.get_num_outputs();
-      realConst2d in;
-      real2d      out;
+      real2d in;
+      real2d out;
       if constexpr (I == 0) {
         in = input_glob;
         out = tmp1;
@@ -182,9 +180,9 @@ namespace ponni {
 
       if constexpr (LAYER_TYPE::binop) {
         auto &saved = saved_states(LAYER_TYPE::index).state;
-        for (int irow = 0; irow < num_outputs; irow++) { layer.compute_one_output(in,saved,out,ibatch,irow); }
+        layer.compute_all_outputs(in,saved,out,ibatch);
       } else {
-        for (int irow = 0; irow < num_outputs; irow++) { layer.compute_one_output(in,out,ibatch,irow); }
+        layer.compute_all_outputs(in,out,ibatch);
       }
 
       if constexpr (I < num_layers-1) {
