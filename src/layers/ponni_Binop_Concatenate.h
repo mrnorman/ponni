@@ -40,18 +40,14 @@ namespace ponni {
 
     YAKL_INLINE void compute_all_outputs(real2d const &input1, real2d const &input2, real2d const &output,
                                          int ibatch) const {
-      for (int irow = 0; irow < params.num_outputs; irow++) { compute_one_output(input1, input2, output, ibatch, irow); }
-    }
-
-
-    YAKL_INLINE void compute_one_output(real2d const &input1, real2d const &input2,
-                                        real2d const &output, int ibatch, int irow) const {
-      if (params.after) {
-        int num_inputs_1 = input1.dimension[0];
-        output(irow,ibatch) = irow < num_inputs_1 ? input1(irow,ibatch) : input2(irow - num_inputs_1,ibatch);
-      } else {
-        int num_inputs_2 = input2.dimension[0];
-        output(irow,ibatch) = irow < num_inputs_2 ? input2(irow,ibatch) : input1(irow - num_inputs_2,ibatch);
+      for (int irow = 0; irow < params.num_outputs; irow++) {
+        if (params.after) {
+          int num_inputs_1 = input1.dimension[0];
+          output(irow,ibatch) = irow < num_inputs_1 ? input1(irow,ibatch) : input2(irow - num_inputs_1,ibatch);
+        } else {
+          int num_inputs_2 = input2.dimension[0];
+          output(irow,ibatch) = irow < num_inputs_2 ? input2(irow,ibatch) : input1(irow - num_inputs_2,ibatch);
+        }
       }
     }
 

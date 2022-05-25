@@ -46,20 +46,17 @@ namespace ponni {
 
 
     YAKL_INLINE void compute_all_outputs(real2d const &input, real2d const &output, int ibatch) const {
-      for (int irow = 0; irow < params.num_outputs; irow++) { compute_one_output(input, output, ibatch, irow); }
-    }
-
-
-    YAKL_INLINE void compute_one_output(real2d const &input, real2d const &output, int ibatch, int irow) const {
-      real max_value      = params.max_value     ;
-      real negative_slope = params.negative_slope;
-      real threshold      = params.threshold     ;
-      real x              = input(irow,ibatch);
-      real f_x;
-      if      (x >= max_value) { f_x = max_value;                        }
-      else if (x >= threshold) { f_x = x;                                }
-      else                     { f_x = negative_slope * (x - threshold); }
-      output(irow,ibatch) = f_x;
+      for (int irow = 0; irow < params.num_outputs; irow++) {
+        real max_value      = params.max_value     ;
+        real negative_slope = params.negative_slope;
+        real threshold      = params.threshold     ;
+        real x              = input(irow,ibatch);
+        real f_x;
+        if      (x >= max_value) { f_x = max_value;                        }
+        else if (x >= threshold) { f_x = x;                                }
+        else                     { f_x = negative_slope * (x - threshold); }
+        output(irow,ibatch) = f_x;
+      }
     }
 
 

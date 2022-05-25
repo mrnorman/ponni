@@ -90,17 +90,8 @@ namespace ponni {
     }
 
 
-    YAKL_INLINE void compute_one_output(real2d const &input, real2d const &output, int ibatch, int irow) const {
-      output(irow,ibatch) = input(irow,ibatch) + params.weights(irow);
-    }
-
-
     void print_verbose() const {
-      std::cout << "    weights:\n";
-      auto bias_host = params.weights.createHostCopy();
-      for (int irow=0; irow < params.num_outputs; irow++) {
-        std::cout << "      " << std::setw(12) << bias_host(irow) << "\n";
-      }
+      // TODO: Prit verbose stuff here
     }
 
 

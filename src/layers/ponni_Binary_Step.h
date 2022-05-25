@@ -38,14 +38,10 @@ namespace ponni {
 
 
     YAKL_INLINE void compute_all_outputs(real2d const &input, real2d const &output, int ibatch) const {
-      for (int irow = 0; irow < params.num_outputs; irow++) { compute_one_output(input, output, ibatch, irow); }
+      for (int irow = 0; irow < params.num_outputs; irow++) {
+        output(irow,ibatch) = input(irow,ibatch) >= params.threshold ? 1 : 0;
+      }
     }
-
-
-    YAKL_INLINE void compute_one_output(real2d const &input, real2d const &output, int ibatch, int irow) const {
-      output(irow,ibatch) = input(irow,ibatch) >= params.threshold ? 1 : 0;
-    }
-
 
     void print_verbose() const {
       std::cout << "    threshold: " << params.threshold << "\n";
