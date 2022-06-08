@@ -47,6 +47,7 @@ namespace ponni {
     typedef typename yakl::SArray<SavedState,1,get_num_saved_states() == 0 ? 1 : get_num_saved_states()> SAVED_TYPE;
 
 
+    Inference() { }
     Inference(TUPLE const &layers) {
       this->layers = layers;
     }
