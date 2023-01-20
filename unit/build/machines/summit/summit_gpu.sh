@@ -2,9 +2,9 @@
 
 source ${MODULESHOME}/init/bash
 module purge
-module load gcc hdf5 cmake cuda/11.5.2
+module load gcc hdf5 cmake cuda
 
-../../cmakeclean.sh
+./cmakeclean.sh
 
 export YAKL_HOME=/ccs/home/$USER/YAKL
 
@@ -22,5 +22,5 @@ cmake -DYAKL_ARCH="CUDA" \
       -DYAKL_CUDA_FLAGS="-arch sm_70 -I$OLCF_HDF5_ROOT/include -O3 --use_fast_math -res-usage" \
       -DYAKL_F90_FLAGS="-O3"                 \
       -DHDF5_LINK_FLAGS="-L$OLCF_HDF5_ROOT/lib -lhdf5"        \
-      ../../..
+      ..
 
