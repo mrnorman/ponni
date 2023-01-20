@@ -16,7 +16,7 @@ int main( int argc , char **argv ) {
 
     // Create layers & load weights
     int num_layers  = 8;
-    int num_batches = 1024*1024;
+    int num_batches = 1024*1024*16;
     int num_runs    = 10;
 
     // Create an inference model to perform batched forward predictions
