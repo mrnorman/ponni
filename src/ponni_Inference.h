@@ -25,6 +25,7 @@ namespace ponni {
         if constexpr (LAYER_TYPE::save) { return LAYER_TYPE::index+1; }
         else                            { return 0;                   }
       }
+      return -1;  // Should never get here
     }
 
 
@@ -35,6 +36,7 @@ namespace ponni {
       } else {
         return std::max( std::get<I>(layers).get_num_outputs() , max_outputs );
       }
+      return -1;  // Should never get here
     }
 
 
@@ -80,6 +82,7 @@ namespace ponni {
         return 0;
  
       }
+      return -1;  // Should never get here
     }
 
 
@@ -120,7 +123,8 @@ namespace ponni {
 
       real2d output("output",num_outputs,num_batches);
 
-      if constexpr (num_layers == 1) {  // Trivial case for one layer
+      // This could be "if constexpr", but doing that exposes a CUDA bug
+      if (num_layers == 1) {  // Trivial case for one layer
 
         parallel_for( SimpleBounds<1>(num_batches) , YAKL_LAMBDA (int ibatch) {
           layer0.compute_all_outputs(input, output, ibatch);

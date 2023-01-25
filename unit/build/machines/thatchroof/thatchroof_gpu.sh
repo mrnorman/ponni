@@ -2,6 +2,11 @@
 
 source /usr/share/modules/init/bash
 module purge
+# cuda-10.2.89-gcc-11.1.0-52kbsh3
+# cuda-11.1.0-gcc-11.1.0-zkj7zay 
+# cuda-11.2.0-gcc-11.1.0-u7lo6pf
+# cuda-11.3.0-gcc-11.1.0-62t6da7
+# cuda-11.4.0-gcc-11.1.0-xcs7jho
 # cuda-11.5.0-gcc-11.1.0-pm6vauh
 # cuda-11.6.0-gcc-11.1.0-h7khsvh
 # cuda-11.7.0-gcc-11.1.0-zbtc2fk

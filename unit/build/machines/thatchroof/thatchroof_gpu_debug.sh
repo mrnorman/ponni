@@ -5,7 +5,7 @@ module purge
 # cuda-11.5.0-gcc-11.1.0-pm6vauh
 # cuda-11.6.0-gcc-11.1.0-h7khsvh
 # cuda-11.7.0-gcc-11.1.0-zbtc2fk
-module load cuda-11.6.0-gcc-11.1.0-h7khsvh
+module load cuda-11.7.0-gcc-11.1.0-zbtc2fk
 ./cmakeclean.sh
 
 export YAKL_HOME=/home/$USER/YAKL
