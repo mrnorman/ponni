@@ -120,8 +120,8 @@ namespace ponni {
 
 
     bool   is_initialized              () const { return parameters.initialized(); }
-    int    get_num_parameters          () const { return parameters.extent(0); }
-    int    get_num_particles           () const { return parameters.extent(1); }
+    int    get_num_parameters          () const { return parameters.extent(0)    ; }
+    int    get_num_particles           () const { return parameters.extent(1)    ; }
     real2d get_parameters              () const { return parameters              ; }
     real2d get_velocities              () const { return velocities              ; }
     real2d get_best_params_per_particle() const { return best_params_per_particle; }
@@ -331,6 +331,7 @@ namespace ponni {
       ubounds                  = rhs.ubounds                 ;
       batch_beginning          = rhs.batch_beginning         ;
       num_updates              = rhs.num_updates             ;
+      rand_seed_counter        = rhs.rand_seed_counter       ;
       inertia                  = rhs.inertia                 ;
       accel_loc                = rhs.accel_loc               ;
       accel_glob               = rhs.accel_glob              ;
