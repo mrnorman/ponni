@@ -6,9 +6,9 @@ export YAKL_HOME=/home/$USER/YAKL
 
 unset GATOR_DISABLE
 
-export CC=gcc-11
-export CXX=g++-11
-export FC=gfortran-11
+export CC=mpicc
+export CXX=mpic++
+export FC=mpif90
 unset CXXFLAGS
 unset FFLAGS
 
