@@ -302,6 +302,31 @@ namespace ponni {
       num_updates++;
     }
 
+
+    bool parameters_identical_across_tasks( MPI_Comm comm = MPI_COMM_WORLD ) {
+      using yakl::c::parallel_for;
+      using yakl::c::SimpleBounds;
+      YAKL_SCOPE( parameters , this->parameters );
+      auto parameters_host     = parameters.createHostCopy();
+      auto parameters_min_host = parameters.createHostObject();
+      auto parameters_max_host = parameters.createHostObject();
+      MPI_Datatype data_type;
+      if constexpr (std::is_same<T,float >::value) { data_type = MPI_FLOAT;  }
+      if constexpr (std::is_same<T,double>::value) { data_type = MPI_DOUBLE; }
+      MPI_Allreduce( parameters_host.data() , parameters_min_host.data() , parameters.size() , data_type , MPI_MIN , comm );
+      MPI_Allreduce( parameters_host.data() , parameters_max_host.data() , parameters.size() , data_type , MPI_MAX , comm );
+      auto parameters_min = parameters_min_host.createDeviceCopy();
+      auto parameters_max = parameters_max_host.createDeviceCopy();
+      yakl::ScalarLiveOut<bool> is_same(true);
+      parallel_for( YAKL_AUTO_LABEL() , SimpleBounds<2>(get_num_parameters(),get_num_particles()) ,
+                                        YAKL_LAMBDA (int iparam, int ibatch) {
+        if ( parameters(iparam,ibatch) != parameters_min(iparam,ibatch) ||
+             parameters(iparam,ibatch) != parameters_max(iparam,ibatch)  ) is_same = false;
+      });
+      return is_same.hostRead();
+    }
+
+
     protected:
     real2d parameters              ;  // parameters being trained                (num_parameters,num_states)
     real2d velocities              ;  // velocity for each particle              (num_parameters,num_states)

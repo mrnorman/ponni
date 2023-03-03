@@ -50,6 +50,8 @@ int main( int argc , char **argv ) {
     if (std::abs(pso.get_best_loss_overall() - (-1.808351994)) > 1.e-6) {
       std::cerr << "ERROR: Did not converge" << std::endl;   yakl::yakl_throw("");
     }
+
+    if (!pso.parameters_identical_across_tasks()) yakl::yakl_throw("ERROR: parameters are not the same");
   }
   yakl::finalize();
   MPI_Finalize();
