@@ -139,7 +139,7 @@ namespace ponni {
 
         // GPU kernel threading over batches
         parallel_for( SimpleBounds<1>(num_batches) , YAKL_LAMBDA (int ibatch) {
-          layer0.compute_all_outputs(input, output, ibatch);
+          layer0.compute_all_outputs(input, output, ibatch, layer0.params);
         });
 
       } else {
@@ -208,10 +208,10 @@ namespace ponni {
         // If this is a binary operator (meaning an operation of the current state against a saved state), then get the
         //    correct saved state and perform the requested operation (usually addition or concatenation)
         auto &saved = saved_states(LAYER_TYPE::index).state;
-        layer.compute_all_outputs(in,saved,out,ibatch);
+        layer.compute_all_outputs(in,saved,out,ibatch,layer.params);
       } else {
         // Otherwise, apply this layer to the current state to produce the next state
-        layer.compute_all_outputs(in,out,ibatch);
+        layer.compute_all_outputs(in,out,ibatch,layer.params);
       }
 
       // If this isn't the last layer, then call the next layer recursively with template recursion

@@ -36,9 +36,9 @@ namespace ponni {
     YAKL_INLINE static int get_num_outputs(Params const &params_in) { return params_in.num_outputs; }
 
 
-    YAKL_INLINE void compute_all_outputs(real2d const &input, real2d const &output, int ibatch) const {
-      for (int irow = 0; irow < params.num_outputs; irow++) {
-        output(irow,ibatch) = input(irow,ibatch) + params.weights(irow);
+    YAKL_INLINE static void compute_all_outputs(real2d const &input, real2d const &output, int ibatch, Params const &params_in) {
+      for (int irow = 0; irow < params_in.num_outputs; irow++) {
+        output(irow,ibatch) = input(irow,ibatch) + params_in.weights(irow);
       }
     }
 

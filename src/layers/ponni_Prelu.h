@@ -38,10 +38,10 @@ namespace ponni {
     }
 
 
-    YAKL_INLINE void compute_all_outputs(real2d const &input, real2d const &output, int ibatch) const {
-      for (int irow = 0; irow < params.num_outputs; irow++) {
-        real alpha     = params.alpha;
-        real threshold = params.threshold;
+    YAKL_INLINE static void compute_all_outputs(real2d const &input, real2d const &output, int ibatch, Params const &params_in) {
+      for (int irow = 0; irow < params_in.num_outputs; irow++) {
+        real alpha     = params_in.alpha;
+        real threshold = params_in.threshold;
         real x         = input(irow,ibatch);
         if (x < threshold) { output(irow,ibatch) = alpha*x; }
         else               { output(irow,ibatch) = x;       }

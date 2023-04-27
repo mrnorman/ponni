@@ -45,11 +45,11 @@ namespace ponni {
     }
 
 
-    YAKL_INLINE void compute_all_outputs(real2d const &input, real2d const &output, int ibatch) const {
-      for (int irow = 0; irow < params.num_outputs; irow++) {
-        real max_value      = params.max_value     ;
-        real negative_slope = params.negative_slope;
-        real threshold      = params.threshold     ;
+    YAKL_INLINE static void compute_all_outputs(real2d const &input, real2d const &output, int ibatch, Params const &params_in) {
+      for (int irow = 0; irow < params_in.num_outputs; irow++) {
+        real max_value      = params_in.max_value     ;
+        real negative_slope = params_in.negative_slope;
+        real threshold      = params_in.threshold     ;
         real x              = input(irow,ibatch);
         real f_x;
         if      (x >= max_value) { f_x = max_value;                        }

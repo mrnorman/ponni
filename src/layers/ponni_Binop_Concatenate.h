@@ -38,10 +38,10 @@ namespace ponni {
     YAKL_INLINE static int get_num_outputs(Params const &params_in) { return params_in.num_outputs; }
 
 
-    YAKL_INLINE void compute_all_outputs(real2d const &input1, real2d const &input2, real2d const &output,
-                                         int ibatch) const {
-      for (int irow = 0; irow < params.num_outputs; irow++) {
-        if (params.after) {
+    YAKL_INLINE static void compute_all_outputs(real2d const &input1, real2d const &input2, real2d const &output,
+                                         int ibatch, Params const &params_in) {
+      for (int irow = 0; irow < params_in.num_outputs; irow++) {
+        if (params_in.after) {
           int num_inputs_1 = input1.dimension[0];
           output(irow,ibatch) = irow < num_inputs_1 ? input1(irow,ibatch) : input2(irow - num_inputs_1,ibatch);
         } else {
