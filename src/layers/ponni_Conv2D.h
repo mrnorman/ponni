@@ -57,8 +57,8 @@ namespace ponni {
 
 
     char const * get_label         () const { return "Conv2D"; }
-    YAKL_INLINE int get_num_inputs () const { return params.num_inputs ; }
-    YAKL_INLINE int get_num_outputs() const { return params.num_outputs; }
+    YAKL_INLINE static int get_num_inputs (Params const &params_in) { return params_in.num_inputs ; }
+    YAKL_INLINE static int get_num_outputs(Params const &params_in) { return params_in.num_outputs; }
 
 
     YAKL_INLINE void compute_all_outputs(real2d const &input_in, real2d const &output_out, int ibatch) const {
