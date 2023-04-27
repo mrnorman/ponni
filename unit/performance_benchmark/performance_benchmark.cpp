@@ -33,7 +33,7 @@ int main( int argc , char **argv ) {
     // Perform a batched inference
     real2d outputs;
     for (int i=0; i < num_runs; i++) {
-      outputs = inference.batch_parallel( real2d("input",num_layers,num_batches) = 0.1 );
+      outputs = inference.forward_batch_parallel( real2d("input",num_layers,num_batches) = 0.1 );
     }
 
     std::cout << yakl::intrinsics::sum( outputs ) / num_layers / num_batches << std::endl;

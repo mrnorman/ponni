@@ -35,7 +35,7 @@ int main( int argc , char **argv ) {
     inputs(11,0) = 6.08758314e-06;
 
     // Perform a batched inference
-    auto outputs = inference.batch_parallel( inputs.createDeviceCopy() );
+    auto outputs = inference.forward_batch_parallel( inputs.createDeviceCopy() );
 
     auto out_host = outputs.createHostCopy();
 
