@@ -134,6 +134,17 @@ namespace ponni {
 
 
 
+    template <int I=0>
+    int get_num_trainable_parameters() const {
+      if constexpr (I < num_layers) {
+        return std::get<I>(params.layers).get_num_trainable_parameters() + get_num_trainable_parameters<I+1>();
+      } else {
+        return std::get<I>(params.layers).get_num_trainable_parameters();
+      }
+    }
+
+
+
     // Perform a forward inference pass through this model parallelizing only the batch dimension
     real2d forward_batch_parallel( real2d const &input ) const {
       auto layers       = this->params.layers      ;
@@ -145,11 +156,11 @@ namespace ponni {
       auto &layer_last = std::get<num_layers-1>(layers);
       int num_inputs  = layer0    .get_num_inputs (layer0    .params);
       int num_outputs = layer_last.get_num_outputs(layer_last.params);
-      int num_batches = input.dimension[1];
+      int num_batches = input.extent(1);
       // Allocate the saved states (overrides default allocation for one batch in constructor)
       allocate_saved_states( num_batches );
       // Ensure input dimension is correct
-      if (input.dimension[0] != layer0.get_num_inputs(layer0.params)) {
+      if (input.extent(0) != layer0.get_num_inputs(layer0.params)) {
         yakl::yakl_throw("Error: Provided # inputs differs from model's # inputs");
       }
       // Allocate the output array
@@ -180,7 +191,7 @@ namespace ponni {
                                                int ibatch ) {
       auto &layer0 = std::get<0>(params_in.layers);
       #ifdef PONNI_DEBUG
-        if (input.dimension[0] != layer0.get_num_inputs(layer0.params)) {
+        if (input.extent(0) != layer0.get_num_inputs(layer0.params)) {
           yakl::yakl_throw("Error: Provided # inputs differs from model's # inputs");
         }
       #endif

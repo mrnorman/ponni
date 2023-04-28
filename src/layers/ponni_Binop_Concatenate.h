@@ -6,7 +6,8 @@ namespace ponni {
 
   template <int N, class real = float>
   struct Binop_Concatenate {
-    typedef typename yakl::Array<real,2,yakl::memDevice> real2d;
+    typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
+    typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
     
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = true; // Use two inputs?
@@ -42,10 +43,10 @@ namespace ponni {
                                          int ibatch, Params const &params_in) {
       for (int irow = 0; irow < params_in.num_outputs; irow++) {
         if (params_in.after) {
-          int num_inputs_1 = input1.dimension[0];
+          int num_inputs_1 = input1.extent(0);
           output(irow,ibatch) = irow < num_inputs_1 ? input1(irow,ibatch) : input2(irow - num_inputs_1,ibatch);
         } else {
-          int num_inputs_2 = input2.dimension[0];
+          int num_inputs_2 = input2.extent(0);
           output(irow,ibatch) = irow < num_inputs_2 ? input2(irow,ibatch) : input1(irow - num_inputs_2,ibatch);
         }
       }
@@ -54,6 +55,23 @@ namespace ponni {
 
     void print_verbose() const {
       std::cout << "    concatenating saved index, " << index << ", onto the previous layer's output\n";
+    }
+
+
+    int get_num_trainable_parameters() const { return 1; }
+
+
+    doubleHost1d to_array() const {
+      doubleHost1d data("Binop_Concatenate_params",3);
+      data(0) = params.num_inputs;
+      data(1) = params.num_outputs;
+      data(2) = params.after ? 1 : 0;
+      return data;
+    }
+
+
+    void from_array(doubleHost1d const &data) {
+      init( static_cast<int>(data(0)) , static_cast<int>(data(1)) , data(2) == 1 );
     }
 
 

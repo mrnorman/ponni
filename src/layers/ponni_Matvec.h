@@ -6,7 +6,9 @@ namespace ponni {
 
   template <class real = float>
   struct Matvec {
-    typedef typename yakl::Array<real,2,yakl::memDevice> real2d;
+    typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
+    typedef typename yakl::Array<real  ,1,yakl::memHost  > realHost1d;
+    typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
     
     bool static constexpr overwrite_input = false;
     bool static constexpr binop           = false; // Use two inputs?
@@ -27,8 +29,8 @@ namespace ponni {
 
     void init( real2d const &weights ) {
       if ( ! weights.initialized() ) yakl::yakl_throw("ERROR: Matvec weights matrix not initialized");
-      params.num_inputs  = weights.dimension[0];
-      params.num_outputs = weights.dimension[1];
+      params.num_inputs  = weights.extent(0);
+      params.num_outputs = weights.extent(1);
       params.weights     = weights;
     }
 
@@ -58,6 +60,28 @@ namespace ponni {
         }
         std::cout << "\n";
       }
+    }
+
+
+    int get_num_trainable_parameters() const { return params.weights.size(); }
+
+
+    doubleHost1d to_array() const {
+      auto weights_host = params.weights.createHostCopy().collapse();
+      doubleHost1d data("Matvec_weights",weights_host.size() + 2);
+      for (int i=0; i < weights_host.size(); i++) { data(i) = weights_host(i); }
+      data(weights_host.size()  ) = params.weights.extent(0);
+      data(weights_host.size()+1) = params.weights.extent(1);
+      return data;
+    }
+
+
+    void from_array(doubleHost1d const & data) {
+      realHost1d weights_host("Matvec_weights",data.size()-2);
+      for (int i=0; i < weights_host.size(); i++) { weights_host(i) = data(i); }
+      auto weights = weights_host.createDeviceCopy().reshape(static_cast<int>(data(data.size()-2)),
+                                                             static_cast<int>(data(data.size()-1)));
+      init(weights);
     }
 
 

@@ -6,7 +6,8 @@ namespace ponni {
 
   template <class real = float>
   struct Selu {
-    typedef typename yakl::Array<real,2,yakl::memDevice> real2d;
+    typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
+    typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
 
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?
@@ -56,6 +57,24 @@ namespace ponni {
       std::cout << "    alpha:     " << params.alpha     << "\n";
       std::cout << "    lambda:    " << params.lambda    << "\n";
       std::cout << "    threshold: " << params.threshold << "\n";
+    }
+
+
+    int get_num_trainable_parameters() const { return 3; }
+
+
+    doubleHost1d to_array() const {
+      doubleHost1d data("Relu_params",4);
+      data(0) = params.num_inputs;
+      data(1) = params.alpha;
+      data(2) = params.lambda;
+      data(3) = params.threshold;
+      return data;
+    }
+
+
+    void from_array(doubleHost1d const &data) {
+      init( static_cast<int>(data(0)) , static_cast<real>(data(1)) , static_cast<real>(data(2)) , static_cast<real>(data(3)) );
     }
 
 

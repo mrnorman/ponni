@@ -100,6 +100,7 @@ namespace ponni {
     }
 
 
+
     void init_particles() {
       using yakl::c::parallel_for;
       using yakl::c::SimpleBounds;
@@ -120,6 +121,7 @@ namespace ponni {
         velocities(iparam,ibatch) = vel  ;
       });
     }
+
 
 
     bool   is_initialized              () const { return parameters.initialized(); }
@@ -143,6 +145,7 @@ namespace ponni {
     real   get_reset_prop              () const { return reset_prop              ; }
     real   get_velmag_prop             () const { return velmag_prop             ; }
     
+
 
     // Send the user the requested batch size of particles. If it's less than the total number of particles,
     // iterations will roll evenly through the particles in contiguous chunks.
@@ -179,6 +182,7 @@ namespace ponni {
       if (batch_beginning >= num_particles) batch_beginning -= num_particles;
       return Batch<real>( params_batch , global_indices , loss_batch );
     }
+
 
 
     // Update the particles in this batch based on user-provided losses
@@ -311,6 +315,7 @@ namespace ponni {
     }
 
 
+
     bool parameters_identical_across_tasks( MPI_Comm comm = MPI_COMM_WORLD ) {
       using yakl::c::parallel_for;
       using yakl::c::SimpleBounds;
@@ -335,7 +340,9 @@ namespace ponni {
     }
 
 
+
     protected:
+
     real2d parameters              ;  // parameters being trained                (num_parameters,num_states)
     real2d velocities              ;  // velocity for each particle              (num_parameters,num_states)
     real2d best_params_per_particle;  // best parameters for each particle       (num_parameters,num_states)
@@ -353,6 +360,7 @@ namespace ponni {
     size_t reset_every             ;  // Reset the lowest "reset_prop" proportion every "reset_every" batches
     real   reset_prop              ;  // Reset the lowest "reset_prop" proportion every "reset_every" batches
     real   velmag_prop             ;  // Proportion of range for each param to use for bounds of random vel init
+
     void copy(Trainer_Particle_Swarm const &rhs) {
       parameters               = rhs.parameters              ;
       velocities               = rhs.velocities              ;

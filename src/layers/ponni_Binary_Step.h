@@ -6,7 +6,8 @@ namespace ponni {
 
   template <class real = float>
   struct Binary_Step {
-    typedef typename yakl::Array<real,2,yakl::memDevice> real2d;
+    typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
+    typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
 
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?
@@ -46,6 +47,22 @@ namespace ponni {
 
     void print_verbose() const {
       std::cout << "    threshold: " << params.threshold << "\n";
+    }
+
+
+    int get_num_trainable_parameters() const { return 1; }
+
+
+    doubleHost1d to_array() const {
+      doubleHost1d data("Binary_Step_params",2);
+      data(0) = params.num_inputs;
+      data(1) = params.threshold;
+      return data;
+    }
+
+
+    void from_array(doubleHost1d const &data) {
+      init( static_cast<int>(data(0)) , static_cast<real>(data(1)) );
     }
 
 

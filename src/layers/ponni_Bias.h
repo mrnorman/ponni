@@ -6,8 +6,10 @@ namespace ponni {
 
   template <class real = float>
   struct Bias {
-    typedef typename yakl::Array<real,1,yakl::memDevice> real1d;
-    typedef typename yakl::Array<real,2,yakl::memDevice> real2d;
+    typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
+    typedef typename yakl::Array<real  ,1,yakl::memHost  > realHost1d;
+    typedef typename yakl::Array<real  ,1,yakl::memDevice> real1d;
+    typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
     
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?
@@ -27,8 +29,8 @@ namespace ponni {
 
     void init( real1d const &weights ) {
       if ( ! weights.initialized() ) yakl::yakl_throw("ERROR: Bias weights vector not initialized");
-      params.num_inputs  = weights.dimension[0];
-      params.num_outputs = weights.dimension[0];
+      params.num_inputs  = weights.extent(0);
+      params.num_outputs = weights.extent(0);
       params.weights     = weights;
     }
 
@@ -51,6 +53,25 @@ namespace ponni {
       for (int irow=0; irow < params.num_outputs; irow++) {
         std::cout << "      " << std::setw(12) << bias_host(irow) << "\n";
       }
+    }
+
+
+    int get_num_trainable_parameters() const { return params.weights.size(); }
+
+
+    doubleHost1d to_array() const {
+      auto weights_host = params.weights.createHostCopy();
+      doubleHost1d data("Bias_weights",weights_host.size());
+      for (int i=0; i < weights_host.size(); i++) { data(i) = weights_host(i); }
+      return data;
+    }
+
+
+    void from_array(doubleHost1d const & data) {
+      realHost1d weights_host("Bias_weights",data.size());
+      for (int i=0; i < weights_host.size(); i++) { weights_host(i) = data(i); }
+      auto weights = weights_host.createDeviceCopy();
+      init(weights);
     }
 
 
