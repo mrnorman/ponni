@@ -22,12 +22,12 @@ namespace ponni {
     Params params;
 
     Binop_Add() {}
-    Binop_Add(int num_inputs) {
-      init(num_inputs);
+    Binop_Add( int num_inputs ) {
+      init( num_inputs );
     }
 
 
-    void init(int num_inputs) {
+    void init( int num_inputs ) {
       params.num_inputs  = num_inputs;
       params.num_outputs = num_inputs;
     }

@@ -21,20 +21,20 @@ namespace ponni {
     Params params;
 
     Softplus() {};
-    Softplus(int num_inputs) {
-      init(num_inputs);
+    Softplus( int num_inputs ) {
+      init( num_inputs );
+    }
+
+
+    void init( int num_inputs ) {
+      params.num_inputs  = num_inputs;
+      params.num_outputs = num_inputs;
     }
 
 
     char const * get_label         () const { return "Softplus"; }
     YAKL_INLINE static int get_num_inputs (Params const &params_in) { return params_in.num_inputs ; }
     YAKL_INLINE static int get_num_outputs(Params const &params_in) { return params_in.num_outputs; }
-
-
-    void init(int num_inputs) {
-      params.num_inputs  = num_inputs;
-      params.num_outputs = num_inputs;
-    }
 
 
     YAKL_INLINE static void compute_all_outputs(real2d const &input, real2d const &output, int ibatch, Params const &params_in) {

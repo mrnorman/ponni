@@ -19,19 +19,23 @@ namespace ponni {
       int    num_inputs;
       int    num_outputs;
       real1d weights;
+      bool   trainable;
     };
 
     Params params;
 
     Bias() {}
-    Bias(real1d const &weights) { init(weights); }
+    Bias( real1d const &weights , bool trainable = true ) {
+      init( weights , trainable );
+    }
 
 
-    void init( real1d const &weights ) {
+    void init( real1d const &weights , bool trainable = true ) {
       if ( ! weights.initialized() ) yakl::yakl_throw("ERROR: Bias weights vector not initialized");
       params.num_inputs  = weights.extent(0);
       params.num_outputs = weights.extent(0);
       params.weights     = weights;
+      params.trainable   = trainable;
     }
 
 
@@ -56,13 +60,14 @@ namespace ponni {
     }
 
 
-    int get_num_trainable_parameters() const { return params.weights.size(); }
+    int get_num_trainable_parameters() const { return params.trainable ? params.weights.size() : 0; }
 
 
     doubleHost1d to_array() const {
       auto weights_host = params.weights.createHostCopy();
-      doubleHost1d data("Bias_weights",weights_host.size());
+      doubleHost1d data("Bias_weights",weights_host.size()+1);
       for (int i=0; i < weights_host.size(); i++) { data(i) = weights_host(i); }
+      data(weights_host.size()) = params.trainable ? 1 : 0;
       return data;
     }
 
@@ -71,7 +76,7 @@ namespace ponni {
       realHost1d weights_host("Bias_weights",data.size());
       for (int i=0; i < weights_host.size(); i++) { weights_host(i) = data(i); }
       auto weights = weights_host.createDeviceCopy();
-      init(weights);
+      init(weights,data(data.size()-1) == 1);
     }
 
 

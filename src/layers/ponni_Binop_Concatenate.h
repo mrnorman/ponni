@@ -23,12 +23,12 @@ namespace ponni {
     Params params;
 
     Binop_Concatenate() {}
-    Binop_Concatenate(int num_inputs, int num_outputs, bool after=true) {
-      init(num_inputs, num_outputs, after);
+    Binop_Concatenate( int num_inputs , int num_outputs , bool after=true ) {
+      init( num_inputs , num_outputs , after);
     }
 
 
-    void init(int num_inputs, int num_outputs, bool after=true) {
+    void init( int num_inputs , int num_outputs , bool after=true ) {
       params.num_inputs  = num_inputs;
       params.num_outputs = num_outputs;
     }
@@ -58,7 +58,7 @@ namespace ponni {
     }
 
 
-    int get_num_trainable_parameters() const { return 1; }
+    int get_num_trainable_parameters() const { return 0; }
 
 
     doubleHost1d to_array() const {

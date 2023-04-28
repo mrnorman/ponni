@@ -16,28 +16,31 @@ namespace ponni {
     struct Params {
       int  num_inputs;
       int  num_outputs;
-      real alpha, threshold;
+      real alpha;
+      real threshold;
+      bool trainable;
     };
 
     Params params;
 
     Prelu() {};
-    Prelu(int num_inputs, real alpha=1.67326, real threshold=0) {
-      init(num_inputs, alpha, threshold);
+    Prelu( int num_inputs , real alpha=1.67326 , real threshold=0 , bool trainable = false ) {
+      init( num_inputs , alpha , threshold , trainable );
+    }
+
+
+    void init( int num_inputs , real alpha=1.67326 , real threshold=0 , bool trainable = false ) {
+      params.num_inputs  = num_inputs;
+      params.num_outputs = num_inputs;
+      params.alpha       = alpha;
+      params.threshold   = threshold;
+      params.trainable   = trainable;
     }
 
 
     char const * get_label         () const { return "Prelu"; }
     YAKL_INLINE static int get_num_inputs (Params const &params_in) { return params_in.num_inputs ; }
     YAKL_INLINE static int get_num_outputs(Params const &params_in) { return params_in.num_outputs; }
-
-
-    void init(int num_inputs, real alpha=1.67326, real threshold=0) {
-      params.num_inputs  = num_inputs;
-      params.num_outputs = num_inputs;
-      params.alpha       = alpha;
-      params.threshold   = threshold;
-    }
 
 
     YAKL_INLINE static void compute_all_outputs(real2d const &input, real2d const &output, int ibatch, Params const &params_in) {
@@ -57,20 +60,21 @@ namespace ponni {
     }
 
 
-    int get_num_trainable_parameters() const { return 2; }
+    int get_num_trainable_parameters() const { return params.trainable ? 2 : 0; }
 
 
     doubleHost1d to_array() const {
-      doubleHost1d data("Prelu_params",3);
+      doubleHost1d data("Prelu_params",4);
       data(0) = params.num_inputs;
       data(1) = params.alpha;
       data(2) = params.threshold;
+      data(3) = params.trainable ? 1 : 0;
       return data;
     }
 
 
     void from_array(doubleHost1d const &data) {
-      init( static_cast<int>(data(0)) , static_cast<real>(data(1)) , static_cast<real>(data(2)) );
+      init( static_cast<int>(data(0)) , static_cast<real>(data(1)) , static_cast<real>(data(2)) , data(3) == 1 );
     }
 
 

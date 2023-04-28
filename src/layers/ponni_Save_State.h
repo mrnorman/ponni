@@ -22,12 +22,12 @@ namespace ponni {
     Params params;
 
     Save_State() {}
-    Save_State(int num_inputs) {
-      init(num_inputs);
+    Save_State( int num_inputs ) {
+      init( num_inputs );
     }
 
 
-    void init(int num_inputs) {
+    void init( int num_inputs ) {
       params.num_inputs  = num_inputs;
       params.num_outputs = num_inputs;
     }

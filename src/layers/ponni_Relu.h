@@ -19,32 +19,36 @@ namespace ponni {
       real max_value;
       real negative_slope;
       real threshold;
+      bool trainable;
     };
 
     Params params;
 
     Relu() {};
-    Relu(int num_inputs , real negative_slope = 0 ,
-                          real threshold = 0 ,
-                          real max_value = std::numeric_limits<real>::max() ) {
-      init(num_inputs, negative_slope, threshold, max_value);
+    Relu( int num_inputs , real negative_slope = 0                           ,
+                           real threshold = 0                                ,
+                           real max_value = std::numeric_limits<real>::max() ,
+                           bool trainable = false                            ) {
+      init( num_inputs , negative_slope , threshold , max_value , trainable );
+    }
+
+
+    void init( int num_inputs , real negative_slope = 0                           ,
+                                real threshold = 0                                ,
+                                real max_value = std::numeric_limits<real>::max() ,
+                                bool trainable = false                            ) {
+      params.num_inputs     = num_inputs    ;
+      params.num_outputs    = num_inputs    ;
+      params.max_value      = max_value     ;
+      params.negative_slope = negative_slope;
+      params.threshold      = threshold     ;
+      params.trainable      = trainable     ;
     }
 
 
     char const * get_label         () const { return "Relu"; }
     YAKL_INLINE static int get_num_inputs (Params const &params_in) { return params_in.num_inputs ; }
     YAKL_INLINE static int get_num_outputs(Params const &params_in) { return params_in.num_outputs; }
-
-
-    void init(int num_inputs , real negative_slope = 0 ,
-                               real threshold = 0 ,
-                               real max_value = std::numeric_limits<real>::max() ) {
-      params.num_inputs     = num_inputs    ;
-      params.num_outputs    = num_inputs    ;
-      params.max_value      = max_value     ;
-      params.negative_slope = negative_slope;
-      params.threshold      = threshold     ;
-    }
 
 
     YAKL_INLINE static void compute_all_outputs(real2d const &input, real2d const &output, int ibatch, Params const &params_in) {
@@ -69,21 +73,22 @@ namespace ponni {
     }
 
 
-    int get_num_trainable_parameters() const { return 3; }
+    int get_num_trainable_parameters() const { return params.trainable ? 3 : 0; }
 
 
     doubleHost1d to_array() const {
-      doubleHost1d data("Relu_params",4);
+      doubleHost1d data("Relu_params",5);
       data(0) = params.num_inputs;
       data(1) = params.negative_slope;
       data(2) = params.threshold;
       data(3) = params.max_value;
+      data(4) = params.trainable ? 1 : 0;
       return data;
     }
 
 
     void from_array(doubleHost1d const &data) {
-      init( static_cast<int>(data(0)) , static_cast<real>(data(1)) , static_cast<real>(data(2)) , static_cast<real>(data(3)) );
+      init( static_cast<int>(data(0)) , static_cast<real>(data(1)) , static_cast<real>(data(2)) , static_cast<real>(data(3)) , data(4) == 1 );
     }
 
 

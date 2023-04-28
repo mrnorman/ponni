@@ -18,20 +18,24 @@ namespace ponni {
       int    num_inputs;
       int    num_outputs;
       real2d weights;
+      bool   trainable;
     };
 
     Params params;
 
     Matvec()  = default;
     ~Matvec() = default;
-    Matvec(real2d const &weights) { init(weights); }
+    Matvec( real2d const &weights , bool trainable = true ) {
+      init( weights , trainable );
+    }
 
 
-    void init( real2d const &weights ) {
+    void init( real2d const &weights , bool trainable = true ) {
       if ( ! weights.initialized() ) yakl::yakl_throw("ERROR: Matvec weights matrix not initialized");
       params.num_inputs  = weights.extent(0);
       params.num_outputs = weights.extent(1);
       params.weights     = weights;
+      params.trainable   = trainable;
     }
 
 
@@ -63,25 +67,26 @@ namespace ponni {
     }
 
 
-    int get_num_trainable_parameters() const { return params.weights.size(); }
+    int get_num_trainable_parameters() const { return params.trainable ? params.weights.size() : 0; }
 
 
     doubleHost1d to_array() const {
       auto weights_host = params.weights.createHostCopy().collapse();
-      doubleHost1d data("Matvec_weights",weights_host.size() + 2);
+      doubleHost1d data("Matvec_weights",weights_host.size() + 3);
       for (int i=0; i < weights_host.size(); i++) { data(i) = weights_host(i); }
       data(weights_host.size()  ) = params.weights.extent(0);
       data(weights_host.size()+1) = params.weights.extent(1);
+      data(weights_host.size()+2) = params.trainable ? 1 : 0;
       return data;
     }
 
 
     void from_array(doubleHost1d const & data) {
-      realHost1d weights_host("Matvec_weights",data.size()-2);
+      realHost1d weights_host("Matvec_weights",data.size()-3);
       for (int i=0; i < weights_host.size(); i++) { weights_host(i) = data(i); }
-      auto weights = weights_host.createDeviceCopy().reshape(static_cast<int>(data(data.size()-2)),
-                                                             static_cast<int>(data(data.size()-1)));
-      init(weights);
+      auto weights = weights_host.createDeviceCopy().reshape(static_cast<int>(data(data.size()-3)),
+                                                             static_cast<int>(data(data.size()-2)));
+      init(weights,data(data.size()-1) == 1);
     }
 
 

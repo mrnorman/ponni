@@ -16,29 +16,33 @@ namespace ponni {
     struct Params {
       int  num_inputs;
       int  num_outputs;
-      real alpha, lambda, threshold;
+      real alpha;
+      real lambda;
+      real threshold;
+      bool trainable;
     };
 
     Params params;
 
     Selu() {};
-    Selu(int num_inputs, real alpha=1.67326, real lambda=1.0507, real threshold=0) {
-      init(num_inputs, alpha, lambda, threshold);
+    Selu( int num_inputs , real alpha=1.67326 , real lambda=1.0507 , real threshold=0 , bool trainable = false) {
+      init( num_inputs , alpha , lambda , threshold , trainable );
+    }
+
+
+    void init( int num_inputs , real alpha=1.67326 , real lambda=1.0507 , real threshold=0 , bool trainable = false ) {
+      params.num_inputs  = num_inputs;
+      params.num_outputs = num_inputs;
+      params.alpha       = alpha;
+      params.lambda      = lambda;
+      params.threshold   = threshold;
+      params.trainable   = trainable;
     }
 
 
     char const * get_label         () const { return "Selu"; }
     YAKL_INLINE static int get_num_inputs (Params const &params_in) { return params_in.num_inputs ; }
     YAKL_INLINE static int get_num_outputs(Params const &params_in) { return params_in.num_outputs; }
-
-
-    void init(int num_inputs, real alpha=1.67326, real lambda=1.0507, real threshold=0) {
-      params.num_inputs  = num_inputs;
-      params.num_outputs = num_inputs;
-      params.alpha       = alpha;
-      params.lambda      = lambda;
-      params.threshold   = threshold;
-    }
 
 
     YAKL_INLINE static void compute_all_outputs(real2d const &input, real2d const &output, int ibatch, Params const &params_in) {
@@ -60,21 +64,22 @@ namespace ponni {
     }
 
 
-    int get_num_trainable_parameters() const { return 3; }
+    int get_num_trainable_parameters() const { return params.trainable ? 3 : 0; }
 
 
     doubleHost1d to_array() const {
-      doubleHost1d data("Relu_params",4);
+      doubleHost1d data("Relu_params",5);
       data(0) = params.num_inputs;
       data(1) = params.alpha;
       data(2) = params.lambda;
       data(3) = params.threshold;
+      data(4) = params.trainable ? 1 : 0;
       return data;
     }
 
 
     void from_array(doubleHost1d const &data) {
-      init( static_cast<int>(data(0)) , static_cast<real>(data(1)) , static_cast<real>(data(2)) , static_cast<real>(data(3)) );
+      init( static_cast<int>(data(0)) , static_cast<real>(data(1)) , static_cast<real>(data(2)) , static_cast<real>(data(3)) , data(4) == 1 );
     }
 
 
