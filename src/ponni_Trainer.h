@@ -7,12 +7,15 @@
 namespace ponni {
 
 
+  // This represents a single batch of values for the user to get parameters and calculate losses from them
+  // The user is not expected to create an instance of this class themselves. Rather, the Trainer class
+  // will provide this to the user already created.
   template <class real = float>
   class Batch {
     public:
-    typedef typename yakl::Array<real,1,yakl::memDevice,yakl::styleC> real1d;
-    typedef typename yakl::Array<real,2,yakl::memDevice,yakl::styleC> real2d;
-    typedef typename yakl::Array<int ,1,yakl::memDevice,yakl::styleC> int1d;
+    typedef typename yakl::Array<real,1,yakl::memDevice> real1d;
+    typedef typename yakl::Array<real,2,yakl::memDevice> real2d;
+    typedef typename yakl::Array<int ,1,yakl::memDevice> int1d;
 
     Batch () = default;
     ~Batch() = default;
@@ -30,9 +33,9 @@ namespace ponni {
     int    get_batch_size    () const { return parameters.extent(1); }
 
     protected:
-    real2d parameters;
-    int1d  global_indices;
-    real1d loss;
+    real2d parameters;      // Parameters for each particle, dimensioned as num_parameters,num_particles(aka batch size)
+    int1d  global_indices;  // Global index among all particles for each particle in this batch
+    real1d loss;            // Loss for each particl ein this batch
     void copy(Batch const &rhs) {
       parameters     = rhs.parameters;
       global_indices = rhs.global_indices;
@@ -45,11 +48,10 @@ namespace ponni {
   template <class real = float , typename std::enable_if<std::is_floating_point<real>::value,bool>::type = true >
   class Trainer_Particle_Swarm {
     public:
-    typedef typename yakl::Array<real,1,yakl::memDevice,yakl::styleC> real1d;
-    typedef typename yakl::Array<real,2,yakl::memDevice,yakl::styleC> real2d;
-    typedef typename yakl::Array<int ,1,yakl::memDevice,yakl::styleC> int1d;
-    typedef typename yakl::Array<real,1,yakl::memHost  ,yakl::styleC> realHost1d;
-    typedef typename yakl::Array<int ,1,yakl::memHost  ,yakl::styleC> intHost1d;
+    typedef typename yakl::Array<real,1,yakl::memDevice> real1d;
+    typedef typename yakl::Array<real,2,yakl::memDevice> real2d;
+    typedef typename yakl::Array<int ,1,yakl::memDevice> int1d;
+    typedef typename yakl::Array<real,1,yakl::memHost  > realHost1d;
 
     Trainer_Particle_Swarm()  = default;
     ~Trainer_Particle_Swarm() = default;
@@ -59,16 +61,17 @@ namespace ponni {
     Trainer_Particle_Swarm & operator=(Trainer_Particle_Swarm const &&rhs) { copy(rhs); return *this; };
 
 
+    // Create a Particle Swarm Trainer
     Trainer_Particle_Swarm( int    num_parameters                  ,
                             int    num_particles        = 1024     ,
-                            real1d lbounds_in           = real1d() ,
-                            real1d ubounds_in           = real1d() ,
-                            real   inertia_in           = 0.8      ,
-                            real   velmag_prop_in       = 0.05     ,
-                            real   accel_loc_in         = 0.5      ,
-                            size_t reset_every_in       = 100      ,
-                            real   reset_prop_in        = 0.3      ,
-                            size_t rand_seed_counter_in = 0        ) {
+                            real1d lbounds_in           = real1d() ,    // Lower bound for each parameters
+                            real1d ubounds_in           = real1d() ,    // Upper bound for each parameters
+                            real   inertia_in           = 0.8      ,    // Velocity inertia
+                            real   velmag_prop_in       = 0.05     ,    // Initial velocity magnitude as proportion of ubound-lbound
+                            real   accel_loc_in         = 0.5      ,    // Proportion of update controlled by local exploitation
+                            size_t reset_every_in       = 100      ,    // N: Reset a proportion of particles every N iterations
+                            real   reset_prop_in        = 0.3      ,    // The proportion of particles to reset every N iterations
+                            size_t rand_seed_counter_in = 0        ) {  // Random seed for user control
       batch_beginning   = 0;
       num_updates       = 0;
       rand_seed_counter = rand_seed_counter_in;
@@ -141,6 +144,8 @@ namespace ponni {
     real   get_velmag_prop             () const { return velmag_prop             ; }
     
 
+    // Send the user the requested batch size of particles. If it's less than the total number of particles,
+    // iterations will roll evenly through the particles in contiguous chunks.
     Batch<real> get_batch(int batch_size_in = -1) {
       using yakl::c::parallel_for;
       using yakl::c::SimpleBounds;
@@ -176,6 +181,9 @@ namespace ponni {
     }
 
 
+    // Update the particles in this batch based on user-provided losses
+    // This is guaranteed to give identical updates for each particle for all MPI tasks so long as the provided
+    //   losses are identical for all MPI tasks
     void update_from_batch( Batch<real> const &batch , MPI_Comm comm = MPI_COMM_WORLD ) {
       using yakl::c::parallel_for;
       using yakl::c::SimpleBounds;

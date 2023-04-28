@@ -36,7 +36,7 @@ int main( int argc , char **argv ) {
                                        reset_prop     );
 
     for (int iter = 0; iter < num_iterations; iter++) {
-      auto batch = pso.get_batch();
+      auto batch  = pso.get_batch();
       auto params = batch.get_parameters();
       auto loss   = batch.get_loss();
 
