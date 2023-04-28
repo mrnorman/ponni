@@ -4,9 +4,9 @@
 
 namespace ponni {
 
-  template <int N>
-  class Save_State {
-  public:
+  template <int N, class real = float>
+  struct Save_State {
+    typedef typename yakl::Array<real,2,yakl::memDevice> real2d;
     
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?

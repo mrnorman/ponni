@@ -4,8 +4,9 @@
 
 namespace ponni {
 
-  class Sigmoid {
-  public:
+  template <class real = float>
+  struct Sigmoid {
+    typedef typename yakl::Array<real,2,yakl::memDevice> real2d;
 
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?

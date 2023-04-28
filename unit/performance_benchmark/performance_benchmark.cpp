@@ -5,8 +5,8 @@
 int main( int argc , char **argv ) {
   yakl::init();
   {
-    using ponni::real1d;
-    using ponni::real2d;
+    typedef yakl::Array<float,1,yakl::memDevice> real1d;
+    typedef yakl::Array<float,2,yakl::memDevice> real2d;
     using ponni::create_inference_model;
     using ponni::Matvec;
     using ponni::Bias;
@@ -20,12 +20,12 @@ int main( int argc , char **argv ) {
     int num_runs    = 10;
 
     // Create an inference model to perform batched forward predictions
-    auto inference = create_inference_model( Matvec( real2d("matvec_1",num_layers,num_layers) = 1 ) ,
-                                             Bias  ( real1d("bias_1",num_layers) = 1 )              ,
-                                             Relu  ( num_layers , 0.1 )                             ,
-                                             Matvec( real2d("matvec_1",num_layers,num_layers) = 1 ) ,
-                                             Bias  ( real1d("bias_1",num_layers) = 1 )              ,
-                                             Relu  ( num_layers , 0.1 )                             );
+    auto inference = create_inference_model( Matvec<float>( real2d("matvec_1",num_layers,num_layers) = 1 ) ,
+                                             Bias  <float>( real1d("bias_1",num_layers) = 1 )              ,
+                                             Relu  <float>( num_layers , 0.1 )                             ,
+                                             Matvec<float>( real2d("matvec_1",num_layers,num_layers) = 1 ) ,
+                                             Bias  <float>( real1d("bias_1",num_layers) = 1 )              ,
+                                             Relu  <float>( num_layers , 0.1 )                             );
                                               
     inference.validate();
     inference.print();

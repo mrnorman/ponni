@@ -4,9 +4,9 @@
 
 namespace ponni {
 
-  template <int N>
-  class Binop_Concatenate {
-  public:
+  template <int N, class real = float>
+  struct Binop_Concatenate {
+    typedef typename yakl::Array<real,2,yakl::memDevice> real2d;
     
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = true; // Use two inputs?

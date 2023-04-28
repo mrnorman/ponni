@@ -16,38 +16,38 @@ int main( int argc , char **argv ) {
 
     // Create layers & load weights
     bool transpose = true;
-    ponni::Matvec matvec_1( ponni::load_h5_weights<2>( fname , "/" , "0.0.0.0.1.weight"            , transpose ) );
-    ponni::Bias   bias_1  ( ponni::load_h5_weights<1>( fname , "/" , "0.0.0.0.1.bias"              , transpose ) );
-    ponni::Matvec matvec_2( ponni::load_h5_weights<2>( fname , "/" , "0.0.0.2.sequential.0.weight" , transpose ) );
-    ponni::Bias   bias_2  ( ponni::load_h5_weights<1>( fname , "/" , "0.0.0.2.sequential.0.bias"   , transpose ) );
-    ponni::Matvec matvec_3( ponni::load_h5_weights<2>( fname , "/" , "0.0.2.sequential.0.weight"   , transpose ) );
-    ponni::Bias   bias_3  ( ponni::load_h5_weights<1>( fname , "/" , "0.0.2.sequential.0.bias"     , transpose ) );
-    ponni::Matvec matvec_4( ponni::load_h5_weights<2>( fname , "/" , "0.2.sequential.0.weight"     , transpose ) );
-    ponni::Bias   bias_4  ( ponni::load_h5_weights<1>( fname , "/" , "0.2.sequential.0.bias"       , transpose ) );
-    ponni::Matvec matvec_5( ponni::load_h5_weights<2>( fname , "/" , "2.weight"                    , transpose ) );
-    ponni::Bias   bias_5  ( ponni::load_h5_weights<1>( fname , "/" , "2.bias"                      , transpose ) );
+    ponni::Matvec<float> matvec_1( ponni::load_h5_weights<2>( fname , "/" , "0.0.0.0.1.weight"            , transpose ) );
+    ponni::Bias  <float> bias_1  ( ponni::load_h5_weights<1>( fname , "/" , "0.0.0.0.1.bias"              , transpose ) );
+    ponni::Matvec<float> matvec_2( ponni::load_h5_weights<2>( fname , "/" , "0.0.0.2.sequential.0.weight" , transpose ) );
+    ponni::Bias  <float> bias_2  ( ponni::load_h5_weights<1>( fname , "/" , "0.0.0.2.sequential.0.bias"   , transpose ) );
+    ponni::Matvec<float> matvec_3( ponni::load_h5_weights<2>( fname , "/" , "0.0.2.sequential.0.weight"   , transpose ) );
+    ponni::Bias  <float> bias_3  ( ponni::load_h5_weights<1>( fname , "/" , "0.0.2.sequential.0.bias"     , transpose ) );
+    ponni::Matvec<float> matvec_4( ponni::load_h5_weights<2>( fname , "/" , "0.2.sequential.0.weight"     , transpose ) );
+    ponni::Bias  <float> bias_4  ( ponni::load_h5_weights<1>( fname , "/" , "0.2.sequential.0.bias"       , transpose ) );
+    ponni::Matvec<float> matvec_5( ponni::load_h5_weights<2>( fname , "/" , "2.weight"                    , transpose ) );
+    ponni::Bias  <float> bias_5  ( ponni::load_h5_weights<1>( fname , "/" , "2.bias"                      , transpose ) );
 
     // Create an inference model to perform batched forward predictions
-    auto inference = create_inference_model( matvec_1           ,
-                                             bias_1             ,
-                                             Relu( 5 , 0.1 )    ,
-                                             Save_State<0>( 5 ) ,
-                                             matvec_2           ,
-                                             bias_2             ,
-                                             Relu( 5 , 0.1 )    ,
-                                             Binop_Add<0>( 5 )  ,
-                                             Save_State<0>( 5 ) ,
-                                             matvec_3           ,
-                                             bias_3             ,
-                                             Relu( 5 , 0.1 )    ,
-                                             Binop_Add<0>( 5 )  ,
-                                             Save_State<0>( 5 ) ,
-                                             matvec_4           ,
-                                             bias_4             ,
-                                             Relu( 5 , 0.1 )    ,
-                                             Binop_Add<0>( 5 )  ,
-                                             matvec_5           ,
-                                             bias_5             );
+    auto inference = create_inference_model( matvec_1                       ,
+                                             bias_1                         ,
+                                             Relu        <float>( 5 , 0.1 ) ,
+                                             Save_State<0,float>( 5 )       ,
+                                             matvec_2                       ,
+                                             bias_2                         ,
+                                             Relu        <float>( 5 , 0.1 ) ,
+                                             Binop_Add <0,float>( 5 )       ,
+                                             Save_State<0,float>( 5 )       ,
+                                             matvec_3                       ,
+                                             bias_3                         ,
+                                             Relu        <float>( 5 , 0.1 ) ,
+                                             Binop_Add <0,float>( 5 )       ,
+                                             Save_State<0,float>( 5 )       ,
+                                             matvec_4                       ,
+                                             bias_4                         ,
+                                             Relu        <float>( 5 , 0.1 ) ,
+                                             Binop_Add <0,float>( 5 )       ,
+                                             matvec_5                       ,
+                                             bias_5                         );
                                                    
     inference.validate();
     inference.print_verbose();

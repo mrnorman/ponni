@@ -10,8 +10,9 @@ namespace ponni {
   // State: a model state between operations such as input, output, or a "hidden layer"
   // Layer: An *operation* on a state to produce another state such as matrix multiplication
   // The only data held in this class are the saved states and each layer's parameters
-  template <class TUPLE>
+  template <class TUPLE, class real = float>
   struct Inference {
+    typedef typename yakl::Array<real,2,yakl::memDevice> real2d;
     // ***********************************************************************
     // ** FUNCTIONS AND CONSTEXPR VARIABLES NEEDED TO DECLARE CLASS MEMBERS **
     // ***********************************************************************

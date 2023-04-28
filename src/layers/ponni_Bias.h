@@ -4,8 +4,10 @@
 
 namespace ponni {
 
-  class Bias {
-  public:
+  template <class real = float>
+  struct Bias {
+    typedef typename yakl::Array<real,1,yakl::memDevice> real1d;
+    typedef typename yakl::Array<real,2,yakl::memDevice> real2d;
     
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?
