@@ -134,9 +134,10 @@ namespace ponni {
 
 
 
+    // Get the total number of trainable parameters in the model
     template <int I=0>
     int get_num_trainable_parameters() const {
-      if constexpr (I < num_layers) {
+      if constexpr (I < num_layers-1) {
         return std::get<I>(params.layers).get_num_trainable_parameters() + get_num_trainable_parameters<I+1>();
       } else {
         return std::get<I>(params.layers).get_num_trainable_parameters();
@@ -269,8 +270,9 @@ namespace ponni {
       if constexpr (I < num_layers) {
         std::cout << "  " << std::setw(3) << std::right << I+1 << ": "
                   << std::setw(15) << std::left << std::get<I>(params.layers).get_label() << " with "
-                  << std::get<I>(params.layers).get_num_inputs (std::get<I>(params.layers).params) << " inputs and "
-                  << std::get<I>(params.layers).get_num_outputs(std::get<I>(params.layers).params) << " outputs.\n";
+                  << std::get<I>(params.layers).get_num_inputs (std::get<I>(params.layers).params) << " inputs, "
+                  << std::get<I>(params.layers).get_num_outputs(std::get<I>(params.layers).params) << " outputs, and "
+                  << std::get<I>(params.layers).get_num_trainable_parameters() << " trainable parameters\n";
         print<I+1>();
       }
     }

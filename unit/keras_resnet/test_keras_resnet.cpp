@@ -75,7 +75,10 @@ int main( int argc , char **argv ) {
                     Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense_9/dense_9" , "bias:0"   ) ) );
 
     model.validate();
-    model.print_verbose();
+    // model.print_verbose();
+    model.print();
+
+    std::cout << "*** TOTAL TRAINABLE PARAMETERS: " << model.get_num_trainable_parameters() << std::endl;
 
     {
       // Load one test sample to ensure we're getting the same outputs
