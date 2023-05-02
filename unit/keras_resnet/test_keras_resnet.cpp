@@ -82,6 +82,8 @@ int main( int argc , char **argv ) {
     model.save_to_text_file("keras_resnet_save.txt");
     model.load_from_text_file("keras_resnet_save.txt");
 
+    auto &layer = model.get_layer<5>();
+
     std::cout << "*** TOTAL TRAINABLE PARAMETERS: " << model.get_num_trainable_parameters() << std::endl;
 
     {

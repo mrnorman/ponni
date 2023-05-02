@@ -147,6 +147,11 @@ namespace ponni {
 
 
 
+    template <int I>
+    decltype(std::get<I>(params.layers)) & get_layer() { return std::get<I>(params.layers); }
+
+
+
     // Perform a forward inference pass through this model parallelizing only the batch dimension
     real2d forward_batch_parallel( real2d const &input ) const {
       auto layers       = this->params.layers      ;
