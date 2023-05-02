@@ -371,7 +371,7 @@ namespace ponni {
         auto array = represent_as_array();
         file << "number_of_elements_in_flattened_representation: " << array.size() << "\n";
         file << "flattened_representation_below_one_line_per_value: \n";
-        for (int i=0; i < array.size(); i++) { file << std::scientific << std::setprecision(16) << array(i) << "\n"; }
+        for (int i=0; i < array.size(); i++) { file << std::setprecision(17) << array(i) << "\n"; }
         file.close();
       }
     }
