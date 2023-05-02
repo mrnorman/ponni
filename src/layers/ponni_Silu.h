@@ -50,6 +50,9 @@ namespace ponni {
     int get_num_trainable_parameters() const { return 0; }
 
 
+    int get_array_representation_size() const { return 1; }
+
+
     doubleHost1d to_array() const {
       doubleHost1d data("Silu_params",1);
       data(0) = params.num_inputs;

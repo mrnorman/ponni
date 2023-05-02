@@ -70,23 +70,26 @@ namespace ponni {
     int get_num_trainable_parameters() const { return params.trainable ? params.weights.size() : 0; }
 
 
+    int get_array_representation_size() const { return params.weights.size() + 3; }
+
+
     doubleHost1d to_array() const {
       auto weights_host = params.weights.createHostCopy().collapse();
       doubleHost1d data("Matvec_weights",weights_host.size() + 3);
-      for (int i=0; i < weights_host.size(); i++) { data(i) = weights_host(i); }
-      data(weights_host.size()  ) = params.weights.extent(0);
-      data(weights_host.size()+1) = params.weights.extent(1);
-      data(weights_host.size()+2) = params.trainable ? 1 : 0;
+      data(0) = params.weights.extent(0);
+      data(1) = params.weights.extent(1);
+      data(2) = params.trainable ? 1 : 0;
+      for (int i=0; i < weights_host.size(); i++) { data(3+i) = weights_host(i); }
       return data;
     }
 
 
     void from_array(doubleHost1d const & data) {
-      realHost1d weights_host("Matvec_weights",data.size()-3);
-      for (int i=0; i < weights_host.size(); i++) { weights_host(i) = data(i); }
-      auto weights = weights_host.createDeviceCopy().reshape(static_cast<int>(data(data.size()-3)),
-                                                             static_cast<int>(data(data.size()-2)));
-      init(weights,data(data.size()-1) == 1);
+      realHost1d weights_host("Matvec_weights",data(0)*data(1));
+      for (int i=0; i < weights_host.size(); i++) { weights_host(i) = data(3+i); }
+      auto weights = weights_host.createDeviceCopy().reshape(static_cast<int>(data(0)),
+                                                             static_cast<int>(data(1)));
+      init(weights,data(2) == 1);
     }
 
 

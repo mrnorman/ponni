@@ -63,6 +63,9 @@ namespace ponni {
     int get_num_trainable_parameters() const { return params.trainable ? 2 : 0; }
 
 
+    int get_array_representation_size() const { return 4; }
+
+
     doubleHost1d to_array() const {
       doubleHost1d data("Prelu_params",4);
       data(0) = params.num_inputs;

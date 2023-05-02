@@ -77,6 +77,10 @@ int main( int argc , char **argv ) {
     model.validate();
     // model.print_verbose();
     model.print();
+    auto model_as_array = model.represent_as_array();
+    model.set_layers_from_array_representation( model_as_array );
+    model.save_to_text_file("keras_resnet_save.txt");
+    model.load_from_text_file("keras_resnet_save.txt");
 
     std::cout << "*** TOTAL TRAINABLE PARAMETERS: " << model.get_num_trainable_parameters() << std::endl;
 

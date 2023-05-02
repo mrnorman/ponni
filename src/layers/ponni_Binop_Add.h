@@ -54,14 +54,19 @@ namespace ponni {
     int get_num_trainable_parameters() const { return 0; }
 
 
+    int get_array_representation_size() const { return 2; }
+
+
     doubleHost1d to_array() const {
-      doubleHost1d data("Binary_Add_params",1);
+      doubleHost1d data("Binary_Add_params",2);
       data(0) = params.num_inputs;
+      data(1) = N;
       return data;
     }
 
 
     void from_array(doubleHost1d const &data) {
+      if (data(1) != N) yakl::yakl_throw("ERROR: Binop_Add saved state index incompatible with data from file");
       init( static_cast<int>(data(0)) );
     }
 

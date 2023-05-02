@@ -61,16 +61,21 @@ namespace ponni {
     int get_num_trainable_parameters() const { return 0; }
 
 
+    int get_array_representation_size() const { return 4; }
+
+
     doubleHost1d to_array() const {
-      doubleHost1d data("Binop_Concatenate_params",3);
+      doubleHost1d data("Binop_Concatenate_params",4);
       data(0) = params.num_inputs;
       data(1) = params.num_outputs;
       data(2) = params.after ? 1 : 0;
+      data(3) = N;
       return data;
     }
 
 
     void from_array(doubleHost1d const &data) {
+      if (data(3) != N) yakl::yakl_throw("ERROR: Binop_Concatenate saved state index incompatible with data from file");
       init( static_cast<int>(data(0)) , static_cast<int>(data(1)) , data(2) == 1 );
     }
 

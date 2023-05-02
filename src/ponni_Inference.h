@@ -12,7 +12,8 @@ namespace ponni {
   // The only data held in this class are the saved states and each layer's parameters
   template <class TUPLE, class real = float>
   struct Inference {
-    typedef typename yakl::Array<real,2,yakl::memDevice> real2d;
+    typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
+    typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
     // ***********************************************************************
     // ** FUNCTIONS AND CONSTEXPR VARIABLES NEEDED TO DECLARE CLASS MEMBERS **
     // ***********************************************************************
@@ -266,7 +267,8 @@ namespace ponni {
     // Print basic information about this model
     template <int I=0>
     void print() const {
-      if constexpr (I==0) std::cout << "Inference model has " << num_layers << " layers:\n";
+      if constexpr (I==0) std::cout << "Inference model has " << num_layers << " layers -- with "
+                                    << get_num_trainable_parameters() << " total trainable parameters.\n";
       if constexpr (I < num_layers) {
         std::cout << "  " << std::setw(3) << std::right << I+1 << ": "
                   << std::setw(15) << std::left << std::get<I>(params.layers).get_label() << " with "
@@ -290,6 +292,109 @@ namespace ponni {
                   << std::get<I>(params.layers).get_num_outputs(std::get<I>(params.layers).params) << " outputs.\n";
         std::get<I>(params.layers).print_verbose();
         print_verbose<I+1>();
+      }
+    }
+
+
+
+    // Get the total number of double precision elements needed to store this model in a flattened array representation
+    template <int I=0>
+    int get_array_representation_size() const {
+      if constexpr (I < num_layers-1) {
+        return std::get<I>(params.layers).get_array_representation_size() + get_array_representation_size<I+1>();
+      } else {
+        return std::get<I>(params.layers).get_array_representation_size();
+      }
+    }
+
+
+
+    // Represent this model as a flattened Host-memory double precision array
+    template <int I=0>
+    doubleHost1d represent_as_array( doubleHost1d const &array = doubleHost1d() , int offset = 0 ) const {
+      if constexpr (I == 0) {
+        doubleHost1d array("model_as_array",get_array_representation_size());
+        auto tmp = std::get<I>(params.layers).to_array();
+        for (int i=0; i < tmp.size(); i++) { array(offset+i) = tmp(i); }
+        offset += tmp.size();
+        return represent_as_array<I+1>( array , offset );
+      } else if constexpr (I < num_layers-1) {
+        auto tmp = std::get<I>(params.layers).to_array();
+        for (int i=0; i < tmp.size(); i++) { array(offset+i) = tmp(i); }
+        offset += tmp.size();
+        return represent_as_array<I+1>( array , offset );
+      } else {
+        auto tmp = std::get<I>(params.layers).to_array();
+        for (int i=0; i < tmp.size(); i++) { array(offset+i) = tmp(i); }
+        return array;
+      }
+    }
+
+
+
+    // Set the layer parameters from a flattened array representation
+    template <int I=0>
+    void set_layers_from_array_representation( doubleHost1d const &array ) {
+      auto &layer = std::get<I>(params.layers);
+      layer.from_array(array);
+      if (layer.get_array_representation_size() > array.size()) {
+        yakl::yakl_throw("ERROR: Incompatible array representation");
+      }
+      if constexpr (I < num_layers-1) {
+        int offset = layer.get_array_representation_size();
+        doubleHost1d tmp( array.label() , array.data()+offset , array.size()-offset );
+        set_layers_from_array_representation<I+1>(tmp);
+      }
+    }
+
+
+
+    template <int I=0>
+    void save_to_text_file( std::string fname , std::ofstream file = std::ofstream() ) {
+      auto &layer = std::get<I>(params.layers);
+      if constexpr (I == 0) {
+        file.open(fname);
+        file << num_layers << "\n";
+        file << layer.get_label() << "\n";
+        save_to_text_file<I+1>( fname , std::move(file) );
+      } else if constexpr (I < num_layers-1) {
+        file << layer.get_label() << "\n"; 
+        save_to_text_file<I+1>( fname , std::move(file) );
+      } else {
+        file << layer.get_label() << "\n";
+        auto array = represent_as_array();
+        file << array.size() << "\n";
+        for (int i=0; i < array.size(); i++) { file << std::scientific << std::setprecision(16) << array(i) << "\n"; }
+        file.close();
+      }
+    }
+
+
+
+    template <int I=0>
+    void load_from_text_file( std::string fname , std::ifstream file = std::ifstream() ) {
+      auto &layer = std::get<I>(params.layers);
+      std::string line;
+      if constexpr (I == 0) {
+        file.open(fname);
+        if (! file.is_open()) { std::cerr << "ERROR: Failed to open " << fname << std::endl; yakl::yakl_throw(""); }
+        int file_num_layers;  file >> file_num_layers;
+        if (file_num_layers != num_layers) { yakl::yakl_throw("ERROR: Incorrect number of layers in saved file"); }
+        std::string file_layer_label;  file >> file_layer_label;
+        if (file_layer_label != layer.get_label()) { yakl::yakl_throw("ERROR: Incorrect layer type"); }
+        load_from_text_file<I+1>( fname , std::move(file) );
+      } else if constexpr (I < num_layers-1) {
+        std::string file_layer_label;  file >> file_layer_label;
+        if (file_layer_label != layer.get_label()) { yakl::yakl_throw("ERROR: Incorrect layer type"); }
+        load_from_text_file<I+1>( fname , std::move(file) );
+      } else {
+        std::string file_layer_label;  file >> file_layer_label;
+        if (file_layer_label != layer.get_label()) { yakl::yakl_throw("ERROR: Incorrect layer type"); }
+        int num_flattened_values;  file >> num_flattened_values;
+        doubleHost1d array("flattened_representation",num_flattened_values);
+        for (int i=0; i < num_flattened_values; i++) { file >> array(i); }
+        set_layers_from_array_representation( array );
+        file.close();
       }
     }
 

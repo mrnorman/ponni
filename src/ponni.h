@@ -2,6 +2,7 @@
 #pragma once
 
 #include "YAKL.h"
+#include <fstream>
 #include "layers/ponni_Matvec.h"
 #include "layers/ponni_Bias.h"
 #include "layers/ponni_Relu.h"

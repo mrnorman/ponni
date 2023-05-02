@@ -63,20 +63,24 @@ namespace ponni {
     int get_num_trainable_parameters() const { return params.trainable ? params.weights.size() : 0; }
 
 
+    int get_array_representation_size() const { return params.weights.size() + 2; }
+
+
     doubleHost1d to_array() const {
       auto weights_host = params.weights.createHostCopy();
-      doubleHost1d data("Bias_weights",weights_host.size()+1);
-      for (int i=0; i < weights_host.size(); i++) { data(i) = weights_host(i); }
-      data(weights_host.size()) = params.trainable ? 1 : 0;
+      doubleHost1d data("Bias_weights",weights_host.size()+2);
+      data(0) = params.num_inputs;
+      data(1) = params.trainable ? 1 : 0;
+      for (int i=0; i < weights_host.size(); i++) { data(2+i) = weights_host(i); }
       return data;
     }
 
 
     void from_array(doubleHost1d const & data) {
-      realHost1d weights_host("Bias_weights",data.size());
-      for (int i=0; i < weights_host.size(); i++) { weights_host(i) = data(i); }
+      realHost1d weights_host("Bias_weights",data(0));
+      for (int i=0; i < weights_host.size(); i++) { weights_host(i) = data(2+i); }
       auto weights = weights_host.createDeviceCopy();
-      init(weights,data(data.size()-1) == 1);
+      init(weights,data(1) == 1);
     }
 
 

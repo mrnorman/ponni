@@ -55,6 +55,9 @@ namespace ponni {
     int get_num_trainable_parameters() const { return params.trainable ? 1 : 0; }
 
 
+    int get_array_representation_size() const { return 3; }
+
+
     doubleHost1d to_array() const {
       doubleHost1d data("Binary_Step_params",3);
       data(0) = params.num_inputs;
