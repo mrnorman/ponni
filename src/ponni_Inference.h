@@ -354,7 +354,8 @@ namespace ponni {
       auto &layer = std::get<I>(params.layers);
       if constexpr (I == 0) {
         file.open(fname);
-        file << num_layers << "\n";
+        file << "number_of_layers: " << num_layers << "\n";
+        file << "layer_types_listed_below:\n";
         file << layer.get_label() << "\n";
         save_to_text_file<I+1>( fname , std::move(file) );
       } else if constexpr (I < num_layers-1) {
@@ -363,7 +364,8 @@ namespace ponni {
       } else {
         file << layer.get_label() << "\n";
         auto array = represent_as_array();
-        file << array.size() << "\n";
+        file << "number_of_elements_in_flattened_representation: " << array.size() << "\n";
+        file << "flattened_representation_below_one_line_per_value: \n";
         for (int i=0; i < array.size(); i++) { file << std::scientific << std::setprecision(16) << array(i) << "\n"; }
         file.close();
       }
@@ -374,12 +376,13 @@ namespace ponni {
     template <int I=0>
     void load_from_text_file( std::string fname , std::ifstream file = std::ifstream() ) {
       auto &layer = std::get<I>(params.layers);
-      std::string line;
+      std::string dummy;
       if constexpr (I == 0) {
         file.open(fname);
         if (! file.is_open()) { std::cerr << "ERROR: Failed to open " << fname << std::endl; yakl::yakl_throw(""); }
-        int file_num_layers;  file >> file_num_layers;
+        int file_num_layers;  file >> dummy >> file_num_layers;
         if (file_num_layers != num_layers) { yakl::yakl_throw("ERROR: Incorrect number of layers in saved file"); }
+        file >> dummy;
         std::string file_layer_label;  file >> file_layer_label;
         if (file_layer_label != layer.get_label()) { yakl::yakl_throw("ERROR: Incorrect layer type"); }
         load_from_text_file<I+1>( fname , std::move(file) );
@@ -390,8 +393,9 @@ namespace ponni {
       } else {
         std::string file_layer_label;  file >> file_layer_label;
         if (file_layer_label != layer.get_label()) { yakl::yakl_throw("ERROR: Incorrect layer type"); }
-        int num_flattened_values;  file >> num_flattened_values;
+        int num_flattened_values;  file >> dummy >> num_flattened_values;
         doubleHost1d array("flattened_representation",num_flattened_values);
+        file >> dummy;
         for (int i=0; i < num_flattened_values; i++) { file >> array(i); }
         set_layers_from_array_representation( array );
         file.close();
