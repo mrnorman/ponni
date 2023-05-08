@@ -8,6 +8,7 @@ namespace ponni {
   struct Gelu {
     typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
     typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
+    typedef typename yakl::Array<real  ,3,yakl::memDevice> real3d;
 
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?
@@ -35,23 +36,17 @@ namespace ponni {
     char const * get_label         () const { return "Gelu"; }
     YAKL_INLINE static int get_num_inputs (Params const &params_in) { return params_in.num_inputs ; }
     YAKL_INLINE static int get_num_outputs(Params const &params_in) { return params_in.num_outputs; }
+    int get_num_trainable_parameters() const { return 0; }
+    int get_array_representation_size() const { return 1; }
 
 
-    YAKL_INLINE static void compute_all_outputs(real2d const &input, real2d const &output, int ibatch, Params const &params_in) {
+    YAKL_INLINE static void compute_all_outputs(real3d const &input, real3d const &output,
+                                                int ibatch, int iens, Params const &params_in) {
       for (int irow = 0; irow < params_in.num_outputs; irow++) {
-        real x = input(irow,ibatch);
-        output(irow,ibatch) = x/2*(1+std::erf(x/std::sqrt(2)));
+        real x = input(irow,ibatch,iens);
+        output(irow,ibatch,iens) = x/2*(1+std::erf(x/std::sqrt(2)));
       }
     }
-
-
-    void print_verbose() const { }
-
-
-    int get_num_trainable_parameters() const { return 0; }
-
-
-    int get_array_representation_size() const { return 1; }
 
 
     doubleHost1d to_array() const {

@@ -17,7 +17,7 @@ int main( int argc , char **argv ) {
 
     // Create an inference model to perform batched forward predictions
     auto inference = ponni::create_inference_model( matvec_1 , bias_1 , relu_1 , matvec_2 , bias_2 );
-    inference.print_verbose();
+    inference.print();
 
     // Load one test sample to ensure we're getting the same outputs
     yakl::Array<float,2,yakl::memHost,yakl::styleC> inputs("inputs",12,1);

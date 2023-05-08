@@ -8,6 +8,7 @@ namespace ponni {
   struct Selu {
     typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
     typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
+    typedef typename yakl::Array<real  ,3,yakl::memDevice> real3d;
 
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?
@@ -43,31 +44,21 @@ namespace ponni {
     char const * get_label         () const { return "Selu"; }
     YAKL_INLINE static int get_num_inputs (Params const &params_in) { return params_in.num_inputs ; }
     YAKL_INLINE static int get_num_outputs(Params const &params_in) { return params_in.num_outputs; }
+    int get_num_trainable_parameters() const { return params.trainable ? 3 : 0; }
+    int get_array_representation_size() const { return 5; }
 
 
-    YAKL_INLINE static void compute_all_outputs(real2d const &input, real2d const &output, int ibatch, Params const &params_in) {
+    YAKL_INLINE static void compute_all_outputs(real3d const &input, real3d const &output,
+                                                int ibatch, int iens, Params const &params_in) {
       for (int irow = 0; irow < params_in.num_outputs; irow++) {
         real alpha     = params_in.alpha;
         real lambda    = params_in.lambda;
         real threshold = params_in.threshold;
-        real x         = input(irow,ibatch);
-        if (x < threshold) { output(irow,ibatch) = lambda * alpha * ( std::exp(x) - 1 ); }
-        else               { output(irow,ibatch) = lambda * x; }
+        real x         = input(irow,ibatch,iens);
+        if (x < threshold) { output(irow,ibatch,iens) = lambda * alpha * ( std::exp(x) - 1 ); }
+        else               { output(irow,ibatch,iens) = lambda * x; }
       }
     }
-
-
-    void print_verbose() const {
-      std::cout << "    alpha:     " << params.alpha     << "\n";
-      std::cout << "    lambda:    " << params.lambda    << "\n";
-      std::cout << "    threshold: " << params.threshold << "\n";
-    }
-
-
-    int get_num_trainable_parameters() const { return params.trainable ? 3 : 0; }
-
-
-    int get_array_representation_size() const { return 5; }
 
 
     doubleHost1d to_array() const {

@@ -14,6 +14,7 @@ namespace ponni {
   struct Inference {
     typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
     typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
+    typedef typename yakl::Array<real  ,3,yakl::memDevice> real3d;
     // ***********************************************************************
     // ** FUNCTIONS AND CONSTEXPR VARIABLES NEEDED TO DECLARE CLASS MEMBERS **
     // ***********************************************************************
@@ -47,7 +48,7 @@ namespace ponni {
     // "size" might seem redundant, but the size of the state is large enough to hold the *largest* state and
     //    may not be indicative of the actual size. Think of this as a partially filled array pattern
     struct SavedState {
-      real2d state;
+      real3d state;
       int    size;
     };
 
@@ -62,8 +63,8 @@ namespace ponni {
     struct Params {
       SAVED_TYPE  saved_states;  // For holding states saved for later binary operations (ResNet, DenseNet, etc.)
       TUPLE       layers;        // The operations performed successively on the input
-      real2d      tmp1;          // For alternating storage of temporary states while traversing the model
-      real2d      tmp2;          // For alternating storage of temporary states while traversing the model
+      real3d      tmp1;          // For alternating storage of temporary states while traversing the model
+      real3d      tmp2;          // For alternating storage of temporary states while traversing the model
     };
 
     Params params;
@@ -76,20 +77,18 @@ namespace ponni {
     ~Inference() = default;
 
     // This is not intended to be called directly by the user per se. It's easier to call ponni::create_inference_model
-    Inference(TUPLE const &layers, int num_batches = 1) {
+    Inference(TUPLE const &layers, int batch_size = 1, int num_ensembles = 1) {
       this->params.layers = layers;
-      allocate_saved_states(num_batches);
-      params.tmp1 = real2d("ponni_tmp1",get_temporary_size(),num_batches);
-      params.tmp2 = real2d("ponni_tmp2",get_temporary_size(),num_batches);
+      init(batch_size,num_ensembles);
     }
 
 
 
     // Set the batch size to allocate arrays to hold saved and temporary states. Mainly used for in-kernel inferencing
-    void set_batch_size(int num_batches) {
-      allocate_saved_states(num_batches);
-      params.tmp1 = real2d("ponni_tmp1",get_temporary_size(),num_batches);
-      params.tmp2 = real2d("ponni_tmp2",get_temporary_size(),num_batches);
+    void init(int batch_size, int num_ensembles) {
+      allocate_saved_states(batch_size,num_ensembles);
+      params.tmp1 = real3d("ponni_tmp1",get_temporary_size(),batch_size,num_ensembles);
+      params.tmp2 = real3d("ponni_tmp2",get_temporary_size(),batch_size,num_ensembles);
     }
 
 
@@ -121,16 +120,17 @@ namespace ponni {
     // Allocate all saved states at their appropriate sizes
     // This is called by the model traversal, not by the user directly
     template <int I=0>
-    void allocate_saved_states(int num_batches) const {
+    void allocate_saved_states(int batch_size, int num_ensembles) const {
       using LAYER_TYPE = typename std::tuple_element<I,TUPLE>::type;
       auto &layer = std::get<I>(params.layers);
       if constexpr (I < num_layers) {
         if constexpr (LAYER_TYPE::save) {
           int constexpr index = LAYER_TYPE::index;
-          params.saved_states(index).state = real2d("saved_state",get_saved_state_size<index>(params.layers),num_batches);
+          params.saved_states(index).state = real3d("saved_state",get_saved_state_size<index>(params.layers),
+                                                                  batch_size,num_ensembles);
         }
       }
-      if constexpr (I < num_layers-1) allocate_saved_states<I+1>( num_batches );
+      if constexpr (I < num_layers-1) allocate_saved_states<I+1>( batch_size , num_ensembles );
     }
 
 
@@ -152,40 +152,50 @@ namespace ponni {
 
 
 
+    real2d forward_batch_parallel( real2d const &input ) {
+      auto output = forward_batch_parallel(input.reshape(input.extent(0),input.extent(1),1));
+      return output.reshape(output.extent(0),output.extent(1));
+    }
+
+
+
     // Perform a forward inference pass through this model parallelizing only the batch dimension
-    real2d forward_batch_parallel( real2d const &input ) const {
+    real3d forward_batch_parallel( real3d const &input ) {
+      using yakl::c::parallel_for;
+      using yakl::c::SimpleBounds;
       auto layers       = this->params.layers      ;
       auto saved_states = this->params.saved_states;
       auto tmp1         = this->params.tmp1        ;
       auto tmp2         = this->params.tmp2        ;
       // Get the number of inputs, outputs, and batch size
-      auto &layer0     = std::get<0>(layers);
-      auto &layer_last = std::get<num_layers-1>(layers);
-      int num_inputs  = layer0    .get_num_inputs (layer0    .params);
-      int num_outputs = layer_last.get_num_outputs(layer_last.params);
-      int num_batches = input.extent(1);
+      auto &layer0      = std::get<0>(layers);
+      auto &layer_last  = std::get<num_layers-1>(layers);
+      int num_inputs    = layer0    .get_num_inputs (layer0    .params);
+      int num_outputs   = layer_last.get_num_outputs(layer_last.params);
+      int batch_size    = input.extent(1);
+      int num_ensembles = input.extent(2);
       // Allocate the saved states (overrides default allocation for one batch in constructor)
-      allocate_saved_states( num_batches );
+      init( batch_size , num_ensembles );
       // Ensure input dimension is correct
       if (input.extent(0) != layer0.get_num_inputs(layer0.params)) {
         yakl::yakl_throw("Error: Provided # inputs differs from model's # inputs");
       }
       // Allocate the output array
-      real2d output("output",num_outputs,num_batches);
+      real3d output("output",num_outputs,batch_size,num_ensembles);
       if constexpr (num_layers == 1) {  // Trivial case for one layer
         // GPU kernel threading over batches
-        yakl::c::parallel_for( YAKL_AUTO_LABEL() , num_batches , YAKL_LAMBDA (int ibatch) {
-          layer0.compute_all_outputs(input, output, ibatch, layer0.params);
+        parallel_for( YAKL_AUTO_LABEL() , SimpleBounds<2>(batch_size,num_ensembles) ,
+                                          YAKL_LAMBDA (int ibatch, int iens) {
+          layer0.compute_all_outputs(input, output, ibatch, iens, layer0.params);
         });
       } else {
         // We'll need to store the temporary states in alternating arrays
         // This overrides the default allocate of batch size of one
         int temp_size = get_temporary_size();
-        tmp1 = real2d("tmp1",temp_size,num_batches);
-        tmp2 = real2d("tmp2",temp_size,num_batches);
         // GPU kernel threading over batch size that traverses the model's layers
-        yakl::c::parallel_for( YAKL_AUTO_LABEL() , num_batches , YAKL_LAMBDA (int ibatch) {
-          traverse_layers(layers, saved_states, input, output, tmp1, tmp2, ibatch);
+        parallel_for( YAKL_AUTO_LABEL() , SimpleBounds<2>(batch_size,num_ensembles) ,
+                                          YAKL_LAMBDA (int ibatch, int iens) {
+          traverse_layers(layers, saved_states, input, output, tmp1, tmp2, ibatch, iens);
         });
       }
       return output;
@@ -194,8 +204,8 @@ namespace ponni {
 
 
     // Perform a forward inference pass through this model parallelizing only the batch dimension
-    YAKL_INLINE static void forward_in_kernel( real2d const &input , real2d const &output , Params const &params_in ,
-                                               int ibatch ) {
+    YAKL_INLINE static void forward_in_kernel( real3d const &input , real3d const &output , Params const &params_in ,
+                                               int ibatch , int iens ) {
       auto &layer0 = std::get<0>(params_in.layers);
       #ifdef PONNI_DEBUG
         if (input.extent(0) != layer0.get_num_inputs(layer0.params)) {
@@ -203,9 +213,9 @@ namespace ponni {
         }
       #endif
       if constexpr (num_layers == 1) {
-        layer0.compute_all_outputs(input,output,ibatch,layer0.params);
+        layer0.compute_all_outputs(input,output,ibatch,iens,layer0.params);
       } else {
-        traverse_layers(params_in.layers,params_in.saved_states,input,output,params_in.tmp1,params_in.tmp2,ibatch);
+        traverse_layers(params_in.layers,params_in.saved_states,input,output,params_in.tmp1,params_in.tmp2,ibatch,iens);
       }
     } // forward_in_kernel
 
@@ -215,18 +225,19 @@ namespace ponni {
     template <int I=0>
     YAKL_INLINE void static traverse_layers(TUPLE      const & layers      ,
                                             SAVED_TYPE const & saved_states,
-                                            real2d     const & input_glob  ,
-                                            real2d     const & output_glob ,
-                                            real2d     const & tmp1        ,
-                                            real2d     const & tmp2        ,
+                                            real3d     const & input_glob  ,
+                                            real3d     const & output_glob ,
+                                            real3d     const & tmp1        ,
+                                            real3d     const & tmp2        ,
                                             int                ibatch      ,
+                                            int                iens        ,
                                             bool               output_in_tmp1 = false) {
       using LAYER_TYPE = typename std::tuple_element<I,TUPLE>::type;
       auto &layer       = std::get<I>(layers);
       auto  num_outputs = layer.get_num_outputs(layer.params);
       // These are placeholder arrays to point to the appropriate tempoarary array, input, or output
-      real2d in;
-      real2d out;
+      real3d in;
+      real3d out;
       if constexpr (I == 0) {
         // First layer has global input as the input array and tmp1 as the output
         in = input_glob;
@@ -256,14 +267,14 @@ namespace ponni {
         // If this is a binary operator (meaning an operation of the current state against a saved state), then get the
         //    correct saved state and perform the requested operation (usually addition or concatenation)
         auto &saved = saved_states(LAYER_TYPE::index).state;
-        layer.compute_all_outputs(in,saved,out,ibatch,layer.params);
+        layer.compute_all_outputs(in,saved,out,ibatch,iens,layer.params);
       } else {
         // Otherwise, apply this layer to the current state to produce the next state
-        layer.compute_all_outputs(in,out,ibatch,layer.params);
+        layer.compute_all_outputs(in,out,ibatch,iens,layer.params);
       }
       // If this isn't the last layer, then call the next layer recursively with template recursion
       if constexpr (I < num_layers-1) {
-        traverse_layers<I+1>(layers,saved_states,input_glob,output_glob,tmp1,tmp2,ibatch,output_in_tmp1);
+        traverse_layers<I+1>(layers,saved_states,input_glob,output_glob,tmp1,tmp2,ibatch,iens,output_in_tmp1);
       }
     } // travers_layers
 
@@ -281,22 +292,6 @@ namespace ponni {
                   << std::get<I>(params.layers).get_num_outputs(std::get<I>(params.layers).params) << " outputs, and "
                   << std::get<I>(params.layers).get_num_trainable_parameters() << " trainable parameters\n";
         print<I+1>();
-      }
-    }
-
-
-
-    // Print detailed information about this model
-    template <int I=0>
-    void print_verbose() const {
-      if constexpr (I==0) std::cout << "Inference model has " << num_layers << " layers:\n";
-      if constexpr (I < num_layers) {
-        std::cout << "  " << std::right << I+1 << ": "
-                  << std::left << std::get<I>(params.layers).get_label() << " with "
-                  << std::get<I>(params.layers).get_num_inputs (std::get<I>(params.layers).params) << " inputs and "
-                  << std::get<I>(params.layers).get_num_outputs(std::get<I>(params.layers).params) << " outputs.\n";
-        std::get<I>(params.layers).print_verbose();
-        print_verbose<I+1>();
       }
     }
 

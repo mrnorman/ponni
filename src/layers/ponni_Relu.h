@@ -8,6 +8,7 @@ namespace ponni {
   struct Relu {
     typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
     typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
+    typedef typename yakl::Array<real  ,3,yakl::memDevice> real3d;
 
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?
@@ -46,37 +47,28 @@ namespace ponni {
     }
 
 
-    char const * get_label         () const { return "Relu"; }
+    char const * get_label() const { return "Relu"; }
     YAKL_INLINE static int get_num_inputs (Params const &params_in) { return params_in.num_inputs ; }
     YAKL_INLINE static int get_num_outputs(Params const &params_in) { return params_in.num_outputs; }
+    int get_num_trainable_parameters() const { return params.trainable ? 3 : 0; }
+    int get_array_representation_size() const { return 5; }
 
 
-    YAKL_INLINE static void compute_all_outputs(real2d const &input, real2d const &output, int ibatch, Params const &params_in) {
-      for (int irow = 0; irow < params_in.num_outputs; irow++) {
+    YAKL_INLINE static void compute_all_outputs(real3d const &input, real3d const &output,
+                                                int ibatch, int iens, Params const &params_in) {
+      int num_outputs = get_num_outputs(params_in);
+      for (int irow = 0; irow < num_outputs; irow++) {
         real max_value      = params_in.max_value     ;
         real negative_slope = params_in.negative_slope;
         real threshold      = params_in.threshold     ;
-        real x              = input(irow,ibatch);
+        real x              = input(irow,ibatch,iens);
         real f_x;
         if      (x >= max_value) { f_x = max_value;                        }
         else if (x >= threshold) { f_x = x;                                }
         else                     { f_x = negative_slope * (x - threshold); }
-        output(irow,ibatch) = f_x;
+        output(irow,ibatch,iens) = f_x;
       }
     }
-
-
-    void print_verbose() const {
-      std::cout << "    max_value:      " << params.max_value      << "\n";
-      std::cout << "    negative_slope: " << params.negative_slope << "\n";
-      std::cout << "    threshold:      " << params.threshold      << "\n";
-    }
-
-
-    int get_num_trainable_parameters() const { return params.trainable ? 3 : 0; }
-
-
-    int get_array_representation_size() const { return 5; }
 
 
     doubleHost1d to_array() const {
