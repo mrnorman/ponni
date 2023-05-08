@@ -8,6 +8,7 @@ namespace ponni {
   struct Matvec {
     typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
     typedef typename yakl::Array<real  ,1,yakl::memHost  > realHost1d;
+    typedef typename yakl::Array<real  ,1,yakl::memDevice> real1d;
     typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
     typedef typename yakl::Array<real  ,3,yakl::memDevice> real3d;
     
@@ -18,25 +19,31 @@ namespace ponni {
     struct Params {
       real3d weights;
       bool   trainable;
+      real   lb;
+      real   ub;
     };
 
     Params params;
 
-    Matvec()  = default;
+    Matvec () = default;
     ~Matvec() = default;
-    Matvec( real2d const &weights , bool trainable = true ) { init( weights , trainable ); }
-    Matvec( real3d const &weights , bool trainable = true ) { init( weights , trainable ); }
+    Matvec( real2d const &weights , bool trainable=true , real lb=-2, real ub=2 ) { init(weights,trainable,lb,ub); }
+    Matvec( real3d const &weights , bool trainable=true , real lb=-2, real ub=2 ) { init(weights,trainable,lb,ub); }
 
 
-    void init( real2d const &weights , bool trainable = true ) {
+    void init( real2d const &weights , bool trainable=true , real lb=-2, real ub=2 ) {
       if ( ! weights.initialized() ) yakl::yakl_throw("ERROR: Matvec weights matrix not initialized");
       params.weights   = weights.reshape(weights.extent(0),weights.extent(1),1);
       params.trainable = trainable;
+      params.lb        = lb;
+      params.ub        = ub;
     }
-    void init( real3d const &weights , bool trainable = true ) {
+    void init( real3d const &weights , bool trainable=true , real lb=-2, real ub=2 ) {
       if ( ! weights.initialized() ) yakl::yakl_throw("ERROR: Matvec weights matrix not initialized");
       params.weights   = weights;
       params.trainable = trainable;
+      params.lb        = lb;
+      params.ub        = ub;
     }
 
 
@@ -44,19 +51,22 @@ namespace ponni {
     YAKL_INLINE static int get_num_inputs   (Params const &params_in) { return params_in.weights.extent(0); }
     YAKL_INLINE static int get_num_outputs  (Params const &params_in) { return params_in.weights.extent(1); }
     YAKL_INLINE static int get_num_ensembles(Params const &params_in) { return params_in.weights.extent(2); }
-    int get_num_inputs   () const { return params.weights.extent(0); }
-    int get_num_outputs  () const { return params.weights.extent(1); }
-    int get_num_ensembles() const { return params.weights.extent(2); }
-    int get_num_trainable_parameters() const { return params.trainable ? params.weights.extent(0)*params.weights.extent(1) : 0; }
-    int get_array_representation_size() const { return params.weights.size() + 4; }
+    real1d get_lbounds() const { real1d ret("Matvec_lb",params.weights.size());  ret = params.lb;  return ret; }
+    real1d get_ubounds() const { real1d ret("Matvec_ub",params.weights.size());  ret = params.ub;  return ret; }
+    int    get_num_inputs               () const { return params.weights.extent(0); }
+    int    get_num_outputs              () const { return params.weights.extent(1); }
+    int    get_num_ensembles            () const { return params.weights.extent(2); }
+    int    get_num_trainable_parameters () const { return params.trainable ? params.weights.extent(0)*
+                                                                             params.weights.extent(1)  : 0; }
+    int    get_array_representation_size() const { return params.weights.size() + 6; }
 
 
     YAKL_INLINE static void compute_all_outputs(real3d const &input, real3d const &output,
                                                 int ibatch, int iens, Params const &params_in) {
       int num_inputs  = get_num_inputs (params_in);
       int num_outputs = get_num_outputs(params_in);
+      auto &weights = params_in.weights;
       for (int irow = 0; irow < num_outputs; irow++) {
-        auto &weights = params_in.weights;
         real tmp = 0;
         for (int k=0; k < num_inputs; k++) { tmp += weights(k,irow,iens) * input(k,ibatch,iens); }
         output(irow,ibatch,iens) = tmp;
@@ -70,8 +80,10 @@ namespace ponni {
       data(1) = get_num_outputs  ();
       data(2) = get_num_ensembles();
       data(3) = params.trainable ? 1 : 0;
+      data(4) = params.lb;
+      data(5) = params.ub;
       auto weights = params.weights.createHostCopy().collapse();
-      for (int i=0; i < weights.size(); i++) { data(4+i) = weights(i); }
+      for (int i=0; i < weights.size(); i++) { data(6+i) = weights(i); }
       return data;
     }
 
@@ -81,9 +93,11 @@ namespace ponni {
       int  num_outputs   = data(1);
       int  num_ensembles = data(2);
       bool trainable     = data(3) == 1;
+      real lb            = data(4);
+      real ub            = data(5);
       realHost1d weights("Matvec_weights",num_inputs*num_outputs*num_ensembles);
-      for (int i=0; i < weights.size(); i++) { weights(i) = data(4+i); }
-      init( weights.createDeviceCopy().reshape(num_inputs,num_outputs,num_ensembles) , trainable );
+      for (int i=0; i < weights.size(); i++) { weights(i) = data(6+i); }
+      init( weights.createDeviceCopy().reshape(num_inputs,num_outputs,num_ensembles) , trainable , lb , ub );
     }
 
 

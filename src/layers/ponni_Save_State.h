@@ -7,6 +7,7 @@ namespace ponni {
   template <int N, class real = float>
   struct Save_State {
     typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
+    typedef typename yakl::Array<real  ,1,yakl::memDevice> real1d;
     typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
     typedef typename yakl::Array<real  ,3,yakl::memDevice> real3d;
     
@@ -22,10 +23,9 @@ namespace ponni {
 
     Params params;
 
-    Save_State() {}
-    Save_State( int num_inputs ) {
-      init( num_inputs );
-    }
+    Save_State () = default;
+    ~Save_State() = default;
+    Save_State( int num_inputs ) { init( num_inputs ); }
 
 
     void init( int num_inputs ) {
@@ -38,11 +38,13 @@ namespace ponni {
     YAKL_INLINE static int get_num_inputs   (Params const &params_in) { return params_in.num_inputs ; }
     YAKL_INLINE static int get_num_outputs  (Params const &params_in) { return params_in.num_outputs; }
     YAKL_INLINE static int get_num_ensembles(Params const &params_in) { return 1; }
-    int get_num_inputs   () const { return params.num_inputs ; }
-    int get_num_outputs  () const { return params.num_outputs; }
-    int get_num_ensembles() const { return 1; }
-    int get_num_trainable_parameters() const { return 0; }
-    int get_array_representation_size() const { return 2; }
+    real1d get_lbounds                  () const { return real1d(); }
+    real1d get_ubounds                  () const { return real1d(); }
+    int    get_num_inputs               () const { return params.num_inputs ; }
+    int    get_num_outputs              () const { return params.num_outputs; }
+    int    get_num_ensembles            () const { return 1; }
+    int    get_num_trainable_parameters () const { return 0; }
+    int    get_array_representation_size() const { return 2; }
 
 
     YAKL_INLINE static void compute_all_outputs(real3d const &input, real3d const &output,

@@ -7,6 +7,7 @@ namespace ponni {
   template <int N, class real = float>
   struct Binop_Concatenate {
     typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
+    typedef typename yakl::Array<real  ,1,yakl::memDevice> real1d;
     typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
     typedef typename yakl::Array<real  ,3,yakl::memDevice> real3d;
     
@@ -23,10 +24,9 @@ namespace ponni {
 
     Params params;
 
-    Binop_Concatenate() {}
-    Binop_Concatenate( int num_inputs , int num_outputs , bool after=true ) {
-      init( num_inputs , num_outputs , after);
-    }
+    Binop_Concatenate () = default;
+    ~Binop_Concatenate() = default;
+    Binop_Concatenate( int num_inputs , int num_outputs , bool after=true ) { init( num_inputs , num_outputs , after); }
 
 
     void init( int num_inputs , int num_outputs , bool after=true ) {
@@ -39,21 +39,25 @@ namespace ponni {
     YAKL_INLINE static int get_num_inputs (Params const &params_in) { return params_in.num_inputs ; }
     YAKL_INLINE static int get_num_outputs(Params const &params_in) { return params_in.num_outputs; }
     YAKL_INLINE static int get_num_ensembles(Params const &params_in) { return 1; }
-    int get_num_inputs   () const { return params.num_inputs ; }
-    int get_num_outputs  () const { return params.num_outputs; }
-    int get_num_ensembles() const { return 1; }
-    int get_num_trainable_parameters() const { return 0; }
-    int get_array_representation_size() const { return 4; }
+    real1d get_lbounds                  () const { return real1d(); }
+    real1d get_ubounds                  () const { return real1d(); }
+    int    get_num_inputs               () const { return params.num_inputs ; }
+    int    get_num_outputs              () const { return params.num_outputs; }
+    int    get_num_ensembles            () const { return 1; }
+    int    get_num_trainable_parameters () const { return 0; }
+    int    get_array_representation_size() const { return 4; }
 
 
     YAKL_INLINE static void compute_all_outputs(real3d const &input1, real3d const &input2, real3d const &output,
                                                 int ibatch, int iens, Params const &params_in) {
-      for (int irow = 0; irow < params_in.num_outputs; irow++) {
-        if (params_in.after) {
-          int num_inputs_1 = input1.extent(0);
+      if (params_in.after) {
+        int num_inputs_1 = input1.extent(0);
+        for (int irow = 0; irow < params_in.num_outputs; irow++) {
           output(irow,ibatch,iens) = irow < num_inputs_1 ? input1(irow,ibatch,iens) : input2(irow - num_inputs_1,ibatch,iens);
-        } else {
-          int num_inputs_2 = input2.extent(0);
+        }
+      } else {
+        int num_inputs_2 = input2.extent(0);
+        for (int irow = 0; irow < params_in.num_outputs; irow++) {
           output(irow,ibatch,iens) = irow < num_inputs_2 ? input2(irow,ibatch,iens) : input1(irow - num_inputs_2,ibatch,iens);
         }
       }
