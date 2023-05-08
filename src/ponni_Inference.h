@@ -300,34 +300,21 @@ namespace ponni {
     // Get the total number of double precision elements needed to store this model in a flattened array representation
     template <int I=0>
     int get_array_representation_size() const {
-      if constexpr (I < num_layers-1) {
-        return std::get<I>(params.layers).get_array_representation_size() + get_array_representation_size<I+1>();
-      } else {
-        return std::get<I>(params.layers).get_array_representation_size();
-      }
+      auto sz = std::get<I>(params.layers).get_array_representation_size();
+      if constexpr (I < num_layers-1) return sz + get_array_representation_size<I+1>();
+      else                            return sz;
     }
 
 
 
     // Represent this model as a flattened Host-memory double precision array
     template <int I=0>
-    doubleHost1d represent_as_array( doubleHost1d const &array = doubleHost1d() , int offset = 0 ) const {
-      if constexpr (I == 0) {
-        doubleHost1d array("model_as_array",get_array_representation_size());
-        auto tmp = std::get<I>(params.layers).to_array();
-        for (int i=0; i < tmp.size(); i++) { array(offset+i) = tmp(i); }
-        offset += tmp.size();
-        return represent_as_array<I+1>( array , offset );
-      } else if constexpr (I < num_layers-1) {
-        auto tmp = std::get<I>(params.layers).to_array();
-        for (int i=0; i < tmp.size(); i++) { array(offset+i) = tmp(i); }
-        offset += tmp.size();
-        return represent_as_array<I+1>( array , offset );
-      } else {
-        auto tmp = std::get<I>(params.layers).to_array();
-        for (int i=0; i < tmp.size(); i++) { array(offset+i) = tmp(i); }
-        return array;
-      }
+    doubleHost1d represent_as_array( doubleHost1d array = doubleHost1d() , int offset = 0 ) const {
+      if constexpr (I == 0) array = doubleHost1d("model_as_array",get_array_representation_size());
+      auto tmp = std::get<I>(params.layers).to_array();
+      for (int i=0; i < tmp.size(); i++) { array(offset+i) = tmp(i); }
+      if constexpr (I < num_layers-1) return represent_as_array<I+1>( array , offset + tmp.size() );
+      else                            return array;
     }
 
 
@@ -335,16 +322,11 @@ namespace ponni {
     // Set the layer parameters from a flattened array representation
     template <int I=0>
     void set_layers_from_array_representation( doubleHost1d const &array ) {
-      auto &layer = std::get<I>(params.layers);
-      layer.from_array(array);
-      if (layer.get_array_representation_size() > array.size()) {
-        yakl::yakl_throw("ERROR: Incompatible array representation");
-      }
-      if constexpr (I < num_layers-1) {
-        int offset = layer.get_array_representation_size();
-        doubleHost1d tmp( array.label() , array.data()+offset , array.size()-offset );
-        set_layers_from_array_representation<I+1>(tmp);
-      }
+      std::get<I>(params.layers).from_array(array);
+      int offset = std::get<I>(params.layers).get_array_representation_size();
+      if (offset > array.size()) yakl::yakl_throw("ERROR: Incompatible array representation");
+      doubleHost1d tmp( array.label() , array.data()+offset , array.size()-offset );
+      if constexpr (I < num_layers-1) set_layers_from_array_representation<I+1>(tmp);
     }
 
 

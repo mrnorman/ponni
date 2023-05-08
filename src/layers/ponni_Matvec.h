@@ -41,8 +41,12 @@ namespace ponni {
 
 
     char const * get_label() const { return "Matvec"; }
-    YAKL_INLINE static int get_num_inputs (Params const &params_in) { return params_in.weights.extent(0); }
-    YAKL_INLINE static int get_num_outputs(Params const &params_in) { return params_in.weights.extent(1); }
+    YAKL_INLINE static int get_num_inputs   (Params const &params_in) { return params_in.weights.extent(0); }
+    YAKL_INLINE static int get_num_outputs  (Params const &params_in) { return params_in.weights.extent(1); }
+    YAKL_INLINE static int get_num_ensembles(Params const &params_in) { return params_in.weights.extent(2); }
+    int get_num_inputs   () const { return params.weights.extent(0); }
+    int get_num_outputs  () const { return params.weights.extent(1); }
+    int get_num_ensembles() const { return params.weights.extent(2); }
     int get_num_trainable_parameters() const { return params.trainable ? params.weights.extent(0)*params.weights.extent(1) : 0; }
     int get_array_representation_size() const { return params.weights.size() + 4; }
 
@@ -61,24 +65,25 @@ namespace ponni {
 
 
     doubleHost1d to_array() const {
-      auto weights_host = params.weights.createHostCopy().collapse();
       doubleHost1d data("Matvec_weights",get_array_representation_size());
-      data(0) = params.weights.extent(0);
-      data(1) = params.weights.extent(1);
-      data(2) = params.weights.extent(2);
+      data(0) = get_num_inputs   ();
+      data(1) = get_num_outputs  ();
+      data(2) = get_num_ensembles();
       data(3) = params.trainable ? 1 : 0;
-      for (int i=0; i < weights_host.size(); i++) { data(4+i) = weights_host(i); }
+      auto weights = params.weights.createHostCopy().collapse();
+      for (int i=0; i < weights.size(); i++) { data(4+i) = weights(i); }
       return data;
     }
 
 
     void from_array(doubleHost1d const & data) {
-      realHost1d weights_host("Matvec_weights",data(0)*data(1)*data(2));
-      for (int i=0; i < weights_host.size(); i++) { weights_host(i) = data(4+i); }
-      auto weights = weights_host.createDeviceCopy().reshape(static_cast<int>(data(0)),
-                                                             static_cast<int>(data(1)),
-                                                             static_cast<int>(data(2)));
-      init(weights,data(3) == 1);
+      int  num_inputs    = data(0);
+      int  num_outputs   = data(1);
+      int  num_ensembles = data(2);
+      bool trainable     = data(3) == 1;
+      realHost1d weights("Matvec_weights",num_inputs*num_outputs*num_ensembles);
+      for (int i=0; i < weights.size(); i++) { weights(i) = data(4+i); }
+      init( weights.createDeviceCopy().reshape(num_inputs,num_outputs,num_ensembles) , trainable );
     }
 
 

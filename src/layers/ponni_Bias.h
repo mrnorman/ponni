@@ -40,9 +40,13 @@ namespace ponni {
     }
 
 
-    char const * get_label         () const { return "Bias"; }
-    YAKL_INLINE static int get_num_inputs (Params const &params_in) { return params_in.weights.extent(0); }
-    YAKL_INLINE static int get_num_outputs(Params const &params_in) { return params_in.weights.extent(0); }
+    char const * get_label() const { return "Bias"; }
+    YAKL_INLINE static int get_num_inputs   (Params const &params_in) { return params_in.weights.extent(0); }
+    YAKL_INLINE static int get_num_outputs  (Params const &params_in) { return params_in.weights.extent(0); }
+    YAKL_INLINE static int get_num_ensembles(Params const &params_in) { return params_in.weights.extent(1); }
+    int get_num_inputs   () const { return params.weights.extent(0); }
+    int get_num_outputs  () const { return params.weights.extent(0); }
+    int get_num_ensembles() const { return params.weights.extent(1); }
     int get_num_trainable_parameters() const { return params.trainable ? params.weights.extent(0) : 0; }
     int get_array_representation_size() const { return params.weights.size() + 3; }
 
@@ -57,21 +61,23 @@ namespace ponni {
 
 
     doubleHost1d to_array() const {
-      auto weights_host = params.weights.createHostCopy().collapse();
       doubleHost1d data("Bias_weights",get_array_representation_size());
-      data(0) = params.weights.extent(0);
-      data(1) = params.weights.extent(1);
+      data(0) = get_num_inputs   ();
+      data(1) = get_num_ensembles();
       data(2) = params.trainable ? 1 : 0;
-      for (int i=0; i < weights_host.size(); i++) { data(3+i) = weights_host(i); }
+      auto weights = params.weights.createHostCopy().collapse();
+      for (int i=0; i < weights.size(); i++) { data(3+i) = weights(i); }
       return data;
     }
 
 
     void from_array(doubleHost1d const & data) {
-      realHost1d weights_host("Bias_weights",data(0)*data(1));
-      for (int i=0; i < weights_host.size(); i++) { weights_host(i) = data(3+i); }
-      auto weights = weights_host.createDeviceCopy().reshape(data(0),data(1));
-      init(weights,data(2) == 1);
+      int  num_inputs    = data(0);
+      int  num_ensembles = data(1);
+      bool trainable     = data(2) == 1;
+      realHost1d weights("Bias_weights",num_inputs*num_ensembles);
+      for (int i=0; i < num_inputs*num_ensembles; i++) { weights(i) = data(3+i); }
+      init( weights.createDeviceCopy().reshape(num_inputs,num_ensembles) , trainable );
     }
 
 

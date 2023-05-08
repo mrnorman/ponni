@@ -7,6 +7,8 @@ namespace ponni {
   template <class real = float>
   struct Relu {
     typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
+    typedef typename yakl::Array<real  ,1,yakl::memHost  > realHost1d;
+    typedef typename yakl::Array<real  ,1,yakl::memDevice> real1d;
     typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
     typedef typename yakl::Array<real  ,3,yakl::memDevice> real3d;
 
@@ -15,12 +17,11 @@ namespace ponni {
     bool static constexpr save            = false;
 
     struct Params {
-      int  num_inputs;
-      int  num_outputs;
-      real max_value;
-      real negative_slope;
-      real threshold;
-      bool trainable;
+      int    num_inputs;
+      real1d negative_slope;
+      real1d threshold;
+      real1d max_value;
+      bool   trainable;
     };
 
     Params params;
@@ -32,6 +33,9 @@ namespace ponni {
                            bool trainable = false                            ) {
       init( num_inputs , negative_slope , threshold , max_value , trainable );
     }
+    Relu( int num_inputs , real1d negative_slope , real1d threshold ,  real1d max_value , bool trainable = false ) {
+      init( num_inputs , negative_slope , threshold , max_value , trainable );
+    }
 
 
     void init( int num_inputs , real negative_slope = 0                           ,
@@ -39,28 +43,41 @@ namespace ponni {
                                 real max_value = std::numeric_limits<real>::max() ,
                                 bool trainable = false                            ) {
       params.num_inputs     = num_inputs    ;
-      params.num_outputs    = num_inputs    ;
-      params.max_value      = max_value     ;
+      params.negative_slope = real1d("Relu_negative_slope",1);
+      params.threshold      = real1d("Relu_threshold"     ,1);
+      params.max_value      = real1d("Relu_max_value"     ,1);
       params.negative_slope = negative_slope;
       params.threshold      = threshold     ;
+      params.max_value      = max_value     ;
+      params.trainable      = trainable     ;
+    }
+    void init( int num_inputs , real1d negative_slope , real1d threshold ,  real1d max_value , bool trainable = false ) {
+      params.num_inputs     = num_inputs    ;
+      params.negative_slope = negative_slope;
+      params.threshold      = threshold     ;
+      params.max_value      = max_value     ;
       params.trainable      = trainable     ;
     }
 
 
     char const * get_label() const { return "Relu"; }
-    YAKL_INLINE static int get_num_inputs (Params const &params_in) { return params_in.num_inputs ; }
-    YAKL_INLINE static int get_num_outputs(Params const &params_in) { return params_in.num_outputs; }
+    YAKL_INLINE static int get_num_inputs   (Params const &params_in) { return params_in.num_inputs; }
+    YAKL_INLINE static int get_num_outputs  (Params const &params_in) { return params_in.num_inputs; }
+    YAKL_INLINE static int get_num_ensembles(Params const &params_in) { return params_in.negative_slope.extent(0); }
+    int get_num_inputs   () const { return params.num_inputs; }
+    int get_num_outputs  () const { return params.num_inputs; }
+    int get_num_ensembles() const { return params.negative_slope.extent(0); }
     int get_num_trainable_parameters() const { return params.trainable ? 3 : 0; }
-    int get_array_representation_size() const { return 5; }
+    int get_array_representation_size() const { return 3*get_num_ensembles()+3; }
 
 
     YAKL_INLINE static void compute_all_outputs(real3d const &input, real3d const &output,
                                                 int ibatch, int iens, Params const &params_in) {
-      int num_outputs = get_num_outputs(params_in);
+      int  num_outputs    = get_num_outputs(params_in);
+      real negative_slope = params_in.negative_slope(iens);
+      real threshold      = params_in.threshold     (iens);
+      real max_value      = params_in.max_value     (iens);
       for (int irow = 0; irow < num_outputs; irow++) {
-        real max_value      = params_in.max_value     ;
-        real negative_slope = params_in.negative_slope;
-        real threshold      = params_in.threshold     ;
         real x              = input(irow,ibatch,iens);
         real f_x;
         if      (x >= max_value) { f_x = max_value;                        }
@@ -72,18 +89,37 @@ namespace ponni {
 
 
     doubleHost1d to_array() const {
-      doubleHost1d data("Relu_params",5);
-      data(0) = params.num_inputs;
-      data(1) = params.negative_slope;
-      data(2) = params.threshold;
-      data(3) = params.max_value;
-      data(4) = params.trainable ? 1 : 0;
+      doubleHost1d data("Relu_params",get_array_representation_size());
+      int nens = get_num_ensembles();
+      data(0) = nens;
+      data(1) = get_num_inputs();
+      data(2) = params.trainable ? 1 : 0;
+      auto negative_slope = params.negative_slope.createHostCopy();
+      auto threshold      = params.threshold     .createHostCopy();
+      auto max_value      = params.max_value     .createHostCopy();
+      for (int i=0; i < nens; i++) {
+        data(3       +i) = params.negative_slope(i);
+        data(3+  nens+i) = params.threshold     (i);
+        data(3+2*nens+i) = params.max_value     (i);
+      }
       return data;
     }
 
 
     void from_array(doubleHost1d const &data) {
-      init( static_cast<int>(data(0)) , static_cast<real>(data(1)) , static_cast<real>(data(2)) , static_cast<real>(data(3)) , data(4) == 1 );
+      int  nens       = data(0);
+      int  num_inputs = data(1);
+      bool trainable  = data(2) == 1;
+      realHost1d negative_slope("Relu_negative_slope",nens);
+      realHost1d threshold     ("Relu_threshold     ",nens);
+      realHost1d max_value     ("Relu_max_value     ",nens);
+      for (int i=0; i < nens; i++) {
+        negative_slope(i) = data(3       +i);
+        threshold     (i) = data(3+  nens+i);
+        max_value     (i) = data(3+2*nens+i);
+      }
+      init( num_inputs , negative_slope.createDeviceCopy() , threshold.createDeviceCopy() ,
+            max_value.createDeviceCopy() , trainable );
     }
 
 

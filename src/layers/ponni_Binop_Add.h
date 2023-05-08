@@ -37,6 +37,10 @@ namespace ponni {
     char const * get_label() const { return "Binop_Add"; }
     YAKL_INLINE static int get_num_inputs (Params const &params_in) { return params_in.num_inputs ; }
     YAKL_INLINE static int get_num_outputs(Params const &params_in) { return params_in.num_outputs; }
+    YAKL_INLINE static int get_num_ensembles(Params const &params_in) { return 1; }
+    int get_num_inputs   () const { return params.num_inputs ; }
+    int get_num_outputs  () const { return params.num_outputs; }
+    int get_num_ensembles() const { return 1; }
     int get_num_trainable_parameters() const { return 0; }
     int get_array_representation_size() const { return 2; }
 
@@ -50,8 +54,8 @@ namespace ponni {
 
 
     doubleHost1d to_array() const {
-      doubleHost1d data("Binary_Add_params",2);
-      data(0) = params.num_inputs;
+      doubleHost1d data("Binary_Add_params",get_array_representation_size());
+      data(0) = get_num_inputs();
       data(1) = N;
       return data;
     }
