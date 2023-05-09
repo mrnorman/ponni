@@ -93,20 +93,18 @@ namespace ponni {
     YAKL_INLINE static int get_num_outputs  (Params const &params_in) { return params_in.num_inputs; }
     YAKL_INLINE static int get_num_ensembles(Params const &params_in) { return params_in.negative_slope.extent(0); }
     real1d get_lbounds() const {
-      int nens = get_num_ensembles();
-      real1d ret("Bias_lb",nens*3);
-      ret.subset_slowest_dimension(0*nens,1*nens-1) = params.lb_negative_slope;
-      ret.subset_slowest_dimension(1*nens,2*nens-1) = params.lb_threshold     ;
-      ret.subset_slowest_dimension(2*nens,3*nens-1) = params.lb_max_value     ;
-      return ret;
+      realHost1d lbounds("Bias_lb",get_num_trainable_parameters());
+      lbounds(0) = params.lb_negative_slope;
+      lbounds(1) = params.lb_threshold     ;
+      lbounds(2) = params.lb_max_value     ;
+      return lbounds.createDeviceCopy();
     }
     real1d get_ubounds() const {
-      int nens = get_num_ensembles();
-      real1d ret("Bias_ub",nens*3);
-      ret.subset_slowest_dimension(0*nens,1*nens-1) = params.ub_negative_slope;
-      ret.subset_slowest_dimension(1*nens,2*nens-1) = params.ub_threshold     ;
-      ret.subset_slowest_dimension(2*nens,3*nens-1) = params.ub_max_value     ;
-      return ret;
+      realHost1d ubounds("Bias_ub",get_num_trainable_parameters());
+      ubounds(0) = params.ub_negative_slope;
+      ubounds(1) = params.ub_threshold     ;
+      ubounds(2) = params.ub_max_value     ;
+      return ubounds.createDeviceCopy();
     }
     int get_num_inputs   () const { return params.num_inputs; }
     int get_num_outputs  () const { return params.num_inputs; }

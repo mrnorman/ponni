@@ -53,6 +53,35 @@ int main( int argc , char **argv ) {
 
     if (!pso.parameters_identical_across_tasks()) yakl::yakl_throw("ERROR: parameters are not the same");
   }
+  {
+    typedef float real;
+    typedef yakl::Array<real,1,yakl::memDevice> real1d;
+    typedef yakl::Array<real,2,yakl::memDevice> real2d;
+    typedef yakl::Array<real,3,yakl::memDevice> real3d;
+    int data_size = 1024*1024*4;
+    yakl::Array<real,1> inputs ("inputs" ,data_size);
+    yakl::Array<real,1> outputs("outputs",data_size);
+    yakl::c::parallel_for( YAKL_AUTO_LABEL() , data_size , YAKL_LAMBDA (int i) {
+      inputs (i) = static_cast<double>(i)/(data_size-1);
+      outputs(i) = tanh((inputs(i)-0.5)*10);
+    });
+    int batch_size = 1024*1024;
+    int num_ensembles = 4096;
+    int neurons = 16;
+    real1d dummy("dummy",num_ensembles);
+    auto model = ponni::create_inference_model( ponni::Matvec<real>( real3d("mat",1,neurons,num_ensembles) )       ,
+                                                ponni::Bias  <real>( real2d("mat"  ,neurons,num_ensembles) )       ,
+                                                ponni::Relu  <real>( neurons , dummy , dummy , dummy , true )      ,
+                                                ponni::Save_State<0,real>( neurons )                               ,
+                                                ponni::Matvec<real>( real3d("mat",neurons,neurons,num_ensembles) ) ,
+                                                ponni::Bias  <real>( real2d("mat"        ,neurons,num_ensembles) ) ,
+                                                ponni::Relu  <real>( neurons , dummy , dummy , dummy , true )      ,
+                                                ponni::Binop_Add <0,real>( neurons )                               ,
+                                                ponni::Matvec<real>( real3d("mat",neurons,1,num_ensembles) )       ,
+                                                ponni::Bias  <real>( real2d("mat"        ,1,num_ensembles) )       );
+    auto lbounds = model.get_lbounds();
+    auto ubounds = model.get_ubounds();
+  }
   yakl::finalize();
   MPI_Finalize();
 }

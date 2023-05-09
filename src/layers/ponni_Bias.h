@@ -51,8 +51,8 @@ namespace ponni {
     YAKL_INLINE static int get_num_inputs   (Params const &params_in) { return params_in.weights.extent(0); }
     YAKL_INLINE static int get_num_outputs  (Params const &params_in) { return params_in.weights.extent(0); }
     YAKL_INLINE static int get_num_ensembles(Params const &params_in) { return params_in.weights.extent(1); }
-    real1d get_lbounds() const { real1d ret("Bias_lb",params.weights.size());  ret = params.lb;  return ret; }
-    real1d get_ubounds() const { real1d ret("Bias_ub",params.weights.size());  ret = params.ub;  return ret; }
+    real1d get_lbounds() const { real1d ret("Bias_lb",get_num_trainable_parameters());  ret = params.lb;  return ret; }
+    real1d get_ubounds() const { real1d ret("Bias_ub",get_num_trainable_parameters());  ret = params.ub;  return ret; }
     int get_num_inputs   () const { return params.weights.extent(0); }
     int get_num_outputs  () const { return params.weights.extent(0); }
     int get_num_ensembles() const { return params.weights.extent(1); }
