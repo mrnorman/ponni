@@ -74,6 +74,12 @@ namespace ponni {
     }
 
 
+    void set_trainable_parameters(real2d const &in, bool fence = true) {
+      in.deep_copy_to(params.weights);
+      if (fence) yakl::fence();
+    }
+
+
     doubleHost1d to_array() const {
       doubleHost1d data("Matvec_weights",get_array_representation_size());
       data(0) = get_num_inputs   ();

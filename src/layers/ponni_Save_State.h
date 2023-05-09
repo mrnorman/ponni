@@ -55,6 +55,9 @@ namespace ponni {
     }
 
 
+    void set_trainable_parameters(real2d const &in, bool fence = true) { }
+
+
     doubleHost1d to_array() const {
       doubleHost1d data("Save_State_params",get_array_representation_size());
       data(0) = get_num_inputs();

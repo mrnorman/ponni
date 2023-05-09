@@ -132,6 +132,16 @@ namespace ponni {
     }
 
 
+    void set_trainable_parameters(real2d const &in, bool fence = true) {
+      int nens = get_num_ensembles();
+      real1d slc;
+      slc = in.slice<1>(0,yakl::COLON);  slc.deep_copy_to(params.negative_slope );
+      slc = in.slice<1>(1,yakl::COLON);  slc.deep_copy_to(params.threshold      );
+      slc = in.slice<1>(2,yakl::COLON);  slc.deep_copy_to(params.max_value      );
+      if (fence) yakl::fence();
+    }
+
+
     doubleHost1d to_array() const {
       doubleHost1d data("Relu_params",get_array_representation_size());
       int nens = get_num_ensembles();
@@ -148,9 +158,9 @@ namespace ponni {
       auto threshold      = params.threshold     .createHostCopy();
       auto max_value      = params.max_value     .createHostCopy();
       for (int i=0; i < nens; i++) {
-        data(9+0*nens+i) = params.negative_slope(i);
-        data(9+1*nens+i) = params.threshold     (i);
-        data(9+2*nens+i) = params.max_value     (i);
+        data(9+0*nens+i) = negative_slope(i);
+        data(9+1*nens+i) = threshold     (i);
+        data(9+2*nens+i) = max_value     (i);
       }
       return data;
     }
