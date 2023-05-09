@@ -301,7 +301,7 @@ namespace ponni {
 
     // Set the model layers' trainable parameters. Input dimensioned as (num_parameters,num_ensembles)
     template <int I=0>
-    void set_trainable_parameters(real2d &in) {
+    void set_trainable_parameters(real2d in) {
       auto &layer = std::get<I>(params.layers);
       if constexpr (I < num_layers-1) {
         layer.set_trainable_parameters(in,false);  // No fence

@@ -35,8 +35,8 @@ namespace ponni {
 
 
     char const * get_label() const { return "Binop_Add"; }
-    YAKL_INLINE static int get_num_inputs (Params const &params_in) { return params_in.num_inputs ; }
-    YAKL_INLINE static int get_num_outputs(Params const &params_in) { return params_in.num_outputs; }
+    YAKL_INLINE static int get_num_inputs   (Params const &params_in) { return params_in.num_inputs ; }
+    YAKL_INLINE static int get_num_outputs  (Params const &params_in) { return params_in.num_outputs; }
     YAKL_INLINE static int get_num_ensembles(Params const &params_in) { return 1; }
     real1d get_lbounds                  () const { return real1d(); }
     real1d get_ubounds                  () const { return real1d(); }

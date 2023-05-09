@@ -93,18 +93,26 @@ namespace ponni {
     YAKL_INLINE static int get_num_outputs  (Params const &params_in) { return params_in.num_inputs; }
     YAKL_INLINE static int get_num_ensembles(Params const &params_in) { return params_in.negative_slope.extent(0); }
     real1d get_lbounds() const {
-      realHost1d lbounds("Bias_lb",get_num_trainable_parameters());
-      lbounds(0) = params.lb_negative_slope;
-      lbounds(1) = params.lb_threshold     ;
-      lbounds(2) = params.lb_max_value     ;
-      return lbounds.createDeviceCopy();
+      if (params.trainable) {
+        realHost1d lbounds("Bias_lb",get_num_trainable_parameters());
+        lbounds(0) = params.lb_negative_slope;
+        lbounds(1) = params.lb_threshold     ;
+        lbounds(2) = params.lb_max_value     ;
+        return lbounds.createDeviceCopy();
+      } else {
+        return real1d();
+      }
     }
     real1d get_ubounds() const {
-      realHost1d ubounds("Bias_ub",get_num_trainable_parameters());
-      ubounds(0) = params.ub_negative_slope;
-      ubounds(1) = params.ub_threshold     ;
-      ubounds(2) = params.ub_max_value     ;
-      return ubounds.createDeviceCopy();
+      if (params.trainable) {
+        realHost1d ubounds("Bias_ub",get_num_trainable_parameters());
+        ubounds(0) = params.ub_negative_slope;
+        ubounds(1) = params.ub_threshold     ;
+        ubounds(2) = params.ub_max_value     ;
+        return ubounds.createDeviceCopy();
+      } else {
+        return real1d();
+      }
     }
     int get_num_inputs   () const { return params.num_inputs; }
     int get_num_outputs  () const { return params.num_inputs; }
@@ -131,11 +139,13 @@ namespace ponni {
 
 
     void set_trainable_parameters(real2d const &in, bool fence = true) {
-      int nens = get_num_ensembles();
-      auto tmp = in.collapse();
-      tmp.subset_slowest_dimension(0*nens,1*nens-1).deep_copy_to(params.negative_slope);
-      tmp.subset_slowest_dimension(1*nens,2*nens-1).deep_copy_to(params.threshold     );
-      tmp.subset_slowest_dimension(2*nens,3*nens-1).deep_copy_to(params.max_value     );
+      if (params.trainable) {
+        int nens = get_num_ensembles();
+        auto tmp = in.collapse();
+        tmp.subset_slowest_dimension(0*nens,1*nens-1).deep_copy_to(params.negative_slope);
+        tmp.subset_slowest_dimension(1*nens,2*nens-1).deep_copy_to(params.threshold     );
+        tmp.subset_slowest_dimension(2*nens,3*nens-1).deep_copy_to(params.max_value     );
+      }
       if (fence) yakl::fence();
     }
 

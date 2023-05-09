@@ -7,7 +7,8 @@ namespace ponni {
   // Layers.
   template <class... LAYERS>
   inline Inference<std::tuple<LAYERS...>,float> create_inference_model(LAYERS const &...layers) {
-    return Inference<std::tuple<LAYERS...>,float>(std::make_tuple(layers...));
+    Inference<std::tuple<LAYERS...>,float> model(std::make_tuple(layers...));
+    return model;
   }
 
   // Convenience Inference model creation function to allow the user to just list a bunch of successive
