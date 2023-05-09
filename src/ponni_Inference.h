@@ -36,11 +36,11 @@ namespace ponni {
     // Get the maximum size needed for holding a temporary internal state
     template <int I=0>
     int constexpr get_temporary_size(int max_outputs=0) const {
+      auto &layer = std::get<I>(params.layers);
       if constexpr (I < num_layers-2) {
-        return get_temporary_size<I+1>( std::max( std::get<I>(params.layers).get_num_outputs(std::get<I>(params.layers).params) ,
-                                                  max_outputs ) );
+        return get_temporary_size<I+1>( std::max( layer.get_num_outputs() , max_outputs ) );
       } else {
-        return std::max( std::get<I>(params.layers).get_num_outputs(std::get<I>(params.layers).params) , max_outputs );
+        return std::max( layer.get_num_outputs() , max_outputs );
       }
     }
 
@@ -101,14 +101,14 @@ namespace ponni {
       if constexpr (I < num_layers-1) {
         if constexpr (LAYER_TYPE::save) {
           if constexpr (LAYER_TYPE::index == INDEX) {
-            return std::max( get_saved_state_size<INDEX,I+1>(layers) , layer.get_num_outputs(layer.params) );
+            return std::max( get_saved_state_size<INDEX,I+1>(layers) , layer.get_num_outputs() );
           }
         }
         return std::max( get_saved_state_size<INDEX,I+1>(layers) , 0 );
       } else {
         if constexpr (LAYER_TYPE::save) {
           if constexpr (LAYER_TYPE::index == INDEX) {
-            return layer.get_num_outputs(layer.params);
+            return layer.get_num_outputs();
           }
         }
         return 0;
@@ -138,10 +138,11 @@ namespace ponni {
     // Get the total number of trainable parameters in the model
     template <int I=0>
     int get_num_trainable_parameters() const {
+      auto &layer = std::get<I>(params.layers);
       if constexpr (I < num_layers-1) {
-        return std::get<I>(params.layers).get_num_trainable_parameters() + get_num_trainable_parameters<I+1>();
+        return layer.get_num_trainable_parameters() + get_num_trainable_parameters<I+1>();
       } else {
-        return std::get<I>(params.layers).get_num_trainable_parameters();
+        return layer.get_num_trainable_parameters();
       }
     }
 
@@ -170,14 +171,14 @@ namespace ponni {
       // Get the number of inputs, outputs, and batch size
       auto &layer0      = std::get<0>(layers);
       auto &layer_last  = std::get<num_layers-1>(layers);
-      int num_inputs    = layer0    .get_num_inputs (layer0    .params);
-      int num_outputs   = layer_last.get_num_outputs(layer_last.params);
+      int num_inputs    = layer0    .get_num_inputs ();
+      int num_outputs   = layer_last.get_num_outputs();
       int batch_size    = input.extent(1);
       int num_ensembles = input.extent(2);
       // Allocate the saved states (overrides default allocation for one batch in constructor)
       init( batch_size , num_ensembles );
       // Ensure input dimension is correct
-      if (input.extent(0) != layer0.get_num_inputs(layer0.params)) {
+      if (input.extent(0) != layer0.get_num_inputs()) {
         yakl::yakl_throw("Error: Provided # inputs differs from model's # inputs");
       }
       // Allocate the output array
@@ -286,12 +287,27 @@ namespace ponni {
       if constexpr (I==0) std::cout << "Inference model has " << num_layers << " layers -- with "
                                     << get_num_trainable_parameters() << " total trainable parameters.\n";
       if constexpr (I < num_layers) {
+        auto &layer = std::get<I>(params.layers);
         std::cout << "  " << std::setw(3) << std::right << I+1 << ": "
-                  << std::setw(15) << std::left << std::get<I>(params.layers).get_label() << " with "
-                  << std::get<I>(params.layers).get_num_inputs (std::get<I>(params.layers).params) << " inputs, "
-                  << std::get<I>(params.layers).get_num_outputs(std::get<I>(params.layers).params) << " outputs, and "
-                  << std::get<I>(params.layers).get_num_trainable_parameters() << " trainable parameters\n";
+                  << std::setw(15) << std::left << layer.get_label() << " with "
+                  << layer.get_num_inputs () << " inputs, " << layer.get_num_outputs() << " outputs, and "
+                  << layer.get_num_trainable_parameters() << " trainable parameters\n";
         print<I+1>();
+      }
+    }
+
+
+
+    // Set the model layers' trainable parameters. Input dimensioned as (num_parameters,num_ensembles)
+    template <int I=0>
+    void set_trainable_parameters(real2d &params) {
+      auto &layer = std::get<I>(params.layers);
+      if (I < num_layers-1) {
+        layer.set_trainable_parameters(params,false);  // No fence
+        params = params.subset_slowest_dimension(layer.get_num_trainable_parameters(),params.extent(0)-1);
+        set_trainable_parameters<I+1>(params);
+      } else  {
+        layer.set_trainable_parameters(params,true);   // Fence
       }
     }
 
@@ -391,7 +407,7 @@ namespace ponni {
     void validate( SAVED_TYPE saved_states = SAVED_TYPE() ) const {
       using LAYER_TYPE = typename std::tuple_element<I,TUPLE>::type;
       auto &this_layer = std::get<I>(params.layers);
-      if constexpr (LAYER_TYPE::save) saved_states(LAYER_TYPE::index).size = this_layer.get_num_inputs(this_layer.params);
+      if constexpr (LAYER_TYPE::save) saved_states(LAYER_TYPE::index).size = this_layer.get_num_inputs();
       if constexpr (LAYER_TYPE::binop) {
         int saved_layer_num_inputs = saved_states(LAYER_TYPE::index).size;
         this_layer.validate(saved_layer_num_inputs);
@@ -400,7 +416,7 @@ namespace ponni {
       }
       if constexpr (I < num_layers-1) {
         auto &next_layer = std::get<I+1>(params.layers);
-        if ( this_layer.get_num_outputs(this_layer.params) != next_layer.get_num_inputs(next_layer.params) ) {
+        if ( this_layer.get_num_outputs() != next_layer.get_num_inputs() ) {
           yakl::yakl_throw("ERROR: This layer's num outputs != next layer's num inputs");
         }
         validate<I+1>(saved_states);
