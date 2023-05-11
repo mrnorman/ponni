@@ -7,36 +7,36 @@
 namespace ponni {
 
 
-  // This represents a single batch of values for the user to get parameters and calculate losses from them
+  // This represents an ensemble of parameters for the user to get parameters and calculate losses from them
   // The user is not expected to create an instance of this class themselves. Rather, the Trainer class
   // will provide this to the user already created.
   template <class real = float>
-  class Batch {
+  class Ensemble {
     public:
     typedef typename yakl::Array<real,1,yakl::memDevice> real1d;
     typedef typename yakl::Array<real,2,yakl::memDevice> real2d;
     typedef typename yakl::Array<int ,1,yakl::memDevice> int1d;
 
-    Batch () = default;
-    ~Batch() = default;
-    Batch            (Batch const & rhs) { copy(rhs);               };
-    Batch            (Batch const &&rhs) { copy(rhs);               };
-    Batch & operator=(Batch const & rhs) { copy(rhs); return *this; };
-    Batch & operator=(Batch const &&rhs) { copy(rhs); return *this; };
+    Ensemble () = default;
+    ~Ensemble() = default;
+    Ensemble            (Ensemble const & rhs) { copy(rhs);               };
+    Ensemble            (Ensemble const &&rhs) { copy(rhs);               };
+    Ensemble & operator=(Ensemble const & rhs) { copy(rhs); return *this; };
+    Ensemble & operator=(Ensemble const &&rhs) { copy(rhs); return *this; };
 
-    Batch(real2d const &a, int1d const &b, real1d const &c) { parameters = a;  global_indices = b;  loss = c; }
+    Ensemble(real2d const &a, int1d const &b, real1d const &c) { parameters = a;  global_indices = b;  loss = c; }
 
     real2d get_parameters    () const { return parameters; }
     real1d get_loss          () const { return loss; }
     int1d  get_global_indices() const { return global_indices; }
     int    get_num_parameters() const { return parameters.extent(0); }
-    int    get_batch_size    () const { return parameters.extent(1); }
+    int    get_ensemble_size () const { return parameters.extent(1); }
 
     protected:
-    real2d parameters;      // Parameters for each particle, dimensioned as num_parameters,num_particles(aka batch size)
-    int1d  global_indices;  // Global index among all particles for each particle in this batch
-    real1d loss;            // Loss for each particl ein this batch
-    void copy(Batch const &rhs) {
+    real2d parameters;      // Parameters for each particle, dimensioned as num_parameters,num_particles(aka ensemble size)
+    int1d  global_indices;  // Global index among all particles for each particle in this ensemble
+    real1d loss;            // Loss for each particl ein this ensemble
+    void copy(Ensemble const &rhs) {
       parameters     = rhs.parameters;
       global_indices = rhs.global_indices;
       loss           = rhs.loss;
@@ -72,7 +72,7 @@ namespace ponni {
                             size_t reset_every_in       = 100      ,    // N: Reset a proportion of particles every N iterations
                             real   reset_prop_in        = 0.3      ,    // The proportion of particles to reset every N iterations
                             size_t rand_seed_counter_in = 0        ) {  // Random seed for user control
-      batch_beginning   = 0;
+      ensemble_beginning   = 0;
       num_updates       = 0;
       rand_seed_counter = rand_seed_counter_in;
       reset_every       = reset_every_in;
@@ -104,21 +104,21 @@ namespace ponni {
     void init_particles() {
       using yakl::c::parallel_for;
       using yakl::c::SimpleBounds;
-      YAKL_SCOPE( parameters               , this->parameters               );
-      YAKL_SCOPE( velocities               , this->velocities               );
-      YAKL_SCOPE( lbounds                  , this->lbounds                  );
-      YAKL_SCOPE( ubounds                  , this->ubounds                  );
-      YAKL_SCOPE( velmag_prop              , this->velmag_prop              );
+      YAKL_SCOPE( parameters  , this->parameters  );
+      YAKL_SCOPE( velocities  , this->velocities  );
+      YAKL_SCOPE( lbounds     , this->lbounds     );
+      YAKL_SCOPE( ubounds     , this->ubounds     );
+      YAKL_SCOPE( velmag_prop , this->velmag_prop );
       int num_parameters = get_num_parameters();
       int num_particles  = get_num_particles ();
       parallel_for( YAKL_AUTO_LABEL() , SimpleBounds<2>(num_parameters,num_particles) ,
-                                        YAKL_LAMBDA (int iparam, int ibatch) {
-        yakl::Random prng(iparam*num_particles + ibatch);
-        auto param = prng.genFP<real>(lbounds(iparam),ubounds(iparam));
+                                        YAKL_LAMBDA (int iparam, int iens) {
+        yakl::Random prng(iparam*num_particles + iens);
+        auto param  = prng.genFP<real>(lbounds(iparam),ubounds(iparam));
         auto velmag = (ubounds(iparam)-lbounds(iparam))*velmag_prop;
-        auto vel   = prng.genFP<real>(-velmag,velmag);
-        parameters(iparam,ibatch) = param;
-        velocities(iparam,ibatch) = vel  ;
+        auto vel    = prng.genFP<real>(-velmag,velmag);
+        parameters(iparam,iens) = param;
+        velocities(iparam,iens) = vel  ;
       });
     }
 
@@ -135,7 +135,7 @@ namespace ponni {
     real   get_best_loss_overall       () const { return best_loss_overall       ; }
     real1d get_lbounds                 () const { return lbounds                 ; }
     real1d get_ubounds                 () const { return ubounds                 ; }
-    size_t get_batch_beginning         () const { return batch_beginning         ; }
+    size_t get_ensemble_beginning      () const { return ensemble_beginning      ; }
     size_t get_num_updates             () const { return num_updates             ; }
     size_t get_rand_seed_counter       () const { return rand_seed_counter       ; }
     real   get_inertia                 () const { return inertia                 ; }
@@ -147,56 +147,56 @@ namespace ponni {
     
 
 
-    // Send the user the requested batch size of particles. If it's less than the total number of particles,
+    // Send the user the requested ensemble size of particles. If it's less than the total number of particles,
     // iterations will roll evenly through the particles in contiguous chunks.
-    Batch<real> get_batch(int batch_size_in = -1) {
+    Ensemble<real> get_ensemble(int ensemble_size_in = -1) {
       using yakl::c::parallel_for;
       using yakl::c::SimpleBounds;
       auto num_particles  = get_num_particles ();
       auto num_parameters = get_num_parameters();
-      int batch_size = batch_size_in > 0 ? batch_size_in : num_particles;
+      int ensemble_size = ensemble_size_in > 0 ? ensemble_size_in : num_particles;
 
-      if (batch_size < 0 || batch_size > num_particles) {
-        std::cerr << "ERROR: Calling get_batch with invalid batch_size = [" << batch_size << "]";
+      if (ensemble_size < 0 || ensemble_size > num_particles) {
+        std::cerr << "ERROR: Calling get_ensemble with invalid ensemble_size = [" << ensemble_size << "]";
         yakl::yakl_throw("");
       }
 
-      real2d params_batch  ("parameters_batch",num_parameters,batch_size);
-      int1d  global_indices("global_indices"                 ,batch_size);
-      real1d loss_batch    ("loss_batch"                     ,batch_size);
+      real2d params_ensemble("parameters_ensemble",num_parameters,ensemble_size);
+      int1d  global_indices ("global_indices"                    ,ensemble_size);
+      real1d loss_ensemble  ("loss_ensemble"                     ,ensemble_size);
 
-      YAKL_SCOPE( batch_beginning , this->batch_beginning );
-      YAKL_SCOPE( parameters      , this->parameters      );
+      YAKL_SCOPE( ensemble_beginning , this->ensemble_beginning );
+      YAKL_SCOPE( parameters         , this->parameters         );
 
-      parallel_for( YAKL_AUTO_LABEL() , SimpleBounds<2>(num_parameters,batch_size) ,
-                                        YAKL_LAMBDA (int iparam, int ibatch) {
-        int ibatch_glob = batch_beginning + ibatch;
-        if (ibatch_glob >= num_particles) ibatch_glob -= num_particles;
-        params_batch(iparam,ibatch) = parameters(iparam,ibatch_glob);
+      parallel_for( YAKL_AUTO_LABEL() , SimpleBounds<2>(num_parameters,ensemble_size) ,
+                                        YAKL_LAMBDA (int iparam, int iens) {
+        int iens_glob = ensemble_beginning + iens;
+        if (iens_glob >= num_particles) iens_glob -= num_particles;
+        params_ensemble(iparam,iens) = parameters(iparam,iens_glob);
         if (iparam == 0) {
-          loss_batch    (ibatch) = 0;
-          global_indices(ibatch) = ibatch_glob;
+          loss_ensemble (iens) = 0;
+          global_indices(iens) = iens_glob;
         }
       });
-      batch_beginning += batch_size;
-      if (batch_beginning >= num_particles) batch_beginning -= num_particles;
-      return Batch<real>( params_batch , global_indices , loss_batch );
+      ensemble_beginning += ensemble_size;
+      if (ensemble_beginning >= num_particles) ensemble_beginning -= num_particles;
+      return Ensemble<real>( params_ensemble , global_indices , loss_ensemble );
     }
 
 
 
-    // Update the particles in this batch based on user-provided losses
+    // Update the particles in this ensemble based on user-provided losses
     // This is guaranteed to give identical updates for each particle for all MPI tasks so long as the provided
     //   losses are identical for all MPI tasks
-    void update_from_batch( Batch<real> const &batch , MPI_Comm comm = MPI_COMM_WORLD ) {
+    void update_from_ensemble( Ensemble<real> const &ensemble , MPI_Comm comm = MPI_COMM_WORLD ) {
       using yakl::c::parallel_for;
       using yakl::c::SimpleBounds;
-      auto num_particles  = get_num_particles();
-      auto num_parameters = get_num_parameters();
-      auto batch_size     = batch.get_batch_size();
-      auto global_indices = batch.get_global_indices();
-      auto batch_losses   = batch.get_loss();
-      auto batch_params   = batch.get_parameters();
+      auto num_particles   = get_num_particles();
+      auto num_parameters  = get_num_parameters();
+      auto ensemble_size   = ensemble.get_ensemble_size();
+      auto global_indices  = ensemble.get_global_indices();
+      auto ensemble_losses = ensemble.get_loss();
+      auto ensemble_params = ensemble.get_parameters();
 
       YAKL_SCOPE( parameters               , this->parameters               );
       YAKL_SCOPE( velocities               , this->velocities               );
@@ -218,29 +218,29 @@ namespace ponni {
       // IMPORTANT: Updates must be deterministic to ensure all tasks are using the exact same parameters
       //              without using excess MPI data transfers.
 
-      auto losses_host = batch_losses.createHostCopy();
+      auto losses_host = ensemble_losses.createHostCopy();
 
       /////////////////////////////////////////////////////
       // Update global best loss and parameters
       /////////////////////////////////////////////////////
-      auto min_batch_loss = yakl::intrinsics::minval( losses_host ); // Deterministic
-      if (min_batch_loss < best_loss_overall) {
-        best_loss_overall = min_batch_loss;
-        auto min_batch_ind = yakl::intrinsics::minloc( losses_host ); // Deterministic on the host
+      auto min_ensemble_loss = yakl::intrinsics::minval( losses_host ); // Deterministic
+      if (min_ensemble_loss < best_loss_overall) {
+        best_loss_overall = min_ensemble_loss;
+        auto min_ensemble_ind = yakl::intrinsics::minloc( losses_host ); // Deterministic on the host
         parallel_for( YAKL_AUTO_LABEL() , num_parameters , YAKL_LAMBDA (int iparam) {
-          best_params_overall(iparam) = batch_params(iparam,min_batch_ind);
+          best_params_overall(iparam) = ensemble_params(iparam,min_ensemble_ind);
         });
       }
       /////////////////////////////////////////////////////
       // Update per-partical best loss and parameters
       /////////////////////////////////////////////////////
-      parallel_for( YAKL_AUTO_LABEL() , batch_size , YAKL_LAMBDA (int ibatch) {
-        int ibatch_glob = global_indices(ibatch);
-        if ( batch_losses(ibatch) < best_loss_per_particle(ibatch_glob) ) {
-          best_loss_per_particle(ibatch_glob) = batch_losses(ibatch);
+      parallel_for( YAKL_AUTO_LABEL() , ensemble_size , YAKL_LAMBDA (int iens) {
+        int iens_glob = global_indices(iens);
+        if ( ensemble_losses(iens) < best_loss_per_particle(iens_glob) ) {
+          best_loss_per_particle(iens_glob) = ensemble_losses(iens);
           // This serializes the parameter dimension to reduce the number of required kernel launches
           for (int iparam=0; iparam < num_parameters; iparam++) {
-            best_params_per_particle(iparam,ibatch_glob) = batch_params(iparam,ibatch);
+            best_params_per_particle(iparam,iens_glob) = ensemble_params(iparam,iens);
           }
         }
       });
@@ -248,28 +248,28 @@ namespace ponni {
       /////////////////////////////////////////////////////
       // Update particle parameter velocities
       /////////////////////////////////////////////////////
-      parallel_for( YAKL_AUTO_LABEL() , SimpleBounds<2>(num_parameters,batch_size) ,
-                                        YAKL_LAMBDA (int iparam, int ibatch) {
-        int ibatch_glob = global_indices(ibatch);
-        yakl::Random prng(rand_seed_counter + iparam*batch_size + ibatch);
+      parallel_for( YAKL_AUTO_LABEL() , SimpleBounds<2>(num_parameters,ensemble_size) ,
+                                        YAKL_LAMBDA (int iparam, int iens) {
+        int iens_glob = global_indices(iens);
+        yakl::Random prng(rand_seed_counter + iparam*ensemble_size + iens);
         auto term_loc  = accel_loc *(1-inertia)*prng.genFP<real>();
         auto term_glob = accel_glob*(1-inertia)*prng.genFP<real>();
-        real vel = velocities(iparam,ibatch_glob);
-        vel = inertia   * vel                                                                            +
-              term_loc  * ( best_params_per_particle(iparam,ibatch_glob) - batch_params(iparam,ibatch) ) +
-              term_glob * ( best_params_overall     (iparam            ) - batch_params(iparam,ibatch) );
-        velocities(iparam,ibatch_glob) = vel;
-        // velocities(iparam,ibatch_glob) = std::min( static_cast<real>(0.5) , std::max( static_cast<real>(-0.5) , vel ) );
+        real vel = velocities(iparam,iens_glob);
+        vel = inertia   * vel                                                                           +
+              term_loc  * ( best_params_per_particle(iparam,iens_glob) - ensemble_params(iparam,iens) ) +
+              term_glob * ( best_params_overall     (iparam          ) - ensemble_params(iparam,iens) );
+        velocities(iparam,iens_glob) = vel;
+        // velocities(iparam,iens_glob) = std::min( static_cast<real>(0.5) , std::max( static_cast<real>(-0.5) , vel ) );
       });
-      rand_seed_counter += num_parameters*batch_size;
+      rand_seed_counter += num_parameters*ensemble_size;
 
       /////////////////////////////////////////////////////
       // Update particle parameters via velocities
       /////////////////////////////////////////////////////
-      parallel_for( YAKL_AUTO_LABEL() , SimpleBounds<2>(num_parameters,batch_size) ,
-                                        YAKL_LAMBDA (int iparam, int ibatch) {
-        int ibatch_glob = global_indices(ibatch);
-        parameters(iparam,ibatch_glob) += velocities(iparam,ibatch_glob);
+      parallel_for( YAKL_AUTO_LABEL() , SimpleBounds<2>(num_parameters,ensemble_size) ,
+                                        YAKL_LAMBDA (int iparam, int iens) {
+        int iens_glob = global_indices(iens);
+        parameters(iparam,iens_glob) += velocities(iparam,iens_glob);
       });
 
       /////////////////////////////////////////////////////
@@ -297,16 +297,16 @@ namespace ponni {
 
         // Reset the worst particles to random values to increase exploration
         parallel_for( YAKL_AUTO_LABEL() , SimpleBounds<2>(num_parameters,num_reset) ,
-                                          YAKL_LAMBDA (int iparam, int ibatch) {
-          int ibatch_glob = sorted_indices(ibatch);
-          yakl::Random prng(rand_seed_counter + iparam*num_reset + ibatch);
+                                          YAKL_LAMBDA (int iparam, int iens) {
+          int iens_glob = sorted_indices(iens);
+          yakl::Random prng(rand_seed_counter + iparam*num_reset + iens);
           auto param = prng.genFP<real>(lbounds(iparam),ubounds(iparam));
           auto velmag = (ubounds(iparam)-lbounds(iparam))*velmag_prop;
           auto vel   = prng.genFP<real>(-velmag,velmag);
-          parameters(iparam,ibatch_glob) = param;
-          velocities(iparam,ibatch_glob) = vel  ;
+          parameters(iparam,iens_glob) = param;
+          velocities(iparam,iens_glob) = vel  ;
           // If we don't reset the best loss, we'll track toward the old particle's best loss params
-          best_loss_per_particle(ibatch_glob) = std::numeric_limits<real>::max();
+          best_loss_per_particle(iens_glob) = std::numeric_limits<real>::max();
         });
         rand_seed_counter += num_parameters*num_reset;
       }
@@ -332,9 +332,9 @@ namespace ponni {
       auto parameters_max = parameters_max_host.createDeviceCopy();
       yakl::ScalarLiveOut<bool> is_same(true);
       parallel_for( YAKL_AUTO_LABEL() , SimpleBounds<2>(get_num_parameters(),get_num_particles()) ,
-                                        YAKL_LAMBDA (int iparam, int ibatch) {
-        if ( parameters(iparam,ibatch) != parameters_min(iparam,ibatch) ||
-             parameters(iparam,ibatch) != parameters_max(iparam,ibatch)  ) is_same = false;
+                                        YAKL_LAMBDA (int iparam, int iens) {
+        if ( parameters(iparam,iens) != parameters_min(iparam,iens) ||
+             parameters(iparam,iens) != parameters_max(iparam,iens)  ) is_same = false;
       });
       return is_same.hostRead();
     }
@@ -351,14 +351,14 @@ namespace ponni {
     real   best_loss_overall       ;  // Best loss overall
     real1d lbounds                 ;  // Lower bounds for spawning new particles (num_parameters)
     real1d ubounds                 ;  // Upper bounds for spawning new particles (num_parameters)
-    size_t batch_beginning         ;  // The number of batches grabbed so far
-    size_t num_updates             ;  // The number of batches grabbed so far
+    size_t ensemble_beginning         ;  // The number of ensemblees grabbed so far
+    size_t num_updates             ;  // The number of ensemblees grabbed so far
     size_t rand_seed_counter       ;  // Keep MPI tasks in sync by updating rand_seed_counter for random seeds
     real   inertia                 ;  // Degree to which a velocity keeps its old value
     real   accel_loc               ;  // Proportion of non-inertia accel performed toward the particle's best state
     real   accel_glob              ;  // Proportion of non-inertia accel performed toward the global best state
-    size_t reset_every             ;  // Reset the lowest "reset_prop" proportion every "reset_every" batches
-    real   reset_prop              ;  // Reset the lowest "reset_prop" proportion every "reset_every" batches
+    size_t reset_every             ;  // Reset the lowest "reset_prop" proportion every "reset_every" ensemblees
+    real   reset_prop              ;  // Reset the lowest "reset_prop" proportion every "reset_every" ensemblees
     real   velmag_prop             ;  // Proportion of range for each param to use for bounds of random vel init
 
     void copy(Trainer_Particle_Swarm const &rhs) {
@@ -370,7 +370,7 @@ namespace ponni {
       best_loss_overall        = rhs.best_loss_overall       ;
       lbounds                  = rhs.lbounds                 ;
       ubounds                  = rhs.ubounds                 ;
-      batch_beginning          = rhs.batch_beginning         ;
+      ensemble_beginning       = rhs.ensemble_beginning      ;
       num_updates              = rhs.num_updates             ;
       rand_seed_counter        = rhs.rand_seed_counter       ;
       inertia                  = rhs.inertia                 ;

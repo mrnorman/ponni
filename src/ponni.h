@@ -33,6 +33,7 @@ namespace ponni {
 #include "layers/ponni_Binop_Concatenate.h"
 #include "ponni_Inference.h"
 #include "ponni_create_model.h"
+#include "ponni_Trainer_PSO.h"
 
 
 
