@@ -35,12 +35,13 @@ namespace ponni {
     Params params;
 
     Relu() {};
-    Relu( int num_inputs , real negative_slope=0 , real threshold=0 , real max_value=huge , bool trainable=false ,
+    Relu( int num_inputs , int num_ensembles=1 , real negative_slope=0 , real threshold=0 , real max_value=huge ,
+          bool trainable=false ,
           real lb_negative_slope = 0    , real ub_negative_slope = 1    ,
           real lb_threshold      = -2   , real ub_threshold      = 2    ,
           real lb_max_value      = huge , real ub_max_value      = huge ) {
-      init(num_inputs,negative_slope,threshold,max_value,trainable,lb_negative_slope,ub_negative_slope,
-           lb_threshold,ub_threshold,lb_max_value,ub_max_value);
+      init(num_inputs,num_ensembles,negative_slope,threshold,max_value,trainable,lb_negative_slope,
+           ub_negative_slope,lb_threshold,ub_threshold,lb_max_value,ub_max_value);
     }
     Relu( int num_inputs , real1d negative_slope , real1d threshold ,  real1d max_value , bool trainable=false ,
           real lb_negative_slope = 0    , real ub_negative_slope = 1    ,
@@ -51,14 +52,15 @@ namespace ponni {
     }
 
 
-    void init( int num_inputs , real negative_slope=0 , real threshold=0 , real max_value=huge , bool trainable=false ,
+    void init( int num_inputs , int num_ensembles=1 , real negative_slope=0 , real threshold=0 ,
+               real max_value=huge , bool trainable=false ,
                real lb_negative_slope = 0    , real ub_negative_slope = 1    ,
                real lb_threshold      = -2   , real ub_threshold      = 2    ,
                real lb_max_value      = huge , real ub_max_value      = huge ) {
       params.num_inputs        = num_inputs                     ;
-      params.negative_slope    = real1d("Relu_negative_slope",1);
-      params.threshold         = real1d("Relu_threshold"     ,1);
-      params.max_value         = real1d("Relu_max_value"     ,1);
+      params.negative_slope    = real1d("Relu_negative_slope",num_ensembles);
+      params.threshold         = real1d("Relu_threshold"     ,num_ensembles);
+      params.max_value         = real1d("Relu_max_value"     ,num_ensembles);
       params.negative_slope    = negative_slope                 ;
       params.threshold         = threshold                      ;
       params.max_value         = max_value                      ;

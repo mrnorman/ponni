@@ -6,52 +6,45 @@
 
 namespace ponni {
 
-
-  // This represents an ensemble of parameters for the user to get parameters and calculate losses from them
-  // The user is not expected to create an instance of this class themselves. Rather, the Trainer class
-  // will provide this to the user already created.
   template <class real = float>
-  class Ensemble {
-    public:
-    typedef typename yakl::Array<real,1,yakl::memDevice> real1d;
-    typedef typename yakl::Array<real,2,yakl::memDevice> real2d;
-    typedef typename yakl::Array<int ,1,yakl::memDevice> int1d;
-
-    Ensemble () = default;
-    ~Ensemble() = default;
-    Ensemble            (Ensemble const & rhs) { copy(rhs);               };
-    Ensemble            (Ensemble const &&rhs) { copy(rhs);               };
-    Ensemble & operator=(Ensemble const & rhs) { copy(rhs); return *this; };
-    Ensemble & operator=(Ensemble const &&rhs) { copy(rhs); return *this; };
-
-    Ensemble(real2d const &a, int1d const &b, real1d const &c) { parameters = a;  global_indices = b;  loss = c; }
-
-    real2d get_parameters    () const { return parameters; }
-    real1d get_loss          () const { return loss; }
-    int1d  get_global_indices() const { return global_indices; }
-    int    get_num_parameters() const { return parameters.extent(0); }
-    int    get_ensemble_size () const { return parameters.extent(1); }
-
-    protected:
-    real2d parameters;      // Parameters for each particle, dimensioned as num_parameters,num_particles(aka ensemble size)
-    int1d  global_indices;  // Global index among all particles for each particle in this ensemble
-    real1d loss;            // Loss for each particl ein this ensemble
-    void copy(Ensemble const &rhs) {
-      parameters     = rhs.parameters;
-      global_indices = rhs.global_indices;
-      loss           = rhs.loss;
-    }
-  };
-
-
-
-  template <class real = float , typename std::enable_if<std::is_floating_point<real>::value,bool>::type = true >
   class Trainer_Particle_Swarm {
     public:
     typedef typename yakl::Array<real,1,yakl::memDevice> real1d;
     typedef typename yakl::Array<real,2,yakl::memDevice> real2d;
     typedef typename yakl::Array<int ,1,yakl::memDevice> int1d;
     typedef typename yakl::Array<real,1,yakl::memHost  > realHost1d;
+
+    class Ensemble {
+      public:
+      typedef typename yakl::Array<real,1,yakl::memDevice> real1d;
+      typedef typename yakl::Array<real,2,yakl::memDevice> real2d;
+      typedef typename yakl::Array<int ,1,yakl::memDevice> int1d;
+
+      Ensemble () = default;
+      ~Ensemble() = default;
+      Ensemble            (Ensemble const & rhs) { copy(rhs);               };
+      Ensemble            (Ensemble const &&rhs) { copy(rhs);               };
+      Ensemble & operator=(Ensemble const & rhs) { copy(rhs); return *this; };
+      Ensemble & operator=(Ensemble const &&rhs) { copy(rhs); return *this; };
+
+      Ensemble(real2d const &a, int1d const &b, real1d const &c) { parameters = a;  global_indices = b;  loss = c; }
+
+      real2d get_parameters    () const { return parameters; }
+      real1d get_loss          () const { return loss; }
+      int1d  get_global_indices() const { return global_indices; }
+      int    get_num_parameters() const { return parameters.extent(0); }
+      int    get_ensemble_size () const { return parameters.extent(1); }
+
+      protected:
+      real2d parameters;      // Parameters for each particle, dimensioned as num_parameters,num_particles(aka ensemble size)
+      int1d  global_indices;  // Global index among all particles for each particle in this ensemble
+      real1d loss;            // Loss for each particl ein this ensemble
+      void copy(Ensemble const &rhs) {
+        parameters     = rhs.parameters;
+        global_indices = rhs.global_indices;
+        loss           = rhs.loss;
+      }
+    };
 
     Trainer_Particle_Swarm()  = default;
     ~Trainer_Particle_Swarm() = default;
@@ -149,7 +142,7 @@ namespace ponni {
 
     // Send the user the requested ensemble size of particles. If it's less than the total number of particles,
     // iterations will roll evenly through the particles in contiguous chunks.
-    Ensemble<real> get_ensemble(int ensemble_size_in = -1) {
+    Ensemble get_ensemble(int ensemble_size_in = -1) {
       using yakl::c::parallel_for;
       using yakl::c::SimpleBounds;
       auto num_particles  = get_num_particles ();
@@ -180,7 +173,7 @@ namespace ponni {
       });
       ensemble_beginning += ensemble_size;
       if (ensemble_beginning >= num_particles) ensemble_beginning -= num_particles;
-      return Ensemble<real>( params_ensemble , global_indices , loss_ensemble );
+      return Ensemble( params_ensemble , global_indices , loss_ensemble );
     }
 
 
@@ -188,7 +181,7 @@ namespace ponni {
     // Update the particles in this ensemble based on user-provided losses
     // This is guaranteed to give identical updates for each particle for all MPI tasks so long as the provided
     //   losses are identical for all MPI tasks
-    void update_from_ensemble( Ensemble<real> const &ensemble , MPI_Comm comm = MPI_COMM_WORLD ) {
+    void update_from_ensemble( Ensemble const &ensemble , MPI_Comm comm = MPI_COMM_WORLD ) {
       using yakl::c::parallel_for;
       using yakl::c::SimpleBounds;
       auto num_particles   = get_num_particles();
