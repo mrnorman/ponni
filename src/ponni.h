@@ -16,6 +16,8 @@ namespace ponni {
 #define PONNI_DEBUG_PRINT_VAL(var) { ponni::debug_print_val((var),__FILE__,__LINE__,#var); }
 
 #include <fstream>
+#include <random>
+#include <algorithm>
 #include "layers/ponni_Matvec.h"
 #include "layers/ponni_Bias.h"
 #include "layers/ponni_Relu.h"
@@ -31,10 +33,11 @@ namespace ponni {
 #include "layers/ponni_Save_State.h"
 #include "layers/ponni_Binop_Add.h"
 #include "layers/ponni_Binop_Concatenate.h"
+#include "ponni_shuffle.h"
 #include "ponni_Inference.h"
 #include "ponni_create_model.h"
 #include "ponni_Trainer_PSO.h"
-#include "ponni_Trainer_GD_Nadam_FD.h"
+#include "ponni_Trainer_GD_Adam_FD.h"
 
 
 

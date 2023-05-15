@@ -8,7 +8,7 @@
 namespace ponni {
 
   template <class real = float>
-  class Trainer_GD_Nadam_FD {
+  class Trainer_GD_Adam_FD {
     public:
     typedef typename yakl::Array<real,1,yakl::memDevice> real1d;
     typedef typename yakl::Array<real,2,yakl::memDevice> real2d;
@@ -41,34 +41,35 @@ namespace ponni {
       }
     };
 
-    Trainer_GD_Nadam_FD()  = default;
-    ~Trainer_GD_Nadam_FD() = default;
-    Trainer_GD_Nadam_FD            (Trainer_GD_Nadam_FD const & rhs) { copy(rhs);               };
-    Trainer_GD_Nadam_FD            (Trainer_GD_Nadam_FD const &&rhs) { copy(rhs);               };
-    Trainer_GD_Nadam_FD & operator=(Trainer_GD_Nadam_FD const & rhs) { copy(rhs); return *this; };
-    Trainer_GD_Nadam_FD & operator=(Trainer_GD_Nadam_FD const &&rhs) { copy(rhs); return *this; };
+    Trainer_GD_Adam_FD()  = default;
+    ~Trainer_GD_Adam_FD() = default;
+    Trainer_GD_Adam_FD            (Trainer_GD_Adam_FD const & rhs) { copy(rhs);               };
+    Trainer_GD_Adam_FD            (Trainer_GD_Adam_FD const &&rhs) { copy(rhs);               };
+    Trainer_GD_Adam_FD & operator=(Trainer_GD_Adam_FD const & rhs) { copy(rhs); return *this; };
+    Trainer_GD_Adam_FD & operator=(Trainer_GD_Adam_FD const &&rhs) { copy(rhs); return *this; };
 
 
     // Create a Particle Swarm Trainer
-    Trainer_GD_Nadam_FD( int  num_parameters  ,
-                         int  num_inputs = -1 ,
-                         real alpha = 0.001   ,
-                         real mu    = 0.9     ,
-                         real nu    = 0.999   ) {
+    Trainer_GD_Adam_FD( int  num_parameters  ,
+                        int  num_inputs = -1 ,
+                        real alpha = 0.001   ,
+                        real beta1 = 0.9     ,
+                        real beta2 = 0.999   ) {
       this->num_updates = 0;
       this->alpha       = alpha;
-      this->mu          = mu;
-      this->nu          = nu;
+      this->beta1       = beta1;
+      this->beta2       = beta2;
+      this->beta1_pow   = beta1;
+      this->beta2_pow   = beta2;
       this->m           = real1d("m",num_parameters);
-      this->n           = real1d("n",num_parameters);
+      this->v           = real1d("v",num_parameters);
       this->m           = 0;
-      this->n           = 0;
+      this->v           = 0;
       this->parameters  = real1d("parameters",num_parameters);
       std::random_device          rd {};
       std::mt19937                gen {rd()};
-      std::normal_distribution<>  d;
-      if (num_inputs > 0) { d = std::normal_distribution<>{0,std::sqrt(2./num_inputs)}; } // He initialization
-      else                { d = std::normal_distribution<>{0,0.1}; }                      // He for num_inputs == 100
+      gen.seed(2);
+      std::uniform_real_distribution<> d(-0.05,0.05);
       auto parameters_host = parameters.createHostCopy();
       for (int i=0; i < parameters.size(); i++) { parameters_host(i) = d(gen); }
       this->parameters = parameters_host.createDeviceCopy();
@@ -82,8 +83,8 @@ namespace ponni {
     real1d get_parameters    () const { return parameters              ; }
     size_t get_num_updates   () const { return num_updates             ; }
     real   get_alpha         () const { return alpha                   ; }
-    real   get_mu            () const { return mu                      ; }
-    real   get_nu            () const { return nu                      ; }
+    real   get_beta1         () const { return beta1                   ; }
+    real   get_beta2         () const { return beta2                   ; }
     
 
 
@@ -128,22 +129,28 @@ namespace ponni {
 
       YAKL_SCOPE( parameters , this->parameters );
       YAKL_SCOPE( alpha      , this->alpha      );
-      YAKL_SCOPE( mu         , this->mu         );
-      YAKL_SCOPE( nu         , this->nu         );
+      YAKL_SCOPE( beta1      , this->beta1      );
+      YAKL_SCOPE( beta2      , this->beta2      );
+      YAKL_SCOPE( beta1_pow  , this->beta1_pow  );
+      YAKL_SCOPE( beta2_pow  , this->beta2_pow  );
       YAKL_SCOPE( m          , this->m          );
-      YAKL_SCOPE( n          , this->n          );
+      YAKL_SCOPE( v          , this->v          );
 
       parallel_for( YAKL_AUTO_LABEL() , num_parameters , YAKL_LAMBDA (int iparam) {
         real g = ( ensemble_losses    (       iparam) - ensemble_losses    (       num_parameters) ) /
                  ( ensemble_parameters(iparam,iparam) - ensemble_parameters(iparam,num_parameters) );
-        m(iparam) = mu * m(iparam) + (1-mu) * g;
-        n(iparam) = nu * n(iparam) + (1-nu) * g*g;
-        real mhat = mu*m(iparam)/(1-mu) + g;
-        real nhat = nu*n(iparam)/(1-nu);
-        parameters(iparam) -= alpha / (sqrt(nhat) + 1.e-7) * mhat;
+        m(iparam) = beta1 * m(iparam) + (1-beta1) * g;
+        v(iparam) = beta2 * v(iparam) + (1-beta2) * g*g;
+        real mhat = m(iparam)/(1-beta1_pow);
+        real vhat = v(iparam)/(1-beta2_pow);
+        parameters(iparam) -= alpha * mhat / (sqrt(vhat) + 1.e-8);
       });
       num_updates++;
     }
+
+
+
+    void increment_epoch() { beta1_pow *= beta1;    beta2_pow *= beta2; }
 
 
 
@@ -173,22 +180,26 @@ namespace ponni {
 
     protected:
 
-    real1d parameters ;  // parameters being trained (num_parameters)
-    size_t num_updates;  // The number of model updates performes thus far
+    real1d parameters ; // parameters being trained (num_parameters)
+    size_t num_updates; // The number of model updates performes thus far
     real   alpha      ;
-    real   mu         ;
-    real   nu         ;
+    real   beta1      ;
+    real   beta2      ;
+    real   beta1_pow  ;
+    real   beta2_pow  ;
     real1d m          ;
-    real1d n          ;
+    real1d v          ;
 
-    void copy(Trainer_GD_Nadam_FD const &rhs) {
-      parameters  = rhs.parameters       ;
-      num_updates = rhs.num_updates      ;
-      alpha       = rhs.alpha            ;
-      mu          = rhs.mu               ;
-      nu          = rhs.nu               ;
-      m           = rhs.m                ;
-      n           = rhs.n                ;
+    void copy(Trainer_GD_Adam_FD const &rhs) {
+      parameters  = rhs.parameters ;
+      num_updates = rhs.num_updates;
+      alpha       = rhs.alpha      ;
+      beta1       = rhs.beta1      ;
+      beta2       = rhs.beta2      ;
+      beta1_pow   = rhs.beta1_pow  ;
+      beta2_pow   = rhs.beta2_pow  ;
+      m           = rhs.m          ;
+      v           = rhs.v          ;
     }
   };
 
