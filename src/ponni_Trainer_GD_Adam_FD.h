@@ -94,14 +94,11 @@ namespace ponni {
       using yakl::c::SimpleBounds;
       YAKL_SCOPE( parameters , this->parameters );
       auto num_parameters = get_num_parameters();
-      // Calculate 2-norm of the data
-      real1d norm2_vals("norm2_vals",num_parameters);
-      parallel_for( YAKL_AUTO_LABEL() , num_parameters , YAKL_LAMBDA (int iparam) {
-        norm2_vals(iparam) = parameters(iparam)*parameters(iparam);
-      });
-      // Calculate delta for finite-differences
-      real norm2 = std::sqrt( yakl::intrinsics::sum(norm2_vals) );
-      real delta = std::pow( eps/2 , 1./3.) / (norm2 + 1.e-7);
+      std::random_device rd;
+      std::mt19937 gen(rd());
+      gen.seed(get_num_updates());
+      std::uniform_real_distribution<> d(eps*10,eps*20);
+      real delta = d(gen);
       // Create parameter ensemble
       int ensemble_size = num_parameters+1;
       real2d ensemble_parameters("ensemble_parameters",num_parameters,ensemble_size);
@@ -109,7 +106,7 @@ namespace ponni {
       parallel_for( YAKL_AUTO_LABEL() , SimpleBounds<2>(num_parameters,ensemble_size) ,
                                         YAKL_LAMBDA (int iparam, int iens) {
         ensemble_parameters(iparam,iens) = parameters(iparam);
-        if (iparam == iens) ensemble_parameters(iparam,iens) += delta;
+        if (iparam == iens) ensemble_parameters(iparam,iens) += std::max( delta , delta * std::abs(ensemble_parameters(iparam,iens)) );
         if (iparam == 0) ensemble_loss(iens) = 0;
       });
       return Ensemble( ensemble_parameters , ensemble_loss );
@@ -143,7 +140,7 @@ namespace ponni {
         v(iparam) = beta2 * v(iparam) + (1-beta2) * g*g;
         real mhat = m(iparam)/(1-beta1_pow);
         real vhat = v(iparam)/(1-beta2_pow);
-        parameters(iparam) -= alpha * mhat / (sqrt(vhat) + 1.e-8);
+        parameters(iparam) -= alpha * mhat / std::max( sqrt(vhat) , static_cast<real>(1.e-10) );
       });
       num_updates++;
     }
