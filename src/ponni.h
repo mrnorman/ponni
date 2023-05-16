@@ -33,11 +33,11 @@ namespace ponni {
 #include "layers/ponni_Save_State.h"
 #include "layers/ponni_Binop_Add.h"
 #include "layers/ponni_Binop_Concatenate.h"
-#include "ponni_shuffle.h"
+#include "utils/ponni_shuffle.h"
 #include "ponni_Inference.h"
 #include "ponni_create_model.h"
-#include "ponni_Trainer_PSO.h"
-#include "ponni_Trainer_GD_Adam_FD.h"
+#include "trainers/ponni_Trainer_PSO.h"
+#include "trainers/ponni_Trainer_GD_Adam_FD.h"
 
 
 
