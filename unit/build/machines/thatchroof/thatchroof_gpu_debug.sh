@@ -2,9 +2,9 @@
 
 source /usr/share/modules/init/bash
 module purge
+module load hdf5-1.12.2-gcc-11.1.0-yhy752t
 
 spack unload --all
-spack load hdf5@1.12.2
 
 export HDF5_DIR=/home/imn/spack/opt/spack/linux-ubuntu20.04-haswell/gcc-11.1.0/hdf5-1.12.2-yhy752tsib7atgpak6tolosnttbxlcyx
 

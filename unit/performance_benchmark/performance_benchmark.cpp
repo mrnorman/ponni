@@ -22,10 +22,10 @@ int main( int argc , char **argv ) {
     // Create an inference model to perform batched forward predictions
     auto inference = create_inference_model( Matvec<float>( real2d("matvec_1",num_layers,num_layers) = 1 ) ,
                                              Bias  <float>( real1d("bias_1",num_layers) = 1 )              ,
-                                             Relu  <float>( num_layers , 0.1 )                             ,
+                                             Relu  <float>( num_layers , 1 , 0.1 )                         ,
                                              Matvec<float>( real2d("matvec_1",num_layers,num_layers) = 1 ) ,
                                              Bias  <float>( real1d("bias_1",num_layers) = 1 )              ,
-                                             Relu  <float>( num_layers , 0.1 )                             );
+                                             Relu  <float>( num_layers , 1 , 0.1 )                         );
                                               
     inference.validate();
     inference.print();

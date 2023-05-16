@@ -20,9 +20,9 @@ namespace ponni {
 
     struct Params {
       int    num_inputs     ;
-      real1d negative_slope ;
-      real1d threshold      ;
-      real1d max_value      ;
+      real2d negative_slope ;
+      real   threshold      ;
+      real   max_value      ;
       bool   trainable      ;
     };
 
@@ -33,54 +33,61 @@ namespace ponni {
           bool trainable=false ) {
       init(num_inputs,num_ensembles,negative_slope,threshold,max_value,trainable);
     }
-    Relu( int num_inputs , real1d negative_slope , real1d threshold ,  real1d max_value , bool trainable=false ) {
+    Relu( int num_inputs , real1d negative_slope , real threshold=0 , real max_value=huge , bool trainable=false ) {
+      init(num_inputs,negative_slope,threshold,max_value,trainable);
+    }
+    Relu( int num_inputs , real2d negative_slope , real threshold=0 , real max_value=huge , bool trainable=false ) {
       init(num_inputs,negative_slope,threshold,max_value,trainable);
     }
 
 
     void init( int num_inputs , int num_ensembles=1 , real negative_slope=0 , real threshold=0 ,
                real max_value=huge , bool trainable=false ) {
-      params.num_inputs        = num_inputs       ;
-      params.negative_slope    = real1d("Relu_negative_slope",num_ensembles);
-      params.threshold         = real1d("Relu_threshold"     ,num_ensembles);
-      params.max_value         = real1d("Relu_max_value"     ,num_ensembles);
-      params.negative_slope    = negative_slope   ;
-      params.threshold         = threshold        ;
-      params.max_value         = max_value        ;
-      params.trainable         = trainable        ;
+      params.negative_slope    = real2d("Relu_negative_slope",num_inputs,num_ensembles);
+      params.num_inputs        = num_inputs    ;
+      params.negative_slope    = negative_slope;
+      params.threshold         = threshold     ;
+      params.max_value         = max_value     ;
+      params.trainable         = trainable     ;
     }
-    void init( int num_inputs , real1d negative_slope , real1d threshold ,  real1d max_value , bool trainable=false ) {
-      params.num_inputs        = num_inputs       ;
-      params.negative_slope    = negative_slope   ;
-      params.threshold         = threshold        ;
-      params.max_value         = max_value        ;
-      params.trainable         = trainable        ;
+    void init( int num_inputs , real1d negative_slope , real threshold=0 , real max_value=huge , bool trainable=false ) {
+      params.negative_slope    = negative_slope.reshape(negative_slope.size(),1);
+      params.num_inputs        = num_inputs;
+      params.threshold         = threshold ;
+      params.max_value         = max_value ;
+      params.trainable         = trainable ;
+    }
+    void init( int num_inputs , real2d negative_slope , real threshold=0 , real max_value=huge , bool trainable=false ) {
+      params.negative_slope    = negative_slope;
+      params.num_inputs        = num_inputs;
+      params.threshold         = threshold ;
+      params.max_value         = max_value ;
+      params.trainable         = trainable ;
     }
 
 
     char const * get_label() const { return "Relu"; }
-    YAKL_INLINE static int get_num_inputs   (Params const &params_in) { return params_in.num_inputs; }
-    YAKL_INLINE static int get_num_outputs  (Params const &params_in) { return params_in.num_inputs; }
-    YAKL_INLINE static int get_num_ensembles(Params const &params_in) { return params_in.negative_slope.extent(0); }
-    int get_num_inputs   () const { return params.num_inputs; }
-    int get_num_outputs  () const { return params.num_inputs; }
-    int get_num_ensembles() const { return params.negative_slope.extent(0); }
-    int get_num_trainable_parameters() const { return params.trainable ? 1 : 0; }
-    int get_array_representation_size() const { return 3*get_num_ensembles()+3; }
+    YAKL_INLINE static int get_num_inputs   (Params const &params_in) { return params_in.negative_slope.extent(0); }
+    YAKL_INLINE static int get_num_outputs  (Params const &params_in) { return params_in.negative_slope.extent(0); }
+    YAKL_INLINE static int get_num_ensembles(Params const &params_in) { return params_in.negative_slope.extent(1); }
+    int get_num_inputs   () const { return params.negative_slope.extent(0); }
+    int get_num_outputs  () const { return params.negative_slope.extent(0); }
+    int get_num_ensembles() const { return params.negative_slope.extent(1); }
+    int get_num_trainable_parameters() const { return params.trainable ? get_num_inputs() : 0; }
+    int get_array_representation_size() const { return params.negative_slope.size()+5; }
 
 
     YAKL_INLINE static void compute_all_outputs(real3d const &input, real3d const &output,
                                                 int ibatch, int iens, Params const &params_in) {
       int  num_outputs    = get_num_outputs(params_in);
-      real negative_slope = params_in.negative_slope(iens);
-      real threshold      = params_in.threshold     (iens);
-      real max_value      = params_in.max_value     (iens);
+      real threshold      = params_in.threshold;
+      real max_value      = params_in.max_value;
       for (int irow = 0; irow < num_outputs; irow++) {
         real x              = input(irow,ibatch,iens);
         real f_x;
-        if      (x >= max_value) { f_x = max_value;                        }
-        else if (x >= threshold) { f_x = x;                                }
-        else                     { f_x = negative_slope * (x - threshold); }
+        if      (x >= max_value) { f_x = max_value;                                             }
+        else if (x >= threshold) { f_x = x;                                                     }
+        else                     { f_x = params_in.negative_slope(irow,iens) * (x - threshold); }
         output(irow,ibatch,iens) = f_x;
       }
     }
@@ -89,14 +96,14 @@ namespace ponni {
     void set_trainable_parameters(real2d const &in, bool fence = true) {
       if (params.trainable) {
         auto tmp = in.collapse();
-        tmp.subset_slowest_dimension(get_num_ensembles()).deep_copy_to(params.negative_slope);
+        tmp.subset_slowest_dimension(params.negative_slope.size()).deep_copy_to(params.negative_slope);
       }
       if (fence) yakl::fence();
     }
 
 
     real2d get_trainable_parameters() const {
-      if (params.trainable) return params.negative_slope.reshape(1,params.negative_slope.size());
+      if (params.trainable) return params.negative_slope;
       return real2d();
     }
 
@@ -107,32 +114,24 @@ namespace ponni {
       data(0) = nens;
       data(1) = get_num_inputs();
       data(2) = params.trainable ? 1 : 0;
-      auto negative_slope = params.negative_slope.createHostCopy();
-      auto threshold      = params.threshold     .createHostCopy();
-      auto max_value      = params.max_value     .createHostCopy();
-      for (int i=0; i < nens; i++) {
-        data(3+0*nens+i) = negative_slope(i);
-        data(3+1*nens+i) = threshold     (i);
-        data(3+2*nens+i) = max_value     (i);
-      }
+      data(3) = params.threshold;
+      data(4) = params.max_value;
+      auto negative_slope = params.negative_slope.createHostCopy().collapse();
+      for (int i=0; i < negative_slope.size(); i++) { data(5+i) = negative_slope(i); }
       return data;
     }
 
 
     void from_array(doubleHost1d const &data) {
-      int  nens              = data(0);
-      int  num_inputs        = data(1);
-      bool trainable         = data(2) == 1;
-      realHost1d negative_slope("Relu_negative_slope",nens);
-      realHost1d threshold     ("Relu_threshold     ",nens);
-      realHost1d max_value     ("Relu_max_value     ",nens);
-      for (int i=0; i < nens; i++) {
-        negative_slope(i) = data(3       +i);
-        threshold     (i) = data(3+  nens+i);
-        max_value     (i) = data(3+2*nens+i);
-      }
-      init( num_inputs , negative_slope.createDeviceCopy() , threshold.createDeviceCopy() ,
-            max_value.createDeviceCopy() , trainable );
+      int  nens       = data(0);
+      int  num_inputs = data(1);
+      bool trainable  = data(2) == 1;
+      real threshold  = data(3);
+      real max_value  = data(4);
+      realHost1d negative_slope("Relu_negative_slope",num_inputs*nens);
+      for (int i=0; i < num_inputs*nens; i++) { negative_slope(i) = data(5+i); }
+      init( num_inputs , negative_slope.createDeviceCopy().reshape(num_inputs,nens) , threshold ,
+            max_value , trainable );
     }
 
 

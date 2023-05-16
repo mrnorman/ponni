@@ -11,7 +11,7 @@ int main( int argc , char **argv ) {
     // Create the layers that will form the model
     ponni::Matvec<float> matvec_1( ponni::load_h5_weights<2>( fname , "/dense/dense"     , "kernel:0" ) );
     ponni::Bias  <float> bias_1  ( ponni::load_h5_weights<1>( fname , "/dense/dense"     , "bias:0"   ) );
-    ponni::Relu  <float> relu_1  ( 10 , 0.1 );
+    ponni::Relu  <float> relu_1  ( 10 , 1 , 0.1 );
     ponni::Matvec<float> matvec_2( ponni::load_h5_weights<2>( fname , "/dense_1/dense_1" , "kernel:0" ) );
     ponni::Bias  <float> bias_2  ( ponni::load_h5_weights<1>( fname , "/dense_1/dense_1" , "bias:0"   ) );
 
