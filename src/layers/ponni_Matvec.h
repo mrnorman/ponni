@@ -27,6 +27,14 @@ namespace ponni {
 
     Matvec () = default;
     ~Matvec() = default;
+    template < class INIT = Initializer_Random_Uniform<real> >
+    Matvec( int num_inputs , int num_outputs , int num_ensembles = 1 ,
+            INIT initializer = Initializer_Random_Uniform<real>() , bool trainable = true , real lb = -2 ,
+            real ub = 2 ) {
+      real3d weights("Bias_weights",num_inputs,num_outputs,num_ensembles);
+      initializer.fill( weights );
+      init(weights,trainable,lb,ub);
+    }
     Matvec( real2d const &weights , bool trainable=true , real lb=-2, real ub=2 ) { init(weights,trainable,lb,ub); }
     Matvec( real3d const &weights , bool trainable=true , real lb=-2, real ub=2 ) { init(weights,trainable,lb,ub); }
 
@@ -75,9 +83,17 @@ namespace ponni {
 
 
     void set_trainable_parameters(real2d const &in, bool fence = true) {
-      auto tmp = in.collapse();
-      tmp.subset_slowest_dimension(params.weights.size()).deep_copy_to(params.weights);
+      if (params.trainable) {
+        auto tmp = in.collapse();
+        tmp.subset_slowest_dimension(params.weights.size()).deep_copy_to(params.weights);
+      }
       if (fence) yakl::fence();
+    }
+
+
+    real2d get_trainable_parameters() const {
+      if (params.trainable) return params.weights.reshape(get_num_inputs()*get_num_outputs(),get_num_ensembles());
+      return real2d();
     }
 
 

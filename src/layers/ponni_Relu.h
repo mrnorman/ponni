@@ -26,37 +26,23 @@ namespace ponni {
       bool   trainable      ;
       real lb_negative_slope;
       real ub_negative_slope;
-      real lb_threshold     ;
-      real ub_threshold     ;
-      real lb_max_value     ;
-      real ub_max_value     ;
     };
 
     Params params;
 
     Relu() {};
     Relu( int num_inputs , int num_ensembles=1 , real negative_slope=0 , real threshold=0 , real max_value=huge ,
-          bool trainable=false ,
-          real lb_negative_slope = 0    , real ub_negative_slope = 1    ,
-          real lb_threshold      = -2   , real ub_threshold      = 2    ,
-          real lb_max_value      = huge , real ub_max_value      = huge ) {
-      init(num_inputs,num_ensembles,negative_slope,threshold,max_value,trainable,lb_negative_slope,
-           ub_negative_slope,lb_threshold,ub_threshold,lb_max_value,ub_max_value);
+          bool trainable=false , real lb_negative_slope = 0 , real ub_negative_slope = 1 ) {
+      init(num_inputs,num_ensembles,negative_slope,threshold,max_value,trainable,lb_negative_slope,ub_negative_slope);
     }
     Relu( int num_inputs , real1d negative_slope , real1d threshold ,  real1d max_value , bool trainable=false ,
-          real lb_negative_slope = 0    , real ub_negative_slope = 1    ,
-          real lb_threshold      = -2   , real ub_threshold      = 2    ,
-          real lb_max_value      = huge , real ub_max_value      = huge ) {
-      init(num_inputs,negative_slope,threshold,max_value,trainable,lb_negative_slope,ub_negative_slope,
-           lb_threshold,ub_threshold,lb_max_value,ub_max_value);
+          real lb_negative_slope = 0 , real ub_negative_slope = 1 ) {
+      init(num_inputs,negative_slope,threshold,max_value,trainable,lb_negative_slope,ub_negative_slope);
     }
 
 
     void init( int num_inputs , int num_ensembles=1 , real negative_slope=0 , real threshold=0 ,
-               real max_value=huge , bool trainable=false ,
-               real lb_negative_slope = 0    , real ub_negative_slope = 1    ,
-               real lb_threshold      = -2   , real ub_threshold      = 2    ,
-               real lb_max_value      = huge , real ub_max_value      = huge ) {
+               real max_value=huge , bool trainable=false , real lb_negative_slope = 0 , real ub_negative_slope = 1 ) {
       params.num_inputs        = num_inputs                     ;
       params.negative_slope    = real1d("Relu_negative_slope",num_ensembles);
       params.threshold         = real1d("Relu_threshold"     ,num_ensembles);
@@ -67,15 +53,9 @@ namespace ponni {
       params.trainable         = trainable                      ;
       params.lb_negative_slope = lb_negative_slope              ;
       params.ub_negative_slope = ub_negative_slope              ;
-      params.lb_threshold      = lb_threshold                   ;
-      params.ub_threshold      = ub_threshold                   ;
-      params.lb_max_value      = lb_max_value                   ;
-      params.ub_max_value      = ub_max_value                   ;
     }
     void init( int num_inputs , real1d negative_slope , real1d threshold ,  real1d max_value , bool trainable=false ,
-               real lb_negative_slope = 0    , real ub_negative_slope = 1    ,
-               real lb_threshold      = -2   , real ub_threshold      = 2    ,
-               real lb_max_value      = huge , real ub_max_value      = huge ) {
+               real lb_negative_slope = 0 , real ub_negative_slope = 1 ) {
       params.num_inputs        = num_inputs                     ;
       params.negative_slope    = negative_slope                 ;
       params.threshold         = threshold                      ;
@@ -83,10 +63,6 @@ namespace ponni {
       params.trainable         = trainable                      ;
       params.lb_negative_slope = lb_negative_slope              ;
       params.ub_negative_slope = ub_negative_slope              ;
-      params.lb_threshold      = lb_threshold                   ;
-      params.ub_threshold      = ub_threshold                   ;
-      params.lb_max_value      = lb_max_value                   ;
-      params.ub_max_value      = ub_max_value                   ;
     }
 
 
@@ -98,8 +74,6 @@ namespace ponni {
       if (params.trainable) {
         realHost1d lbounds("Bias_lb",get_num_trainable_parameters());
         lbounds(0) = params.lb_negative_slope;
-        lbounds(1) = params.lb_threshold     ;
-        lbounds(2) = params.lb_max_value     ;
         return lbounds.createDeviceCopy();
       } else {
         return real1d();
@@ -109,8 +83,6 @@ namespace ponni {
       if (params.trainable) {
         realHost1d ubounds("Bias_ub",get_num_trainable_parameters());
         ubounds(0) = params.ub_negative_slope;
-        ubounds(1) = params.ub_threshold     ;
-        ubounds(2) = params.ub_max_value     ;
         return ubounds.createDeviceCopy();
       } else {
         return real1d();
@@ -119,8 +91,8 @@ namespace ponni {
     int get_num_inputs   () const { return params.num_inputs; }
     int get_num_outputs  () const { return params.num_inputs; }
     int get_num_ensembles() const { return params.negative_slope.extent(0); }
-    int get_num_trainable_parameters() const { return params.trainable ? 3 : 0; }
-    int get_array_representation_size() const { return 3*get_num_ensembles()+9; }
+    int get_num_trainable_parameters() const { return params.trainable ? 1 : 0; }
+    int get_array_representation_size() const { return 3*get_num_ensembles()+5; }
 
 
     YAKL_INLINE static void compute_all_outputs(real3d const &input, real3d const &output,
@@ -152,6 +124,12 @@ namespace ponni {
     }
 
 
+    real2d get_trainable_parameters() const {
+      if (params.trainable) return params.negative_slope.reshape(1,params.negative_slope.size());
+      return real2d();
+    }
+
+
     doubleHost1d to_array() const {
       doubleHost1d data("Relu_params",get_array_representation_size());
       int nens = get_num_ensembles();
@@ -160,17 +138,13 @@ namespace ponni {
       data(2) = params.trainable ? 1 : 0;
       data(3) = params.lb_negative_slope;
       data(4) = params.ub_negative_slope;
-      data(5) = params.lb_threshold     ;
-      data(6) = params.ub_threshold     ;
-      data(7) = params.lb_max_value     ;
-      data(8) = params.ub_max_value     ;
       auto negative_slope = params.negative_slope.createHostCopy();
       auto threshold      = params.threshold     .createHostCopy();
       auto max_value      = params.max_value     .createHostCopy();
       for (int i=0; i < nens; i++) {
-        data(9+0*nens+i) = negative_slope(i);
-        data(9+1*nens+i) = threshold     (i);
-        data(9+2*nens+i) = max_value     (i);
+        data(5+0*nens+i) = negative_slope(i);
+        data(5+1*nens+i) = threshold     (i);
+        data(5+2*nens+i) = max_value     (i);
       }
       return data;
     }
@@ -182,20 +156,16 @@ namespace ponni {
       bool trainable         = data(2) == 1;
       real lb_negative_slope = data(3);
       real ub_negative_slope = data(4);
-      real lb_threshold      = data(5);
-      real ub_threshold      = data(6);
-      real lb_max_value      = data(7);
-      real ub_max_value      = data(8);
       realHost1d negative_slope("Relu_negative_slope",nens);
       realHost1d threshold     ("Relu_threshold     ",nens);
       realHost1d max_value     ("Relu_max_value     ",nens);
       for (int i=0; i < nens; i++) {
-        negative_slope(i) = data(9       +i);
-        threshold     (i) = data(9+  nens+i);
-        max_value     (i) = data(9+2*nens+i);
+        negative_slope(i) = data(5       +i);
+        threshold     (i) = data(5+  nens+i);
+        max_value     (i) = data(5+2*nens+i);
       }
       init( num_inputs , negative_slope.createDeviceCopy() , threshold.createDeviceCopy() ,
-            max_value.createDeviceCopy() , trainable );
+            max_value.createDeviceCopy() , trainable , lb_negative_slope , ub_negative_slope );
     }
 
 

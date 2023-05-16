@@ -31,38 +31,41 @@ int main( int argc , char **argv ) {
     int num_batches = training_size / batch_size;
 
     // Create a model with no ensembles to get the total number of ensembles we'll need
-    int num_neurons = 10;
-    int num_ensembles = 1;
-    auto test = create_inference_model( Matvec<real>      ( real3d("",1,num_neurons,num_ensembles)           ) ,
-                                        Bias  <real>      ( real2d("",num_neurons,num_ensembles)             ) ,
-                                        Relu  <real>      ( num_neurons , num_ensembles , 0.1                ) ,
-                                        Save_State<0,real>( num_neurons                                      ) ,
-                                        Matvec<real>      ( real3d("",num_neurons,num_neurons,num_ensembles) ) ,
-                                        Bias  <real>      ( real2d("",num_neurons,num_ensembles)             ) ,
-                                        Binop_Add<0,real> ( num_neurons                                      ) ,
-                                        Matvec<real>      ( real3d("",num_neurons,1,num_ensembles)           ) ,
-                                        Bias  <real>      ( real2d("",1,num_ensembles)                       ) );
+    int  num_inputs          = 1;
+    int  num_outputs         = 1;
+    int  num_neurons         = 10;
+    int  num_ensembles       = 1;
+    real relu_negative_slope = 0.1;
+    auto test = create_inference_model( Matvec<real>      ( num_inputs,num_neurons,num_ensembles          ) ,
+                                        Bias  <real>      ( num_neurons,num_ensembles                     ) ,
+                                        Relu  <real>      ( num_neurons,num_ensembles,relu_negative_slope ) ,
+                                        Save_State<0,real>( num_neurons                                   ) ,
+                                        Matvec<real>      ( num_neurons,num_neurons,num_ensembles         ) ,
+                                        Bias  <real>      ( num_neurons,num_ensembles                     ) ,
+                                        Relu  <real>      ( num_neurons,num_ensembles,relu_negative_slope ) ,
+                                        Binop_Add<0,real> ( num_neurons                                   ) ,
+                                        Matvec<real>      ( num_neurons,num_outputs,num_ensembles         ) ,
+                                        Bias  <real>      ( num_outputs,num_ensembles                     ) );
     test.init( training_size , 1 );
 
     // Create the trainer
     auto num_parameters = test.get_num_trainable_parameters();
-    auto num_inputs = 1;
-    ponni::Trainer_GD_Adam_FD<real>  trainer( num_parameters , num_inputs );
-
+    ponni::Trainer_GD_Adam_FD<real> trainer( test.get_trainable_parameters().reshape(num_parameters) );
 
     // Initialize the model with the correct number of batches and ensembles
     num_ensembles = trainer.get_num_ensembles();
 
     // Create model with ensembles
-    auto model = create_inference_model( Matvec<real>      ( real3d("",1,num_neurons,num_ensembles)           ) ,
-                                         Bias  <real>      ( real2d("",num_neurons,num_ensembles)             ) ,
-                                         Relu  <real>      ( num_neurons , num_ensembles , 0.1                ) ,
-                                         Save_State<0,real>( num_neurons                                      ) ,
-                                         Matvec<real>      ( real3d("",num_neurons,num_neurons,num_ensembles) ) ,
-                                         Bias  <real>      ( real2d("",num_neurons,num_ensembles)             ) ,
-                                         Binop_Add<0,real> ( num_neurons                                      ) ,
-                                         Matvec<real>      ( real3d("",num_neurons,1,num_ensembles)           ) ,
-                                         Bias  <real>      ( real2d("",1,num_ensembles)                       ) );
+    auto model = create_inference_model( Matvec<real>      ( real3d("",num_inputs,num_neurons,num_ensembles)   ) ,
+                                         Bias  <real>      ( real2d("",num_neurons,num_ensembles)              ) ,
+                                         Relu  <real>      ( num_neurons , num_ensembles , relu_negative_slope ) ,
+                                         Save_State<0,real>( num_neurons                                       ) ,
+                                         Matvec<real>      ( real3d("",num_neurons,num_neurons,num_ensembles)  ) ,
+                                         Bias  <real>      ( real2d("",num_neurons,num_ensembles)              ) ,
+                                         Relu  <real>      ( num_neurons , num_ensembles , relu_negative_slope ) ,
+                                         Binop_Add<0,real> ( num_neurons                                       ) ,
+                                         Matvec<real>      ( real3d("",num_neurons,num_outputs,num_ensembles)  ) ,
+                                         Bias  <real>      ( real2d("",num_outputs,num_ensembles)              ) );
     model.init( batch_size , num_ensembles );
     model.print();
 

@@ -7,4 +7,5 @@ target_include_directories(ponni INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(ponni INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src/layers)
 target_include_directories(ponni INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src/trainers)
 target_include_directories(ponni INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src/utils)
+target_include_directories(ponni INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src/initializers)
 

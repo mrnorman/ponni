@@ -21,7 +21,7 @@ unset CXXFLAGS
 unset FFLAGS
 
 cmake -DYAKL_ARCH="CUDA"                         \
-      -DYAKL_CUDA_FLAGS="-I$HDF5_DIR/include -O3 --use_fast_math -ccbin mpic++ -arch=sm_86" \
+      -DYAKL_CUDA_FLAGS="-I$HDF5_DIR/include -O3 -ccbin mpic++ -arch=sm_86" \
       -DYAKL_DEBUG=OFF                           \
       -DYAKL_PROFILE=ON                          \
       -DYAKL_AUTO_PROFILE=ON                     \

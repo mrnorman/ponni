@@ -50,11 +50,11 @@ namespace ponni {
 
 
     // Create a Particle Swarm Trainer
-    Trainer_GD_Adam_FD( int  num_parameters  ,
-                        int  num_inputs = -1 ,
-                        real alpha = 0.001   ,
-                        real beta1 = 0.9     ,
-                        real beta2 = 0.999   ) {
+    Trainer_GD_Adam_FD( real1d parameters  ,
+                        real alpha = 0.001 ,
+                        real beta1 = 0.9   ,
+                        real beta2 = 0.999 ) {
+      int num_parameters = parameters.extent(0);
       this->num_updates = 0;
       this->alpha       = alpha;
       this->beta1       = beta1;
@@ -65,14 +65,7 @@ namespace ponni {
       this->v           = real1d("v",num_parameters);
       this->m           = 0;
       this->v           = 0;
-      this->parameters  = real1d("parameters",num_parameters);
-      std::random_device          rd {};
-      std::mt19937                gen {rd()};
-      gen.seed(2);
-      std::uniform_real_distribution<> d(-0.05,0.05);
-      auto parameters_host = parameters.createHostCopy();
-      for (int i=0; i < parameters.size(); i++) { parameters_host(i) = d(gen); }
-      this->parameters = parameters_host.createDeviceCopy();
+      this->parameters  = parameters;
     }
 
 
