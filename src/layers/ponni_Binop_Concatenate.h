@@ -7,7 +7,9 @@ namespace ponni {
   template <int N, class real = float>
   struct Binop_Concatenate {
     typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
+    typedef typename yakl::Array<real  ,1,yakl::memDevice> real1d;
     typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
+    typedef typename yakl::Array<real  ,3,yakl::memDevice> real3d;
     
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = true; // Use two inputs?
@@ -22,10 +24,9 @@ namespace ponni {
 
     Params params;
 
-    Binop_Concatenate() {}
-    Binop_Concatenate( int num_inputs , int num_outputs , bool after=true ) {
-      init( num_inputs , num_outputs , after);
-    }
+    Binop_Concatenate () = default;
+    ~Binop_Concatenate() = default;
+    Binop_Concatenate( int num_inputs , int num_outputs , bool after=true ) { init( num_inputs , num_outputs , after); }
 
 
     void init( int num_inputs , int num_outputs , bool after=true ) {
@@ -34,40 +35,43 @@ namespace ponni {
     }
 
 
-    char const * get_label         () const { return "Binop_Concatenate"; }
+    char const * get_label() const { return "Binop_Concatenate"; }
     YAKL_INLINE static int get_num_inputs (Params const &params_in) { return params_in.num_inputs ; }
     YAKL_INLINE static int get_num_outputs(Params const &params_in) { return params_in.num_outputs; }
+    YAKL_INLINE static int get_num_ensembles(Params const &params_in) { return 1; }
+    int    get_num_inputs               () const { return params.num_inputs ; }
+    int    get_num_outputs              () const { return params.num_outputs; }
+    int    get_num_ensembles            () const { return 1; }
+    int    get_num_trainable_parameters () const { return 0; }
+    int    get_array_representation_size() const { return 4; }
 
 
-    YAKL_INLINE static void compute_all_outputs(real2d const &input1, real2d const &input2, real2d const &output,
-                                         int ibatch, Params const &params_in) {
-      for (int irow = 0; irow < params_in.num_outputs; irow++) {
-        if (params_in.after) {
-          int num_inputs_1 = input1.extent(0);
-          output(irow,ibatch) = irow < num_inputs_1 ? input1(irow,ibatch) : input2(irow - num_inputs_1,ibatch);
-        } else {
-          int num_inputs_2 = input2.extent(0);
-          output(irow,ibatch) = irow < num_inputs_2 ? input2(irow,ibatch) : input1(irow - num_inputs_2,ibatch);
+    YAKL_INLINE static void compute_all_outputs(real3d const &input1, real3d const &input2, real3d const &output,
+                                                int ibatch, int iens, Params const &params_in) {
+      if (params_in.after) {
+        int num_inputs_1 = input1.extent(0);
+        for (int irow = 0; irow < params_in.num_outputs; irow++) {
+          output(irow,ibatch,iens) = irow < num_inputs_1 ? input1(irow,ibatch,iens) : input2(irow - num_inputs_1,ibatch,iens);
+        }
+      } else {
+        int num_inputs_2 = input2.extent(0);
+        for (int irow = 0; irow < params_in.num_outputs; irow++) {
+          output(irow,ibatch,iens) = irow < num_inputs_2 ? input2(irow,ibatch,iens) : input1(irow - num_inputs_2,ibatch,iens);
         }
       }
     }
 
 
-    void print_verbose() const {
-      std::cout << "    concatenating saved index, " << index << ", onto the previous layer's output\n";
-    }
+    void set_trainable_parameters(real2d const &in, bool fence = true) { if (fence) yakl::fence(); }
 
 
-    int get_num_trainable_parameters() const { return 0; }
-
-
-    int get_array_representation_size() const { return 4; }
+    real2d get_trainable_parameters() const { return real2d(); }
 
 
     doubleHost1d to_array() const {
-      doubleHost1d data("Binop_Concatenate_params",4);
-      data(0) = params.num_inputs;
-      data(1) = params.num_outputs;
+      doubleHost1d data("Binop_Concatenate_params",get_array_representation_size());
+      data(0) = get_num_inputs ();
+      data(1) = get_num_outputs();
       data(2) = params.after ? 1 : 0;
       data(3) = N;
       return data;

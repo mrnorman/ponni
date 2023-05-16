@@ -50,7 +50,7 @@ int main( int argc , char **argv ) {
                                              bias_5                         );
                                                    
     inference.validate();
-    inference.print_verbose();
+    inference.print();
 
     yakl::Array<float,2,yakl::memHost,yakl::styleC> inputs("inputs",12,1);
     inputs( 0,0) = 5.0881004e-01;

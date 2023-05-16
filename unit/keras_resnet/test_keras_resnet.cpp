@@ -75,7 +75,6 @@ int main( int argc , char **argv ) {
                     Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense_9/dense_9" , "bias:0"   ) ) );
 
     model.validate();
-    // model.print_verbose();
     model.print();
     auto model_as_array = model.represent_as_array();
     model.set_layers_from_array_representation( model_as_array );
@@ -154,27 +153,28 @@ int main( int argc , char **argv ) {
                                        0.74753839,0.74756271,0.74750465,0.74751884,0.74753231,0.74750185,
                                        0.74752432,0.74751109,0.74751288,0.74754196,0.74753088,0.74754441,
                                        0.74752563,0.74750173,0.74751961,0.51605195,0.44940680};
-      yakl::Array<float,2,yakl::memHost> inputs_host("inputs",datavec.data(),137,1);
+      yakl::Array<float,3,yakl::memHost> inputs_host("inputs",datavec.data(),137,1,1);
       auto inputs = inputs_host.createDeviceCopy();
 
-      model.set_batch_size( 1 );
-      yakl::Array<float,2,yakl::memDevice> outputs("outputs",5,1);
-      yakl::c::parallel_for( 1 , YAKL_LAMBDA (int ibatch) {
-        model.forward_in_kernel( inputs , outputs , model.params , ibatch );
+      model.init( 1 , 1 );
+      yakl::Array<float,3,yakl::memDevice> outputs("outputs",5,1,1);
+      yakl::c::parallel_for( YAKL_AUTO_LABEL() , yakl::c::SimpleBounds<2>(1,1) ,
+                                                 YAKL_LAMBDA (int ibatch, int iens) {
+        model.forward_in_kernel( inputs , outputs , model.params , ibatch , iens );
       });
       auto out_host = outputs.createHostCopy();
 
-      std::cout << "Absolute difference for Output 1: " << std::abs( out_host(0,0) - 0.50536489 ) << std::endl;
-      std::cout << "Absolute difference for Output 2: " << std::abs( out_host(1,0) - 0.54642177 ) << std::endl;
-      std::cout << "Absolute difference for Output 3: " << std::abs( out_host(2,0) - 0.54819602 ) << std::endl;
-      std::cout << "Absolute difference for Output 4: " << std::abs( out_host(3,0) - 0.43084893 ) << std::endl;
-      std::cout << "Absolute difference for Output 5: " << std::abs( out_host(4,0) - 0.52051890 ) << std::endl;
+      std::cout << "Absolute difference for Output 1: " << std::abs( out_host(0,0,0) - 0.50536489 ) << std::endl;
+      std::cout << "Absolute difference for Output 2: " << std::abs( out_host(1,0,0) - 0.54642177 ) << std::endl;
+      std::cout << "Absolute difference for Output 3: " << std::abs( out_host(2,0,0) - 0.54819602 ) << std::endl;
+      std::cout << "Absolute difference for Output 4: " << std::abs( out_host(3,0,0) - 0.43084893 ) << std::endl;
+      std::cout << "Absolute difference for Output 5: " << std::abs( out_host(4,0,0) - 0.52051890 ) << std::endl;
 
-      if ( std::abs( out_host(0,0) - 0.50536489 ) > 1.e-6 ) yakl::yakl_throw("ERROR Output 1 diff too large");
-      if ( std::abs( out_host(1,0) - 0.54642177 ) > 1.e-6 ) yakl::yakl_throw("ERROR Output 2 diff too large");
-      if ( std::abs( out_host(2,0) - 0.54819602 ) > 1.e-6 ) yakl::yakl_throw("ERROR Output 3 diff too large");
-      if ( std::abs( out_host(3,0) - 0.43084893 ) > 1.e-6 ) yakl::yakl_throw("ERROR Output 4 diff too large");
-      if ( std::abs( out_host(4,0) - 0.52051890 ) > 1.e-6 ) yakl::yakl_throw("ERROR Output 5 diff too large");
+      if ( std::abs( out_host(0,0,0) - 0.50536489 ) > 1.e-6 ) yakl::yakl_throw("ERROR Output 1 diff too large");
+      if ( std::abs( out_host(1,0,0) - 0.54642177 ) > 1.e-6 ) yakl::yakl_throw("ERROR Output 2 diff too large");
+      if ( std::abs( out_host(2,0,0) - 0.54819602 ) > 1.e-6 ) yakl::yakl_throw("ERROR Output 3 diff too large");
+      if ( std::abs( out_host(3,0,0) - 0.43084893 ) > 1.e-6 ) yakl::yakl_throw("ERROR Output 4 diff too large");
+      if ( std::abs( out_host(4,0,0) - 0.52051890 ) > 1.e-6 ) yakl::yakl_throw("ERROR Output 5 diff too large");
     }
 
   }

@@ -7,7 +7,9 @@ namespace ponni {
   template <int N, class real = float>
   struct Save_State {
     typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
+    typedef typename yakl::Array<real  ,1,yakl::memDevice> real1d;
     typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
+    typedef typename yakl::Array<real  ,3,yakl::memDevice> real3d;
     
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?
@@ -21,10 +23,9 @@ namespace ponni {
 
     Params params;
 
-    Save_State() {}
-    Save_State( int num_inputs ) {
-      init( num_inputs );
-    }
+    Save_State () = default;
+    ~Save_State() = default;
+    Save_State( int num_inputs ) { init( num_inputs ); }
 
 
     void init( int num_inputs ) {
@@ -33,32 +34,34 @@ namespace ponni {
     }
 
 
-    char const * get_label         () const { return "Save_State"; }
-    YAKL_INLINE static int get_num_inputs (Params const &params_in) { return params_in.num_inputs ; }
-    YAKL_INLINE static int get_num_outputs(Params const &params_in) { return params_in.num_outputs; }
+    char const * get_label() const { return "Save_State"; }
+    YAKL_INLINE static int get_num_inputs   (Params const &params_in) { return params_in.num_inputs ; }
+    YAKL_INLINE static int get_num_outputs  (Params const &params_in) { return params_in.num_outputs; }
+    YAKL_INLINE static int get_num_ensembles(Params const &params_in) { return 1; }
+    int    get_num_inputs               () const { return params.num_inputs ; }
+    int    get_num_outputs              () const { return params.num_outputs; }
+    int    get_num_ensembles            () const { return 1; }
+    int    get_num_trainable_parameters () const { return 0; }
+    int    get_array_representation_size() const { return 2; }
 
 
-    YAKL_INLINE static void compute_all_outputs(real2d const &input, real2d const &output, int ibatch, Params const &params_in) {
+    YAKL_INLINE static void compute_all_outputs(real3d const &input, real3d const &output,
+                                                int ibatch, int iens, Params const &params_in) {
       for (int irow = 0; irow < params_in.num_outputs; irow++) {
-        output(irow,ibatch) = input(irow,ibatch);
+        output(irow,ibatch,iens) = input(irow,ibatch,iens);
       }
     }
 
 
-    void print_verbose() const {
-      std::cout << "    saving into index: " << index << "\n";
-    }
+    void set_trainable_parameters(real2d const &in, bool fence = true) { if (fence) yakl::fence(); }
 
 
-    int get_num_trainable_parameters() const { return 0; }
-
-
-    int get_array_representation_size() const { return 2; }
+    real2d get_trainable_parameters() const { return real2d(); }
 
 
     doubleHost1d to_array() const {
-      doubleHost1d data("Save_State_params",2);
-      data(0) = params.num_inputs;
+      doubleHost1d data("Save_State_params",get_array_representation_size());
+      data(0) = get_num_inputs();
       data(1) = N;
       return data;
     }
