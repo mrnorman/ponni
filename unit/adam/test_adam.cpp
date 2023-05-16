@@ -116,6 +116,9 @@ int main( int argc , char **argv ) {
                 << sum(abs( training_outputs - test_output )) / training_outputs.size() << std::endl;
     }
 
+    std::cout << test.get_layer<2>().params.negative_slope;
+    std::cout << test.get_layer<6>().params.negative_slope;
+
     if (! trainer.parameters_identical_across_tasks()) yakl::yakl_throw("ERROR: parameters are not the same");
   }
   yakl::finalize();

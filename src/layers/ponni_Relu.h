@@ -43,26 +43,26 @@ namespace ponni {
 
     void init( int num_inputs , int num_ensembles=1 , real negative_slope=0 , real threshold=0 ,
                real max_value=huge , bool trainable=false , real lb_negative_slope = 0 , real ub_negative_slope = 1 ) {
-      params.num_inputs        = num_inputs                     ;
+      params.num_inputs        = num_inputs       ;
       params.negative_slope    = real1d("Relu_negative_slope",num_ensembles);
       params.threshold         = real1d("Relu_threshold"     ,num_ensembles);
       params.max_value         = real1d("Relu_max_value"     ,num_ensembles);
-      params.negative_slope    = negative_slope                 ;
-      params.threshold         = threshold                      ;
-      params.max_value         = max_value                      ;
-      params.trainable         = trainable                      ;
-      params.lb_negative_slope = lb_negative_slope              ;
-      params.ub_negative_slope = ub_negative_slope              ;
+      params.negative_slope    = negative_slope   ;
+      params.threshold         = threshold        ;
+      params.max_value         = max_value        ;
+      params.trainable         = trainable        ;
+      params.lb_negative_slope = lb_negative_slope;
+      params.ub_negative_slope = ub_negative_slope;
     }
     void init( int num_inputs , real1d negative_slope , real1d threshold ,  real1d max_value , bool trainable=false ,
                real lb_negative_slope = 0 , real ub_negative_slope = 1 ) {
-      params.num_inputs        = num_inputs                     ;
-      params.negative_slope    = negative_slope                 ;
-      params.threshold         = threshold                      ;
-      params.max_value         = max_value                      ;
-      params.trainable         = trainable                      ;
-      params.lb_negative_slope = lb_negative_slope              ;
-      params.ub_negative_slope = ub_negative_slope              ;
+      params.num_inputs        = num_inputs       ;
+      params.negative_slope    = negative_slope   ;
+      params.threshold         = threshold        ;
+      params.max_value         = max_value        ;
+      params.trainable         = trainable        ;
+      params.lb_negative_slope = lb_negative_slope;
+      params.ub_negative_slope = ub_negative_slope;
     }
 
 
