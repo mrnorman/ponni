@@ -19,8 +19,6 @@ namespace ponni {
     struct Params {
       real2d weights;
       bool   trainable;
-      real   lb;
-      real   ub;
     };
 
     Params params;
@@ -28,29 +26,25 @@ namespace ponni {
     Bias () = default;
     ~Bias() = default;
     template < class INIT = Initializer_Random_Uniform<real> >
-    Bias( int num_inputs , int num_ensembles = 1 , bool trainable = true , real lb = -2 , real ub = 2 ,
+    Bias( int num_inputs , int num_ensembles = 1 , bool trainable = true ,
           INIT initializer = Initializer_Random_Uniform<real>() ) {
       real2d weights("Bias_weights",num_inputs,num_ensembles);
       initializer.fill( weights );
-      init(weights,trainable,lb,ub);
+      init(weights,trainable);
     }
-    Bias( real1d const &weights , bool trainable=true , real lb=-2 , real ub=2 ) { init(weights,trainable,lb,ub); }
-    Bias( real2d const &weights , bool trainable=true , real lb=-2 , real ub=2 ) { init(weights,trainable,lb,ub); }
+    Bias( real1d const &weights , bool trainable=true ) { init(weights,trainable); }
+    Bias( real2d const &weights , bool trainable=true ) { init(weights,trainable); }
 
 
-    void init( real1d const &weights , bool trainable=true , real lb=-2, real ub=2 ) {
+    void init( real1d const &weights , bool trainable=true ) {
       if ( ! weights.initialized() ) yakl::yakl_throw("ERROR: Bias weights vector not initialized");
       params.weights   = weights.reshape(weights.extent(0),1);
       params.trainable = trainable;
-      params.lb        = lb;
-      params.ub        = ub;
     }
-    void init( real2d const &weights , bool trainable=true , real lb=-2, real ub=2 ) {
+    void init( real2d const &weights , bool trainable=true ) {
       if ( ! weights.initialized() ) yakl::yakl_throw("ERROR: Bias weights vector not initialized");
       params.weights   = weights;
       params.trainable = trainable;
-      params.lb        = lb;
-      params.ub        = ub;
     }
 
 
@@ -58,13 +52,11 @@ namespace ponni {
     YAKL_INLINE static int get_num_inputs   (Params const &params_in) { return params_in.weights.extent(0); }
     YAKL_INLINE static int get_num_outputs  (Params const &params_in) { return params_in.weights.extent(0); }
     YAKL_INLINE static int get_num_ensembles(Params const &params_in) { return params_in.weights.extent(1); }
-    real1d get_lbounds() const { real1d ret("Bias_lb",get_num_trainable_parameters());  ret = params.lb;  return ret; }
-    real1d get_ubounds() const { real1d ret("Bias_ub",get_num_trainable_parameters());  ret = params.ub;  return ret; }
     int get_num_inputs   () const { return params.weights.extent(0); }
     int get_num_outputs  () const { return params.weights.extent(0); }
     int get_num_ensembles() const { return params.weights.extent(1); }
     int get_num_trainable_parameters() const { return params.trainable ? params.weights.extent(0) : 0; }
-    int get_array_representation_size() const { return params.weights.size() + 5; }
+    int get_array_representation_size() const { return params.weights.size() + 3; }
 
 
     YAKL_INLINE static void compute_all_outputs(real3d const &input, real3d const &output,
@@ -97,10 +89,8 @@ namespace ponni {
       data(0) = get_num_inputs   ();
       data(1) = get_num_ensembles();
       data(2) = params.trainable ? 1 : 0;
-      data(3) = params.lb;
-      data(4) = params.ub;
       auto weights = params.weights.createHostCopy().collapse();
-      for (int i=0; i < weights.size(); i++) { data(5+i) = weights(i); }
+      for (int i=0; i < weights.size(); i++) { data(3+i) = weights(i); }
       return data;
     }
 
@@ -109,11 +99,9 @@ namespace ponni {
       int  num_inputs    = data(0);
       int  num_ensembles = data(1);
       bool trainable     = data(2) == 1;
-      real lb            = data(3);
-      real ub            = data(4);
       realHost1d weights("Bias_weights",num_inputs*num_ensembles);
-      for (int i=0; i < num_inputs*num_ensembles; i++) { weights(i) = data(5+i); }
-      init( weights.createDeviceCopy().reshape(num_inputs,num_ensembles) , trainable , lb , ub );
+      for (int i=0; i < num_inputs*num_ensembles; i++) { weights(i) = data(3+i); }
+      init( weights.createDeviceCopy().reshape(num_inputs,num_ensembles) , trainable );
     }
 
 

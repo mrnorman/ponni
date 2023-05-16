@@ -28,7 +28,6 @@ namespace ponni {
 #include "utils/ponni_shuffle.h"
 #include "ponni_Inference.h"
 #include "ponni_create_model.h"
-#include "trainers/ponni_Trainer_PSO.h"
 #include "trainers/ponni_Trainer_GD_Adam_FD.h"
 
 
