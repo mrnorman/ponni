@@ -328,13 +328,15 @@ namespace ponni {
 
     // Set the model layers' trainable parameters. Input dimensioned as (num_parameters,num_ensembles)
     template <int I=0>
-    real2d get_trainable_parameters(bool fence = false , real1d params_glob = real1d() , int offset = 0) const {
+    real2d get_trainable_parameters(real1d params_glob = real1d() , int offset = 0) const {
       if constexpr (I == 0) params_glob = real1d("params_glob",get_num_trainable_parameters()*get_num_ensembles());
       auto params_loc = std::get<I>(params.layers).get_trainable_parameters();
-      auto arr = params_glob.subset_slowest_dimension(offset,offset+params_loc.size()-1);
-      if (params_loc.size() > 0) params_loc.deep_copy_to(arr);
-      offset += params_loc.size();
-      if constexpr (I < num_layers-1) { return get_trainable_parameters<I+1>( fence , params_glob , offset ); }
+      if (params_loc.initialized()) {
+        auto arr = params_glob.subset_slowest_dimension(offset,offset+params_loc.size()-1);
+        params_loc.deep_copy_to(arr);
+        offset += params_loc.size();
+      }
+      if constexpr (I < num_layers-1) { return get_trainable_parameters<I+1>( params_glob , offset ); }
       else                            { return params_glob.reshape(get_num_trainable_parameters(),get_num_ensembles()); }
     }
 

@@ -28,9 +28,8 @@ namespace ponni {
     Matvec () = default;
     ~Matvec() = default;
     template < class INIT = Initializer_Random_Uniform<real> >
-    Matvec( int num_inputs , int num_outputs , int num_ensembles = 1 ,
-            INIT initializer = Initializer_Random_Uniform<real>() , bool trainable = true , real lb = -2 ,
-            real ub = 2 ) {
+    Matvec( int num_inputs , int num_outputs , int num_ensembles = 1 , bool trainable = true , real lb = -2 , real ub = 2 ,
+            INIT initializer = Initializer_Random_Uniform<real>() ) {
       real3d weights("Bias_weights",num_inputs,num_outputs,num_ensembles);
       initializer.fill( weights );
       init(weights,trainable,lb,ub);

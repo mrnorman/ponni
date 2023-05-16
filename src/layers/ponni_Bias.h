@@ -28,8 +28,8 @@ namespace ponni {
     Bias () = default;
     ~Bias() = default;
     template < class INIT = Initializer_Random_Uniform<real> >
-    Bias( int num_inputs , int num_ensembles = 1 , INIT initializer = Initializer_Random_Uniform<real>() ,
-          bool trainable = true , real lb = -2 , real ub = 2 ) {
+    Bias( int num_inputs , int num_ensembles = 1 , bool trainable = true , real lb = -2 , real ub = 2 ,
+          INIT initializer = Initializer_Random_Uniform<real>() ) {
       real2d weights("Bias_weights",num_inputs,num_ensembles);
       initializer.fill( weights );
       init(weights,trainable,lb,ub);

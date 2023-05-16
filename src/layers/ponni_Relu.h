@@ -114,11 +114,8 @@ namespace ponni {
 
     void set_trainable_parameters(real2d const &in, bool fence = true) {
       if (params.trainable) {
-        int nens = get_num_ensembles();
         auto tmp = in.collapse();
-        tmp.subset_slowest_dimension(0*nens,1*nens-1).deep_copy_to(params.negative_slope);
-        tmp.subset_slowest_dimension(1*nens,2*nens-1).deep_copy_to(params.threshold     );
-        tmp.subset_slowest_dimension(2*nens,3*nens-1).deep_copy_to(params.max_value     );
+        tmp.subset_slowest_dimension(get_num_ensembles()).deep_copy_to(params.negative_slope);
       }
       if (fence) yakl::fence();
     }

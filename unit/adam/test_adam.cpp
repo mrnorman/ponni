@@ -36,13 +36,15 @@ int main( int argc , char **argv ) {
     int  num_neurons         = 10;
     int  num_ensembles       = 1;
     real relu_negative_slope = 0.1;
+    real relu_threshold      = 0;
+    real relu_max_value      = std::numeric_limits<real>::max();
     auto test = create_inference_model( Matvec<real>      ( num_inputs,num_neurons,num_ensembles          ) ,
                                         Bias  <real>      ( num_neurons,num_ensembles                     ) ,
-                                        Relu  <real>      ( num_neurons,num_ensembles,relu_negative_slope ) ,
+                                        Relu  <real>      ( num_neurons,num_ensembles,relu_negative_slope,relu_threshold,relu_max_value,true ) ,
                                         Save_State<0,real>( num_neurons                                   ) ,
                                         Matvec<real>      ( num_neurons,num_neurons,num_ensembles         ) ,
                                         Bias  <real>      ( num_neurons,num_ensembles                     ) ,
-                                        Relu  <real>      ( num_neurons,num_ensembles,relu_negative_slope ) ,
+                                        Relu  <real>      ( num_neurons,num_ensembles,relu_negative_slope,relu_threshold,relu_max_value,true ) ,
                                         Binop_Add<0,real> ( num_neurons                                   ) ,
                                         Matvec<real>      ( num_neurons,num_outputs,num_ensembles         ) ,
                                         Bias  <real>      ( num_outputs,num_ensembles                     ) );
@@ -56,16 +58,16 @@ int main( int argc , char **argv ) {
     num_ensembles = trainer.get_num_ensembles();
 
     // Create model with ensembles
-    auto model = create_inference_model( Matvec<real>      ( real3d("",num_inputs,num_neurons,num_ensembles)   ) ,
-                                         Bias  <real>      ( real2d("",num_neurons,num_ensembles)              ) ,
-                                         Relu  <real>      ( num_neurons , num_ensembles , relu_negative_slope ) ,
-                                         Save_State<0,real>( num_neurons                                       ) ,
-                                         Matvec<real>      ( real3d("",num_neurons,num_neurons,num_ensembles)  ) ,
-                                         Bias  <real>      ( real2d("",num_neurons,num_ensembles)              ) ,
-                                         Relu  <real>      ( num_neurons , num_ensembles , relu_negative_slope ) ,
-                                         Binop_Add<0,real> ( num_neurons                                       ) ,
-                                         Matvec<real>      ( real3d("",num_neurons,num_outputs,num_ensembles)  ) ,
-                                         Bias  <real>      ( real2d("",num_outputs,num_ensembles)              ) );
+    auto model = create_inference_model( Matvec<real>      ( num_inputs,num_neurons,num_ensembles          ) ,
+                                         Bias  <real>      ( num_neurons,num_ensembles                     ) ,
+                                         Relu  <real>      ( num_neurons,num_ensembles,relu_negative_slope,relu_threshold,relu_max_value,true ) ,
+                                         Save_State<0,real>( num_neurons                                   ) ,
+                                         Matvec<real>      ( num_neurons,num_neurons,num_ensembles         ) ,
+                                         Bias  <real>      ( num_neurons,num_ensembles                     ) ,
+                                         Relu  <real>      ( num_neurons,num_ensembles,relu_negative_slope,relu_threshold,relu_max_value,true ) ,
+                                         Binop_Add<0,real> ( num_neurons                                   ) ,
+                                         Matvec<real>      ( num_neurons,num_outputs,num_ensembles         ) ,
+                                         Bias  <real>      ( num_outputs,num_ensembles                     ) );
     model.init( batch_size , num_ensembles );
     model.print();
 
