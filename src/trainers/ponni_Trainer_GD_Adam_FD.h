@@ -50,9 +50,9 @@ namespace ponni {
 
     // Create a Particle Swarm Trainer
     Trainer_GD_Adam_FD( real1d parameters  ,
-                        real alpha = 0.001 ,
-                        real beta1 = 0.9   ,
-                        real beta2 = 0.999 ) {
+                        real alpha = static_cast<real>(0.001) ,
+                        real beta1 = static_cast<real>(0.9  ) ,
+                        real beta2 = static_cast<real>(0.999) ) {
       int num_parameters = parameters.extent(0);
       this->num_updates = 0;
       this->alpha       = alpha;
