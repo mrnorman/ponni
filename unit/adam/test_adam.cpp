@@ -35,16 +35,17 @@ int main( int argc , char **argv ) {
     int  num_outputs         = 1;
     int  num_neurons         = 10;
     int  num_ensembles       = 1;
-    real relu_negative_slope = 0.1;
+    real relu_negative_slope = 0.3;
     real relu_threshold      = 0;
     real relu_max_value      = std::numeric_limits<real>::max();
+    bool relu_trainable      = false;
     auto test = create_inference_model( Matvec<real>      ( num_inputs,num_neurons,num_ensembles          ) ,
                                         Bias  <real>      ( num_neurons,num_ensembles                     ) ,
-                                        Relu  <real>      ( num_neurons,num_ensembles,relu_negative_slope,relu_threshold,relu_max_value,true ) ,
+                                        Relu  <real>      ( num_neurons,num_ensembles,relu_negative_slope,relu_threshold,relu_max_value,relu_trainable ) ,
                                         Save_State<0,real>( num_neurons                                   ) ,
                                         Matvec<real>      ( num_neurons,num_neurons,num_ensembles         ) ,
                                         Bias  <real>      ( num_neurons,num_ensembles                     ) ,
-                                        Relu  <real>      ( num_neurons,num_ensembles,relu_negative_slope,relu_threshold,relu_max_value,true ) ,
+                                        Relu  <real>      ( num_neurons,num_ensembles,relu_negative_slope,relu_threshold,relu_max_value,relu_trainable ) ,
                                         Binop_Add<0,real> ( num_neurons                                   ) ,
                                         Matvec<real>      ( num_neurons,num_outputs,num_ensembles         ) ,
                                         Bias  <real>      ( num_outputs,num_ensembles                     ) );
@@ -60,11 +61,11 @@ int main( int argc , char **argv ) {
     // Create model with ensembles
     auto model = create_inference_model( Matvec<real>      ( num_inputs,num_neurons,num_ensembles          ) ,
                                          Bias  <real>      ( num_neurons,num_ensembles                     ) ,
-                                         Relu  <real>      ( num_neurons,num_ensembles,relu_negative_slope,relu_threshold,relu_max_value,true ) ,
+                                         Relu  <real>      ( num_neurons,num_ensembles,relu_negative_slope,relu_threshold,relu_max_value,relu_trainable ) ,
                                          Save_State<0,real>( num_neurons                                   ) ,
                                          Matvec<real>      ( num_neurons,num_neurons,num_ensembles         ) ,
                                          Bias  <real>      ( num_neurons,num_ensembles                     ) ,
-                                         Relu  <real>      ( num_neurons,num_ensembles,relu_negative_slope,relu_threshold,relu_max_value,true ) ,
+                                         Relu  <real>      ( num_neurons,num_ensembles,relu_negative_slope,relu_threshold,relu_max_value,relu_trainable ) ,
                                          Binop_Add<0,real> ( num_neurons                                   ) ,
                                          Matvec<real>      ( num_neurons,num_outputs,num_ensembles         ) ,
                                          Bias  <real>      ( num_outputs,num_ensembles                     ) );
@@ -75,7 +76,7 @@ int main( int argc , char **argv ) {
     real2d model_input("model_input",batch_size,num_ensembles);
 
     // Train the model
-    int num_epochs = 5;
+    int num_epochs = 20;
     yakl::timer_start("training_time");
     for (int iepoch = 0; iepoch < num_epochs; iepoch++) {
       ponni::shuffle_training_data( training_inputs .reshape(1,training_size) ,
@@ -97,7 +98,7 @@ int main( int argc , char **argv ) {
           int prod = batch_id*batch_size;
           for (int ibatch = 0; ibatch < batch_size; ibatch++) {
             int  ibatch_glob = std::min(training_size-1,prod + ibatch);
-            real diff = model_output(ibatch,iens) - training_outputs(ibatch_glob);
+            real diff = abs( model_output(ibatch,iens) - training_outputs(ibatch_glob) );
             l += diff*diff;
           }
           loss(iens) = l * r_batch_size;
@@ -105,21 +106,22 @@ int main( int argc , char **argv ) {
         trainer.update_from_ensemble( ensemble );
       } // ibatch
       trainer.increment_epoch();
+      {
+        test.set_trainable_parameters( trainer.get_parameters().reshape(num_parameters,1) );
+        auto test_output = test.forward_batch_parallel( training_inputs.reshape(1,training_size,1) ).reshape(training_size);
+        using yakl::componentwise::operator-;
+        using yakl::componentwise::operator*;
+        using yakl::intrinsics::abs;
+        using yakl::intrinsics::sum;
+        auto adiff = abs( training_outputs - test_output );
+        std::cout << "Epoch: " << std::setw(5) << iepoch+1 << " ,  MAE: "
+                  << std::setw(12) << std::scientific << sum(adiff) / training_outputs.size() << " ,  MSE: "
+                  << std::setw(12) << std::scientific << sum(adiff*adiff) / training_outputs.size() 
+                  << std::defaultfloat << std::endl;
+      }
       // std::cout << "Epoch: " << iepoch << "\n";
     }
     yakl::timer_stop("training_time");
-    {
-      test.set_trainable_parameters( trainer.get_parameters().reshape(num_parameters,1) );
-      auto test_output = test.forward_batch_parallel( training_inputs.reshape(1,training_size,1) ).reshape(training_size);
-      using yakl::componentwise::operator-;
-      using yakl::intrinsics::abs;
-      using yakl::intrinsics::sum;
-      std::cout << "MAE: "
-                << sum(abs( training_outputs - test_output )) / training_outputs.size() << std::endl;
-    }
-
-    std::cout << test.get_layer<2>().params.negative_slope;
-    std::cout << test.get_layer<6>().params.negative_slope;
 
     if (! trainer.parameters_identical_across_tasks()) yakl::yakl_throw("ERROR: parameters are not the same");
   }

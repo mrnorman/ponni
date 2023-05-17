@@ -343,36 +343,6 @@ namespace ponni {
 
 
 
-    template <int I=0>
-    real1d get_lbounds( real1d lbounds = real1d() , int offset = 0 ) {
-      if constexpr (I == 0) lbounds = real1d("lbounds",get_num_trainable_parameters());
-      auto &layer = std::get<I>(params.layers);
-      auto lbounds_layer = layer.get_lbounds();
-      if (lbounds_layer.initialized()) {
-        lbounds_layer.deep_copy_to(lbounds.subset_slowest_dimension(offset,offset+lbounds_layer.size()-1));
-        offset += lbounds_layer.size();
-      }
-      if constexpr (I < num_layers-1) { return get_lbounds<I+1>( lbounds , offset ); }
-      else                            { return lbounds; }
-    }
-
-
-
-    template <int I=0>
-    real1d get_ubounds( real1d ubounds = real1d() , int offset = 0 ) {
-      if constexpr (I == 0) ubounds = real1d("ubounds",get_num_trainable_parameters());
-      auto &layer = std::get<I>(params.layers);
-      auto ubounds_layer = layer.get_ubounds();
-      if (ubounds_layer.initialized()) {
-        ubounds_layer.deep_copy_to(ubounds.subset_slowest_dimension(offset,offset+ubounds_layer.size()-1));
-        offset += ubounds_layer.size();
-      }
-      if constexpr (I < num_layers-1) { return get_ubounds<I+1>( ubounds , offset ); }
-      else                            { return ubounds; }
-    }
-
-
-
 
     // Get the total number of double precision elements needed to store this model in a flattened array representation
     template <int I=0>

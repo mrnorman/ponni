@@ -2,7 +2,6 @@
 #pragma once
 
 #include <algorithm>
-#include <random>
 #include <map>
 
 namespace ponni {
@@ -87,12 +86,7 @@ namespace ponni {
       using yakl::c::SimpleBounds;
       YAKL_SCOPE( parameters , this->parameters );
       auto num_parameters = get_num_parameters();
-      std::random_device rd;
-      std::mt19937 gen(rd());
-      gen.seed(get_num_updates());
-      std::uniform_real_distribution<> d(eps*10,eps*20);
-      real delta = d(gen);
-      // Create parameter ensemble
+      real delta = eps*10;
       int ensemble_size = num_parameters+1;
       real2d ensemble_parameters("ensemble_parameters",num_parameters,ensemble_size);
       real1d ensemble_loss      ("ensemble_loss"                     ,ensemble_size);
