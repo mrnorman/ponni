@@ -127,7 +127,7 @@ namespace ponni {
         v(iparam) = beta2 * v(iparam) + (1-beta2) * g*g;
         real mhat = m(iparam)/(1-beta1_pow);
         real vhat = v(iparam)/(1-beta2_pow);
-        parameters(iparam) -= alpha * mhat / std::max( sqrt(vhat) , static_cast<real>(1.e-10) );
+        parameters(iparam) -= alpha * mhat / std::max( std::sqrt(vhat) , static_cast<real>(1.e-10) );
       });
       num_updates++;
     }

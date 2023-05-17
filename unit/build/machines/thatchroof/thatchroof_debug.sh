@@ -21,10 +21,10 @@ unset CXXFLAGS
 unset FFLAGS
 
 cmake -DYAKL_CXX_FLAGS="-I$HDF5_DIR/include -O0 -g" \
-      -DYAKL_DEBUG=ON                               \
-      -DYAKL_HAVE_MPI=ON                            \
-      -DYAKL_PROFILE=ON                             \
-      -DYAKL_F90_FLAGS="-O0 -g"                     \
-      -DHDF5_LINK_FLAGS="-L$HDF5_DIR/lib -lhdf5"    \
+      -DYAKL_DEBUG=ON                                  \
+      -DYAKL_HAVE_MPI=ON                               \
+      -DYAKL_PROFILE=ON                                \
+      -DYAKL_F90_FLAGS="-O0 -g"                        \
+      -DHDF5_LINK_FLAGS="-L$HDF5_DIR/lib -lhdf5"       \
       ..
 

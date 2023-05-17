@@ -64,7 +64,7 @@ namespace ponni {
     }
 
 
-    void set_trainable_parameters(real2d const &in, bool fence = true) { if (fence) yakl::fence(); }
+    void set_trainable_parameters(real2d const &in) { }
 
 
     real2d get_trainable_parameters() const { return real2d(); }

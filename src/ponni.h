@@ -22,6 +22,7 @@ namespace ponni {
 #include "layers/ponni_Matvec.h"
 #include "layers/ponni_Bias.h"
 #include "layers/ponni_Relu.h"
+#include "layers/ponni_Relu_trainable.h"
 #include "layers/ponni_Save_State.h"
 #include "layers/ponni_Binop_Add.h"
 #include "layers/ponni_Binop_Concatenate.h"

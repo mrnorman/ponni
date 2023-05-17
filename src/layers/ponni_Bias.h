@@ -69,12 +69,11 @@ namespace ponni {
     }
 
 
-    void set_trainable_parameters(real2d const &in, bool fence = true) {
+    void set_trainable_parameters(real2d const &in) {
       if (params.trainable) {
         auto tmp = in.collapse();
         tmp.subset_slowest_dimension(params.weights.size()).deep_copy_to(params.weights);
       }
-      if (fence) yakl::fence();
     }
 
 

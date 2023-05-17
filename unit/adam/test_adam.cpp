@@ -19,7 +19,7 @@ int main( int argc , char **argv ) {
     typedef yakl::Array<real,3,yakl::memDevice> real3d;
 
     // Create training data
-    int training_size = 1024*1024*10;
+    int training_size = 1024;
     real1d training_inputs ("training_inputs" ,training_size);
     real1d training_outputs("training_outputs",training_size);
     parallel_for( YAKL_AUTO_LABEL() , training_size , YAKL_LAMBDA (int ibatch) {
@@ -27,7 +27,7 @@ int main( int argc , char **argv ) {
       training_inputs (ibatch) = x;
       training_outputs(ibatch) = tanh((x-0.5)*10);
     });
-    int batch_size = 1024;
+    int batch_size = 8;
     int num_batches = training_size / batch_size;
 
     // Create a model with no ensembles to get the total number of ensembles we'll need
@@ -39,16 +39,16 @@ int main( int argc , char **argv ) {
     real relu_threshold      = 0;
     real relu_max_value      = std::numeric_limits<real>::max();
     bool relu_trainable      = false;
-    auto test = create_inference_model( Matvec<real>      ( num_inputs,num_neurons,num_ensembles          ) ,
-                                        Bias  <real>      ( num_neurons,num_ensembles                     ) ,
-                                        Relu  <real>      ( num_neurons,num_ensembles,relu_negative_slope,relu_threshold,relu_max_value,relu_trainable ) ,
-                                        Save_State<0,real>( num_neurons                                   ) ,
-                                        Matvec<real>      ( num_neurons,num_neurons,num_ensembles         ) ,
-                                        Bias  <real>      ( num_neurons,num_ensembles                     ) ,
-                                        Relu  <real>      ( num_neurons,num_ensembles,relu_negative_slope,relu_threshold,relu_max_value,relu_trainable ) ,
-                                        Binop_Add<0,real> ( num_neurons                                   ) ,
-                                        Matvec<real>      ( num_neurons,num_outputs,num_ensembles         ) ,
-                                        Bias  <real>      ( num_outputs,num_ensembles                     ) );
+    auto test = create_inference_model( Matvec<real>      ( num_inputs,num_neurons,num_ensembles  ) ,
+                                        Bias  <real>      ( num_neurons,num_ensembles             ) ,
+                                        Relu  <real>      ( num_neurons,relu_negative_slope       ) ,
+                                        Save_State<0,real>( num_neurons                           ) ,
+                                        Matvec<real>      ( num_neurons,num_neurons,num_ensembles ) ,
+                                        Bias  <real>      ( num_neurons,num_ensembles             ) ,
+                                        Relu  <real>      ( num_neurons,relu_negative_slope       ) ,
+                                        Binop_Add<0,real> ( num_neurons                           ) ,
+                                        Matvec<real>      ( num_neurons,num_outputs,num_ensembles ) ,
+                                        Bias  <real>      ( num_outputs,num_ensembles             ) );
     test.init( training_size , 1 );
 
     // Create the trainer
@@ -59,21 +59,23 @@ int main( int argc , char **argv ) {
     num_ensembles = trainer.get_num_ensembles();
 
     // Create model with ensembles
-    auto model = create_inference_model( Matvec<real>      ( num_inputs,num_neurons,num_ensembles          ) ,
-                                         Bias  <real>      ( num_neurons,num_ensembles                     ) ,
-                                         Relu  <real>      ( num_neurons,num_ensembles,relu_negative_slope,relu_threshold,relu_max_value,relu_trainable ) ,
-                                         Save_State<0,real>( num_neurons                                   ) ,
-                                         Matvec<real>      ( num_neurons,num_neurons,num_ensembles         ) ,
-                                         Bias  <real>      ( num_neurons,num_ensembles                     ) ,
-                                         Relu  <real>      ( num_neurons,num_ensembles,relu_negative_slope,relu_threshold,relu_max_value,relu_trainable ) ,
-                                         Binop_Add<0,real> ( num_neurons                                   ) ,
-                                         Matvec<real>      ( num_neurons,num_outputs,num_ensembles         ) ,
-                                         Bias  <real>      ( num_outputs,num_ensembles                     ) );
+    auto model = create_inference_model( Matvec<real>      ( num_inputs,num_neurons,num_ensembles  ) ,
+                                         Bias  <real>      ( num_neurons,num_ensembles             ) ,
+                                         Relu  <real>      ( num_neurons,relu_negative_slope       ) ,
+                                         Save_State<0,real>( num_neurons                           ) ,
+                                         Matvec<real>      ( num_neurons,num_neurons,num_ensembles ) ,
+                                         Bias  <real>      ( num_neurons,num_ensembles             ) ,
+                                         Relu  <real>      ( num_neurons,relu_negative_slope       ) ,
+                                         Binop_Add<0,real> ( num_neurons                           ) ,
+                                         Matvec<real>      ( num_neurons,num_outputs,num_ensembles ) ,
+                                         Bias  <real>      ( num_outputs,num_ensembles             ) );
     model.init( batch_size , num_ensembles );
     model.print();
 
     // Create model inputs with ensemble dimension added
     real2d model_input("model_input",batch_size,num_ensembles);
+
+    bool inform = true;
 
     // Train the model
     int num_epochs = 20;
@@ -106,22 +108,36 @@ int main( int argc , char **argv ) {
         trainer.update_from_ensemble( ensemble );
       } // ibatch
       trainer.increment_epoch();
-      {
+      if (inform) {
         test.set_trainable_parameters( trainer.get_parameters().reshape(num_parameters,1) );
         auto test_output = test.forward_batch_parallel( training_inputs.reshape(1,training_size,1) ).reshape(training_size);
-        using yakl::componentwise::operator-;
-        using yakl::componentwise::operator*;
-        using yakl::intrinsics::abs;
-        using yakl::intrinsics::sum;
-        auto adiff = abs( training_outputs - test_output );
+        real1d mae_arr("mae_arr",training_size);
+        real1d mse_arr("mse_arr",training_size);
+        parallel_for( YAKL_AUTO_LABEL() , training_size , YAKL_LAMBDA (int i) {
+          real adiff = std::abs( training_outputs(i) - test_output(i) );
+          mae_arr(i) = adiff;
+          mse_arr(i) = adiff*adiff;
+        });
+        real mae = yakl::intrinsics::sum(mae_arr)/mae_arr.size();
+        real mse = yakl::intrinsics::sum(mse_arr)/mse_arr.size();
         std::cout << "Epoch: " << std::setw(5) << iepoch+1 << " ,  MAE: "
-                  << std::setw(12) << std::scientific << sum(adiff) / training_outputs.size() << " ,  MSE: "
-                  << std::setw(12) << std::scientific << sum(adiff*adiff) / training_outputs.size() 
-                  << std::defaultfloat << std::endl;
+                  << std::setw(12) << std::scientific << mae << " ,  MSE: "
+                  << std::setw(12) << std::scientific << mse << std::defaultfloat << std::endl;
       }
       // std::cout << "Epoch: " << iepoch << "\n";
     }
     yakl::timer_stop("training_time");
+    {
+      test.set_trainable_parameters( trainer.get_parameters().reshape(num_parameters,1) );
+      auto test_output = test.forward_batch_parallel( training_inputs.reshape(1,training_size,1) ).reshape(training_size);
+      real1d mae_arr("mae_arr",training_size);
+      parallel_for( YAKL_AUTO_LABEL() , training_size , YAKL_LAMBDA (int i) {
+        real adiff = std::abs( training_outputs(i) - test_output(i) );
+        mae_arr(i) = adiff;
+      });
+      real mae = yakl::intrinsics::sum(mae_arr)/mae_arr.size();
+      if (mae > 0.4) yakl::yakl_throw("ERROR: mean absolution error is too large");
+    }
 
     if (! trainer.parameters_identical_across_tasks()) yakl::yakl_throw("ERROR: parameters are not the same");
   }

@@ -317,11 +317,11 @@ namespace ponni {
     void set_trainable_parameters(real2d in) {
       auto &layer = std::get<I>(params.layers);
       if constexpr (I < num_layers-1) {
-        layer.set_trainable_parameters(in,false);  // No fence
+        layer.set_trainable_parameters(in);
         in = in.subset_slowest_dimension(layer.get_num_trainable_parameters(),in.extent(0)-1);
         set_trainable_parameters<I+1>(in);
       } else  {
-        layer.set_trainable_parameters(in,true);   // Fence
+        layer.set_trainable_parameters(in);
       }
     }
 
