@@ -91,14 +91,16 @@ int main( int argc , char **argv ) {
         auto in = model_input.reshape(1,batch_size,num_ensembles);
         auto model_output = model.forward_batch_parallel( in ).reshape(batch_size,num_ensembles);
         auto loss = ensemble.get_loss();
+        real r_batch_size = static_cast<real>(1.)/batch_size;
         parallel_for( YAKL_AUTO_LABEL() , num_ensembles , YAKL_LAMBDA (int iens) {
           real l = 0;
+          int prod = batch_id*batch_size;
           for (int ibatch = 0; ibatch < batch_size; ibatch++) {
-            int ibatch_glob = std::min(training_size-1,batch_id*batch_size + ibatch);
-            real adiff = abs( model_output(ibatch,iens) - training_outputs(ibatch_glob) );
-            l += adiff*adiff;
+            int  ibatch_glob = std::min(training_size-1,prod + ibatch);
+            real diff = model_output(ibatch,iens) - training_outputs(ibatch_glob);
+            l += diff*diff;
           }
-          loss(iens) = l / batch_size;
+          loss(iens) = l * r_batch_size;
         });
         trainer.update_from_ensemble( ensemble );
       } // ibatch

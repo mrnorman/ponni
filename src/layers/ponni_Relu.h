@@ -82,12 +82,13 @@ namespace ponni {
       int  num_outputs = get_num_outputs(params_in);
       real threshold   = params_in.threshold;
       real max_value   = params_in.max_value;
+      auto &negative_slope = params_in.negative_slope;
       for (int irow = 0; irow < num_outputs; irow++) {
         real x = input(irow,ibatch,iens);
         real f_x;
-        if      (x >= max_value) { f_x = max_value;                                             }
-        else if (x >= threshold) { f_x = x;                                                     }
-        else                     { f_x = params_in.negative_slope(irow,iens) * (x - threshold); }
+        if      (x >= max_value) { f_x = max_value;                                   }
+        else if (x >= threshold) { f_x = x;                                           }
+        else                     { f_x = negative_slope(irow,iens) * (x - threshold); }
         output(irow,ibatch,iens) = f_x;
       }
     }
