@@ -50,12 +50,14 @@ namespace ponni {
                                                 int ibatch, int iens, Params const &params_in) {
       if (params_in.after) {
         int num_inputs_1 = input1.extent(0);
-        for (int irow = 0; irow < params_in.num_outputs; irow++) {
+        int num_outputs = params_in.num_outputs;
+        for (int irow = 0; irow < num_outputs; irow++) {
           output(irow,ibatch,iens) = irow < num_inputs_1 ? input1(irow,ibatch,iens) : input2(irow - num_inputs_1,ibatch,iens);
         }
       } else {
         int num_inputs_2 = input2.extent(0);
-        for (int irow = 0; irow < params_in.num_outputs; irow++) {
+        int num_outputs = params_in.num_outputs;
+        for (int irow = 0; irow < num_outputs; irow++) {
           output(irow,ibatch,iens) = irow < num_inputs_2 ? input2(irow,ibatch,iens) : input1(irow - num_inputs_2,ibatch,iens);
         }
       }

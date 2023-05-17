@@ -209,7 +209,7 @@ namespace ponni {
         // GPU kernel threading over batch size that traverses the model's layers
         parallel_for( YAKL_AUTO_LABEL() , SimpleBounds<2>(batch_size,num_ensembles) ,
                                           YAKL_LAMBDA (int ibatch, int iens) {
-          traverse_layers(layers, saved_states, input, output, tmp1, tmp2, ibatch, iens);
+          traverse_layers_batch_parallel(layers, saved_states, input, output, tmp1, tmp2, ibatch, iens);
         });
       }
       return output;
@@ -218,8 +218,8 @@ namespace ponni {
 
 
     // Perform a forward inference pass through this model parallelizing only the batch dimension
-    YAKL_INLINE static void forward_in_kernel( real3d const &input , real3d const &output , Params const &params_in ,
-                                               int ibatch , int iens ) {
+    YAKL_INLINE static void forward_batch_parallel_in_kernel( real3d const &input , real3d const &output ,
+                                                              Params const &params_in , int ibatch , int iens ) {
       auto &layer0 = std::get<0>(params_in.layers);
       #ifdef PONNI_DEBUG
         if (input.extent(0) != layer0.get_num_inputs(layer0.params)) {
@@ -229,26 +229,26 @@ namespace ponni {
       if constexpr (num_layers == 1) {
         layer0.compute_all_outputs(input,output,ibatch,iens,layer0.params);
       } else {
-        traverse_layers(params_in.layers,params_in.saved_states,input,output,params_in.tmp1,params_in.tmp2,ibatch,iens);
+        traverse_layers_batch_parallel(params_in.layers,params_in.saved_states,input,output,
+                                       params_in.tmp1,params_in.tmp2,ibatch,iens);
       }
-    } // forward_in_kernel
+    } // forward_batch_parallel_in_kernel
 
 
 
     // Traverse the layers of this model inside a GPU kernel
     template <int I=0>
-    YAKL_INLINE void static traverse_layers(TUPLE      const & layers      ,
-                                            SAVED_TYPE const & saved_states,
-                                            real3d     const & input_glob  ,
-                                            real3d     const & output_glob ,
-                                            real3d     const & tmp1        ,
-                                            real3d     const & tmp2        ,
-                                            int                ibatch      ,
-                                            int                iens        ,
-                                            bool               output_in_tmp1 = false) {
+    YAKL_INLINE void static traverse_layers_batch_parallel(TUPLE      const & layers      ,
+                                                           SAVED_TYPE const & saved_states,
+                                                           real3d     const & input_glob  ,
+                                                           real3d     const & output_glob ,
+                                                           real3d     const & tmp1        ,
+                                                           real3d     const & tmp2        ,
+                                                           int                ibatch      ,
+                                                           int                iens        ,
+                                                           bool               output_in_tmp1 = false) {
       using LAYER_TYPE = typename std::tuple_element<I,TUPLE>::type;
-      auto &layer       = std::get<I>(layers);
-      auto  num_outputs = layer.get_num_outputs(layer.params);
+      auto &layer = std::get<I>(layers);
       // These are placeholder arrays to point to the appropriate tempoarary array, input, or output
       real3d in;
       real3d out;
@@ -288,9 +288,10 @@ namespace ponni {
       }
       // If this isn't the last layer, then call the next layer recursively with template recursion
       if constexpr (I < num_layers-1) {
-        traverse_layers<I+1>(layers,saved_states,input_glob,output_glob,tmp1,tmp2,ibatch,iens,output_in_tmp1);
+        traverse_layers_batch_parallel<I+1>(layers,saved_states,input_glob,output_glob,
+                                            tmp1,tmp2,ibatch,iens,output_in_tmp1);
       }
-    } // travers_layers
+    } // traverse_layers_batch_parallel
 
 
 

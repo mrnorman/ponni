@@ -160,7 +160,7 @@ int main( int argc , char **argv ) {
       yakl::Array<float,3,yakl::memDevice> outputs("outputs",5,1,1);
       yakl::c::parallel_for( YAKL_AUTO_LABEL() , yakl::c::SimpleBounds<2>(1,1) ,
                                                  YAKL_LAMBDA (int ibatch, int iens) {
-        model.forward_in_kernel( inputs , outputs , model.params , ibatch , iens );
+        model.forward_batch_parallel_in_kernel( inputs , outputs , model.params , ibatch , iens );
       });
       auto out_host = outputs.createHostCopy();
 

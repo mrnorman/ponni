@@ -79,11 +79,11 @@ namespace ponni {
 
     YAKL_INLINE static void compute_all_outputs(real3d const &input, real3d const &output,
                                                 int ibatch, int iens, Params const &params_in) {
-      int  num_outputs    = get_num_outputs(params_in);
-      real threshold      = params_in.threshold;
-      real max_value      = params_in.max_value;
+      int  num_outputs = get_num_outputs(params_in);
+      real threshold   = params_in.threshold;
+      real max_value   = params_in.max_value;
       for (int irow = 0; irow < num_outputs; irow++) {
-        real x              = input(irow,ibatch,iens);
+        real x = input(irow,ibatch,iens);
         real f_x;
         if      (x >= max_value) { f_x = max_value;                                             }
         else if (x >= threshold) { f_x = x;                                                     }
