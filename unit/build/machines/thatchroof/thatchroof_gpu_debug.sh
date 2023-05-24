@@ -6,7 +6,7 @@ module load hdf5-1.12.2-gcc-11.1.0-yhy752t
 
 spack unload --all
 
-export HDF5_DIR=/home/imn/spack/opt/spack/linux-ubuntu20.04-haswell/gcc-11.1.0/hdf5-1.12.2-yhy752tsib7atgpak6tolosnttbxlcyx
+export HDF5_DIR=`which h5cc | xargs dirname`/..
 
 ./cmakeclean.sh
 

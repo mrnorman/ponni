@@ -36,9 +36,6 @@ int main( int argc , char **argv ) {
     int  num_neurons         = 10;
     int  num_ensembles       = 1;
     real relu_negative_slope = 0.3;
-    real relu_threshold      = 0;
-    real relu_max_value      = std::numeric_limits<real>::max();
-    bool relu_trainable      = false;
     auto test = create_inference_model( Matvec<real>      ( num_inputs,num_neurons,num_ensembles  ) ,
                                         Bias  <real>      ( num_neurons,num_ensembles             ) ,
                                         Relu  <real>      ( num_neurons,relu_negative_slope       ) ,
@@ -81,8 +78,8 @@ int main( int argc , char **argv ) {
     int num_epochs = 20;
     yakl::timer_start("training_time");
     for (int iepoch = 0; iepoch < num_epochs; iepoch++) {
-      ponni::shuffle_training_data( training_inputs .reshape(1,training_size) ,
-                                    training_outputs.reshape(1,training_size) , iepoch+1 );
+      auto shuffled_indices = ponni::shuffle_data( training_inputs , 0 , iepoch+1 );
+      ponni::shuffle_data( training_outputs , 0 , shuffled_indices );
       for (int batch_id = 0; batch_id < num_batches; batch_id++) {
         parallel_for( YAKL_AUTO_LABEL() , SimpleBounds<2>(batch_size,num_ensembles) , 
                                           YAKL_LAMBDA (int ibatch, int iens) {
@@ -174,9 +171,6 @@ int main( int argc , char **argv ) {
     int  num_neurons         = 10;
     int  num_ensembles       = 1;
     real relu_negative_slope = 0.3;
-    real relu_threshold      = 0;
-    real relu_max_value      = std::numeric_limits<real>::max();
-    bool relu_trainable      = false;
     auto test = create_inference_model_double_precision(
                                         Matvec<real>      ( num_inputs,num_neurons,num_ensembles  ) ,
                                         Bias  <real>      ( num_neurons,num_ensembles             ) ,
@@ -221,8 +215,8 @@ int main( int argc , char **argv ) {
     int num_epochs = 20;
     yakl::timer_start("training_time");
     for (int iepoch = 0; iepoch < num_epochs; iepoch++) {
-      ponni::shuffle_training_data( training_inputs .reshape(1,training_size) ,
-                                    training_outputs.reshape(1,training_size) , iepoch+1 );
+      auto shuffled_indices = ponni::shuffle_data( training_inputs , 0 , iepoch+1 );
+      ponni::shuffle_data( training_outputs , 0 , shuffled_indices );
       for (int batch_id = 0; batch_id < num_batches; batch_id++) {
         parallel_for( YAKL_AUTO_LABEL() , SimpleBounds<2>(batch_size,num_ensembles) , 
                                           YAKL_LAMBDA (int ibatch, int iens) {
