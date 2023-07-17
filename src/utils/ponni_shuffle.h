@@ -49,5 +49,35 @@ namespace ponni {
     return shuffled_indices;
   }
 
+
+  template <class real>
+  inline void shuffle_losses( yakl::Array<real,2,yakl::memDevice,yakl::styleC> loss  ,
+                              size_t rand_seed = 0                                   ) {
+    using yakl::c::parallel_for;
+    using yakl::c::SimpleBounds;
+    typedef yakl::Array<int ,1,yakl::memHost  ,yakl::styleC> intHost1d;
+    typedef yakl::Array<real,2,yakl::memDevice,yakl::styleC> real2d;
+    int num_ensembles = loss.extent(0);
+    int num_samples   = loss.extent(1);
+    // Create a shuffled set of indices on the CPU
+    std::random_device  rd;
+    std::mt19937        gen {rd()};
+    if (rand_seed > 0) gen.seed(rand_seed);
+    intHost1d shuffled_indices_host("shuffled_indices_host",num_samples);
+    for (int i=0; i < num_samples; i++) { shuffled_indices_host(i) = i; }
+    std::shuffle( shuffled_indices_host.begin() , shuffled_indices_host.end() , gen );
+    // Copy shuffled indices to device
+    auto shuffled_indices = shuffled_indices_host.createDeviceObject();
+    shuffled_indices_host.deep_copy_to(shuffled_indices);
+    // Perform shuffle into temporary arrays
+    real2d tmp_loss("tmp_loss",num_ensembles,num_samples);
+    parallel_for( YAKL_AUTO_LABEL() , SimpleBounds<2>(num_ensembles,num_samples) , YAKL_LAMBDA (int ival, int isamp) {
+      int isamp_sh = shuffled_indices(isamp);
+      if (ival < num_ensembles ) tmp_loss(ival,isamp) = loss(ival,isamp_sh);
+    });
+    // Copy shuffled arrays to original arrays
+    tmp_loss.deep_copy_to(loss);
+  }
+
 }
 
