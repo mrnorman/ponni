@@ -177,10 +177,10 @@ namespace ponni {
     real3d forward_batch_parallel( real3d const &input ) {
       using yakl::c::parallel_for;
       using yakl::c::SimpleBounds;
-      auto layers       = this->params.layers      ;
-      auto saved_states = this->params.saved_states;
-      auto tmp1         = this->params.tmp1        ;
-      auto tmp2         = this->params.tmp2        ;
+      YAKL_SCOPE( layers       , this->params.layers       );
+      YAKL_SCOPE( saved_states , this->params.saved_states );
+      YAKL_SCOPE( tmp1         , this->params.tmp1         );
+      YAKL_SCOPE( tmp2         , this->params.tmp2         );
       // Get the number of inputs, outputs, and batch size
       auto &layer0      = std::get<0>(layers);
       auto &layer_last  = std::get<num_layers-1>(layers);
