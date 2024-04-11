@@ -173,6 +173,11 @@ namespace ponni {
 
 
 
+    int get_num_inputs () const { return std::get<0           >(params.layers).get_num_inputs (); }
+    int get_num_outputs() const { return std::get<num_layers-1>(params.layers).get_num_outputs(); }
+
+
+
     // Perform a forward inference pass through this model parallelizing only the batch dimension
     real3d forward_batch_parallel( real3d const &input ) {
       using yakl::c::parallel_for;
