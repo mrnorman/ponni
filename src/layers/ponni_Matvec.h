@@ -65,13 +65,13 @@ namespace ponni {
 
 
     void set_trainable_parameters(real1d const &in) {
-      if (params.trainable) in.deep_copy_to(params.weights);
+      if (params.trainable) in.subset_slowest_dimension(get_num_trainable_parameters()).deep_copy_to(params.weights);
     }
 
 
     real1d get_trainable_parameters() const {
       if (params.trainable) return params.weights.reshape(get_num_inputs()*get_num_outputs());
-      return real2d();
+      return real1d();
     }
 
 

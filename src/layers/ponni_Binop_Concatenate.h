@@ -62,7 +62,7 @@ namespace ponni {
     }
 
 
-    void set_trainable_parameters(real2d const &in) { }
+    void set_trainable_parameters(real1d const &in) { }
 
 
     real1d get_trainable_parameters() const { return real1d(); }

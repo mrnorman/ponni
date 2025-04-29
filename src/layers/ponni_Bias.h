@@ -60,7 +60,7 @@ namespace ponni {
 
 
     void set_trainable_parameters(real1d const &in) {
-      if (params.trainable) in.deep_copy_to(params.weights);
+      if (params.trainable) in.subset_slowest_dimension(get_num_trainable_parameters()).deep_copy_to(params.weights);
     }
 
 
