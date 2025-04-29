@@ -35,21 +35,19 @@ namespace ponni {
 
 
     char const * get_label() const { return "Save_State"; }
-    YAKL_INLINE static int get_num_inputs   (Params const &params_in) { return params_in.num_inputs ; }
-    YAKL_INLINE static int get_num_outputs  (Params const &params_in) { return params_in.num_outputs; }
-    YAKL_INLINE static int get_num_ensembles(Params const &params_in) { return 1; }
+    KOKKOS_INLINE_FUNCTION static int get_num_inputs   (Params const &params_in) { return params_in.num_inputs ; }
+    KOKKOS_INLINE_FUNCTION static int get_num_outputs  (Params const &params_in) { return params_in.num_outputs; }
     int    get_num_inputs               () const { return params.num_inputs ; }
     int    get_num_outputs              () const { return params.num_outputs; }
-    int    get_num_ensembles            () const { return 1; }
     int    get_num_trainable_parameters () const { return 0; }
     int    get_array_representation_size() const { return 2; }
 
 
-    YAKL_INLINE static void compute_all_outputs(real3d const &input, real3d const &output,
-                                                int ibatch, int iens, Params const &params_in) {
+    KOKKOS_INLINE_FUNCTION static void compute_all_outputs(real2d const &input, real2d const &output,
+                                                           int ibatch, Params const &params_in) {
       int num_outputs = params_in.num_outputs;
       for (int irow = 0; irow < num_outputs; irow++) {
-        output(irow,ibatch,iens) = input(irow,ibatch,iens);
+        output(irow,ibatch) = input(irow,ibatch);
       }
     }
 
@@ -57,7 +55,7 @@ namespace ponni {
     void set_trainable_parameters(real2d const &in) { }
 
 
-    real2d get_trainable_parameters() const { return real2d(); }
+    real1d get_trainable_parameters() const { return real1d(); }
 
 
     doubleHost1d to_array() const {
@@ -69,7 +67,7 @@ namespace ponni {
 
 
     void from_array(doubleHost1d const &data) {
-      if (data(1) != N) yakl::yakl_throw("ERROR: Save_State saved state index incompatible with data from file");
+      if (data(1) != N) Kokkos::abort("ERROR: Save_State saved state index incompatible with data from file");
       init( static_cast<int>(data(0)) );
     }
 

@@ -76,10 +76,10 @@ int main( int argc , char **argv ) {
     std::cout << "Absolute difference for Output 3: " << std::abs( out_host(2,0) - ( 4.08545136e-04) ) << std::endl;
     std::cout << "Absolute difference for Output 4: " << std::abs( out_host(3,0) - (-1.02701783e-03) ) << std::endl;
 
-    if ( std::abs( out_host(0,0) - ( 4.75395530e-01) ) > 1.e-6 ) yakl::yakl_throw("ERROR Output 1 diff too large");
-    if ( std::abs( out_host(1,0) - ( 4.74427342e-02) ) > 1.e-6 ) yakl::yakl_throw("ERROR Output 2 diff too large");
-    if ( std::abs( out_host(2,0) - ( 4.08545136e-04) ) > 1.e-6 ) yakl::yakl_throw("ERROR Output 3 diff too large");
-    if ( std::abs( out_host(3,0) - (-1.02701783e-03) ) > 1.e-6 ) yakl::yakl_throw("ERROR Output 4 diff too large");
+    if ( std::abs( out_host(0,0) - ( 4.75395530e-01) ) > 1.e-6 ) Kokkos::abort("ERROR Output 1 diff too large");
+    if ( std::abs( out_host(1,0) - ( 4.74427342e-02) ) > 1.e-6 ) Kokkos::abort("ERROR Output 2 diff too large");
+    if ( std::abs( out_host(2,0) - ( 4.08545136e-04) ) > 1.e-6 ) Kokkos::abort("ERROR Output 3 diff too large");
+    if ( std::abs( out_host(3,0) - (-1.02701783e-03) ) > 1.e-6 ) Kokkos::abort("ERROR Output 4 diff too large");
   }
   yakl::finalize();
 }

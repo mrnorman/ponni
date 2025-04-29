@@ -13,11 +13,12 @@ export FC=gfortran
 unset CXXFLAGS
 unset FFLAGS
 
-cmake -DPONNI_CXX_FLAGS="-I/usr/include/hdf5/serial -O0 -g -DYAKL_DEBUG"  \
-      -DYAKL_F90_FLAGS="-O0 -g"                                          \
+cmake -DPONNI_CXX_FLAGS="-I/usr/include/hdf5/serial -O3"  \
+      -DYAKL_F90_FLAGS="-O3"                                          \
       -DPONNI_LINK_FLAGS="" \
-      -DKokkos_ENABLE_DEBUG=ON \
-      -DKokkos_ENABLE_DEBUG_BOUNDS_CHECK=ON \
+      -DKokkos_ARCH_NATIVE=ON \
+      -DKokkos_ENABLE_DEBUG=OFF \
+      -DKokkos_ENABLE_DEBUG_BOUNDS_CHECK=OFF \
       ../../..
 
 

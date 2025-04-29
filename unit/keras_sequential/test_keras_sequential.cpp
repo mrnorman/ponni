@@ -44,10 +44,10 @@ int main( int argc , char **argv ) {
     std::cout << "Absolute difference for Output 3: " << std::abs( out_host(2,0) - 1.2472458e-03 ) << std::endl;
     std::cout << "Absolute difference for Output 4: " << std::abs( out_host(3,0) - 4.0419400e-05 ) << std::endl;
 
-    if ( std::abs( out_host(0,0) - 4.7658795e-01 ) > 1.e-6 ) yakl::yakl_throw("ERROR Output 1 diff too large");
-    if ( std::abs( out_host(1,0) - 4.8446856e-02 ) > 1.e-6 ) yakl::yakl_throw("ERROR Output 2 diff too large");
-    if ( std::abs( out_host(2,0) - 1.2472458e-03 ) > 1.e-6 ) yakl::yakl_throw("ERROR Output 3 diff too large");
-    if ( std::abs( out_host(3,0) - 4.0419400e-05 ) > 1.e-6 ) yakl::yakl_throw("ERROR Output 4 diff too large");
+    if ( std::abs( out_host(0,0) - 4.7658795e-01 ) > 1.e-6 ) Kokkos::abort("ERROR Output 1 diff too large");
+    if ( std::abs( out_host(1,0) - 4.8446856e-02 ) > 1.e-6 ) Kokkos::abort("ERROR Output 2 diff too large");
+    if ( std::abs( out_host(2,0) - 1.2472458e-03 ) > 1.e-6 ) Kokkos::abort("ERROR Output 3 diff too large");
+    if ( std::abs( out_host(3,0) - 4.0419400e-05 ) > 1.e-6 ) Kokkos::abort("ERROR Output 4 diff too large");
 
     // 4.7658795e-01 4.8446856e-02 1.2472458e-03 4.0419400e-05
   }

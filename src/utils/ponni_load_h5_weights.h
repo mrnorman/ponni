@@ -39,24 +39,24 @@ namespace ponni {
       auto weights_tmp = weights_host.createDeviceCopy();
       if        constexpr (N == 2) {
         yakl::Array<float,N,yakl::memDevice,yakl::styleC> weights_transposed("weights_transposed",dims[1],dims[0]);
-        parallel_for( SimpleBounds<N>(dims[0],dims[1]) , YAKL_LAMBDA (int i0, int i1) {
+        parallel_for( SimpleBounds<N>(dims[0],dims[1]) , KOKKOS_LAMBDA (int i0, int i1) {
           weights_transposed(i1,i0) = weights_tmp(i0,i1);
         });
         return weights_transposed;
       } else if constexpr (N == 3) {
         yakl::Array<float,N,yakl::memDevice,yakl::styleC> weights_transposed("weights_transposed",dims[2],dims[1],dims[0]);
-        parallel_for( SimpleBounds<N>(dims[0],dims[1],dims[2]) , YAKL_LAMBDA (int i0, int i1, int i2) {
+        parallel_for( SimpleBounds<N>(dims[0],dims[1],dims[2]) , KOKKOS_LAMBDA (int i0, int i1, int i2) {
           weights_transposed(i2,i1,i0) = weights_tmp(i0,i1,i2);
         });
         return weights_transposed;
       } else if constexpr (N == 4) {
         yakl::Array<float,N,yakl::memDevice,yakl::styleC> weights_transposed("weights_transposed",dims[3],dims[2],dims[1],dims[0]);
-        parallel_for( SimpleBounds<N>(dims[0],dims[1],dims[2],dims[3]) , YAKL_LAMBDA (int i0, int i1, int i2, int i3) {
+        parallel_for( SimpleBounds<N>(dims[0],dims[1],dims[2],dims[3]) , KOKKOS_LAMBDA (int i0, int i1, int i2, int i3) {
           weights_transposed(i3,i2,i1,i0) = weights_tmp(i0,i1,i2,i3);
         });
         return weights_transposed;
       }
-      yakl::yakl_throw("ERROR: Shouldn't have reached here");
+      Kokkos::abort("ERROR: Shouldn't have reached here");
       return yakl::Array<float,N,yakl::memDevice,yakl::styleC>();
     }
   }

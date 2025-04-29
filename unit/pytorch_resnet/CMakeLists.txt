@@ -1,11 +1,7 @@
 
 add_executable(pytorch_resnet test_pytorch_resnet.cpp)
-include($ENV{YAKL_HOME}/yakl_utils.cmake)
-yakl_process_target(pytorch_resnet)
-target_link_libraries(pytorch_resnet ponni)
-if (DEFINED HDF5_LINK_FLAGS)
-  target_link_libraries(pytorch_resnet "${HDF5_LINK_FLAGS}")
-endif()
+target_link_libraries(pytorch_resnet ponni yakl ${HDF5_LIBRARIES} ${PONNI_LINK_FLAGS})
+target_compile_options(pytorch_resnet PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${PONNI_CXX_FLAGS}>)
 
 if (DEFINED MPI_COMMAND)
   separate_arguments(REAL_MPI_COMMAND UNIX_COMMAND $ENV{MPI_COMMAND})

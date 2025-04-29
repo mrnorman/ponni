@@ -24,7 +24,7 @@ namespace ponni {
       YAKL_SCOPE( lb   , this->lb   );
       YAKL_SCOPE( ub   , this->ub   );
       YAKL_SCOPE( seed , this->seed );
-      yakl::c::parallel_for( YAKL_AUTO_LABEL() , c.size() , YAKL_LAMBDA (int i) {
+      yakl::c::parallel_for( YAKL_AUTO_LABEL() , c.size() , KOKKOS_LAMBDA (int i) {
         yakl::Random rand(seed + i);
         c(i) = rand.genFP<real>(lb,ub);
       });
