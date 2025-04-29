@@ -10,7 +10,6 @@ namespace ponni {
     typedef typename yakl::Array<real  ,1,yakl::memHost  > realHost1d;
     typedef typename yakl::Array<real  ,1,yakl::memDevice> real1d;
     typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
-    typedef typename yakl::Array<real  ,3,yakl::memDevice> real3d;
     
     bool static constexpr overwrite_input = false;
     bool static constexpr binop           = false; // Use two inputs?
@@ -33,7 +32,6 @@ namespace ponni {
       init(weights,trainable);
     }
     Matvec( real2d const &weights , bool trainable=true ) { init(weights,trainable); }
-    Matvec( real3d const &weights , bool trainable=true ) { init(weights,trainable); }
 
 
     void init( real2d const &weights , bool trainable=true ) {
