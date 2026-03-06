@@ -19,6 +19,7 @@ namespace ponni {
 #include <random>
 #include <algorithm>
 #include "initializers/ponni_Initializer_Random_Uniform.h"
+#include "initializers/ponni_Initializer_None.h"
 #include "layers/ponni_Matvec.h"
 #include "layers/ponni_Bias.h"
 #include "layers/ponni_Relu.h"
