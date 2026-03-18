@@ -10,13 +10,10 @@ namespace ponni {
     typedef typename yakl::Array<real  ,1,yakl::memHost  > realHost1d;
     typedef typename yakl::Array<real  ,1,yakl::memDevice> real1d;
     typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
-    typedef typename yakl::Array<real  ,3,yakl::memDevice> real3d;
 
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?
     bool static constexpr save            = false;
-
-    real static constexpr huge = std::numeric_limits<real>::max();
 
     struct Params {
       int  num_inputs     ;
@@ -25,7 +22,8 @@ namespace ponni {
 
     Params params;
 
-    Relu() {};
+    Relu () = default;
+    ~Relu() = default;
     Relu( int num_inputs , real negative_slope=0 ) {
       init(num_inputs,negative_slope);
     }
@@ -38,8 +36,8 @@ namespace ponni {
 
 
     char const * get_label() const { return "Relu"; }
-    KOKKOS_INLINE_FUNCTION static int get_num_inputs   (Params const &params_in) { return params_in.num_inputs; }
-    KOKKOS_INLINE_FUNCTION static int get_num_outputs  (Params const &params_in) { return params_in.num_inputs; }
+    KOKKOS_INLINE_FUNCTION static int get_num_inputs (Params const &params_in) { return params_in.num_inputs; }
+    KOKKOS_INLINE_FUNCTION static int get_num_outputs(Params const &params_in) { return params_in.num_inputs; }
     int get_num_inputs   () const { return params.num_inputs; }
     int get_num_outputs  () const { return params.num_inputs; }
     int get_num_trainable_parameters() const { return 0; }

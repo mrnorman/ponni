@@ -9,7 +9,6 @@ namespace ponni {
     typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
     typedef typename yakl::Array<real  ,1,yakl::memDevice> real1d;
     typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
-    typedef typename yakl::Array<real  ,3,yakl::memDevice> real3d;
     
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?
@@ -35,8 +34,8 @@ namespace ponni {
 
 
     char const * get_label() const { return "Save_State"; }
-    KOKKOS_INLINE_FUNCTION static int get_num_inputs   (Params const &params_in) { return params_in.num_inputs ; }
-    KOKKOS_INLINE_FUNCTION static int get_num_outputs  (Params const &params_in) { return params_in.num_outputs; }
+    KOKKOS_INLINE_FUNCTION static int get_num_inputs (Params const &params_in) { return params_in.num_inputs ; }
+    KOKKOS_INLINE_FUNCTION static int get_num_outputs(Params const &params_in) { return params_in.num_outputs; }
     int    get_num_inputs               () const { return params.num_inputs ; }
     int    get_num_outputs              () const { return params.num_outputs; }
     int    get_num_trainable_parameters () const { return 0; }

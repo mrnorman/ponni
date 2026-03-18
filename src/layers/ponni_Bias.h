@@ -41,11 +41,11 @@ namespace ponni {
 
 
     char const * get_label() const { return "Bias"; }
-    KOKKOS_INLINE_FUNCTION static int get_num_inputs   (Params const &params_in) { return params_in.weights.extent(0); }
-    KOKKOS_INLINE_FUNCTION static int get_num_outputs  (Params const &params_in) { return params_in.weights.extent(0); }
+    KOKKOS_INLINE_FUNCTION static int get_num_inputs (Params const &params_in) { return params_in.weights.extent(0); }
+    KOKKOS_INLINE_FUNCTION static int get_num_outputs(Params const &params_in) { return params_in.weights.extent(0); }
     int get_num_inputs               () const { return params.weights.extent(0); }
     int get_num_outputs              () const { return params.weights.extent(0); }
-    int get_num_trainable_parameters () const { return params.trainable ? params.weights.extent(0) : 0; }
+    int get_num_trainable_parameters () const { return params.trainable ? params.weights.size() : 0; }
     int get_array_representation_size() const { return params.weights.size() + 2; }
 
 

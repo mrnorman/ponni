@@ -9,7 +9,6 @@ namespace ponni {
     typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
     typedef typename yakl::Array<real  ,1,yakl::memDevice> real1d;
     typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
-    typedef typename yakl::Array<real  ,3,yakl::memDevice> real3d;
     
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = true; // Use two inputs?
