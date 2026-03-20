@@ -4,7 +4,8 @@
 
 namespace ponni {
 
-  template <class real = float>
+
+  template <class real = float, size_t N = 1>
   struct Bias {
     typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
     typedef typename yakl::Array<real  ,1,yakl::memHost  > realHost1d;
@@ -14,6 +15,9 @@ namespace ponni {
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?
     bool static constexpr save            = false;
+
+    int static constexpr INPUT_SIZE  = static_cast<int>(N);
+    int static constexpr OUTPUT_SIZE = static_cast<int>(N);
 
     struct Params {
       real1d weights;
@@ -32,13 +36,11 @@ namespace ponni {
     }
     Bias( real1d const &weights , bool trainable=true ) { init(weights,trainable); }
 
-
     void init( real1d const &weights , bool trainable=true ) {
       if ( ! weights.initialized() ) Kokkos::abort("ERROR: Bias weights vector not allocated");
       params.weights   = weights;
       params.trainable = trainable;
     }
-
 
     char const * get_label() const { return "Bias"; }
     KOKKOS_INLINE_FUNCTION static int get_num_inputs (Params const &params_in) { return params_in.weights.extent(0); }
@@ -48,9 +50,10 @@ namespace ponni {
     int get_num_trainable_parameters () const { return params.trainable ? params.weights.size() : 0; }
     int get_array_representation_size() const { return params.weights.size() + 2; }
 
-
-    KOKKOS_INLINE_FUNCTION static void compute_all_outputs(real2d const &input, real2d const &output,
-                                                           int ibatch, Params const &params_in) {
+    KOKKOS_INLINE_FUNCTION static void compute_all_outputs( real2d const & input     ,
+                                                            real2d const & output    ,
+                                                            int            ibatch    ,
+                                                            Params const & params_in ) {
       int num_outputs = get_num_outputs(params_in);
       auto &weights = params_in.weights;
       for (int irow = 0; irow < num_outputs; irow++) {
@@ -58,17 +61,20 @@ namespace ponni {
       }
     }
 
+    KOKKOS_INLINE_FUNCTION static void compute_all_outputs(SArray<real,1,N> const & input     ,
+                                                           SArray<real,1,N>       & output    ,
+                                                           Params           const & params_in ) {
+      for (int i = 0; i < N; i++) { output(i) = input(i) + params_in.weights(i); }
+    }
 
     void set_trainable_parameters(real1d const &in) {
       if (params.trainable) in.subset_slowest_dimension(get_num_trainable_parameters()).deep_copy_to(params.weights);
     }
 
-
     real1d get_trainable_parameters() const {
       if (params.trainable) return params.weights;
       return real1d();
     }
-
 
     doubleHost1d to_array() const {
       doubleHost1d data("Bias_weights",get_array_representation_size());
@@ -79,7 +85,6 @@ namespace ponni {
       return data;
     }
 
-
     void from_array(doubleHost1d const & data) {
       int  num_inputs    = data(0);
       bool trainable     = data(1) == 1;
@@ -88,11 +93,9 @@ namespace ponni {
       init( weights.createDeviceCopy() , trainable );
     }
 
-
     void validate() const {
       if (! params.weights.initialized()) Kokkos::abort("ERROR: weights not initialized");
     }
-
   };
 
 }

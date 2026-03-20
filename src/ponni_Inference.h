@@ -35,7 +35,16 @@ namespace ponni {
 
     // Get the maximum size needed for holding a temporary internal state
     template <int I=0>
-    int constexpr get_temporary_size(int max_outputs=0) const {
+    int static constexpr get_max_size_stack() {
+      using LAYER_T = typename std::tuple_element_t<I,TUPLE>;
+      int constexpr mx = std::max( LAYER_T::INPUT_SIZE , LAYER_T::OUTPUT_SIZE );
+      if constexpr (I < num_layers-1) { return std::max( mx , get_temporary_size_stack<I+1>() ); }
+      else                            { return mx; }
+    }
+
+    // Get the maximum size needed for holding a temporary internal state
+    template <int I=0>
+    int get_temporary_size(int max_outputs=0) const {
       auto &layer = std::get<I>(params.layers);
       if constexpr (I < num_layers-2) {
         return get_temporary_size<I+1>( std::max( layer.get_num_outputs() , max_outputs ) );
@@ -208,8 +217,10 @@ namespace ponni {
 
 
     // Perform a forward inference pass through this model parallelizing only the batch dimension
-    KOKKOS_INLINE_FUNCTION static void forward_batch_parallel_in_kernel( real2d const &input , real2d const &output ,
-                                                              Params const &params_in , int ibatch ) {
+    KOKKOS_INLINE_FUNCTION static void forward_batch_parallel_in_kernel( real2d const & input     ,
+                                                                         real2d const & output    ,
+                                                                         Params const & params_in ,
+                                                                         int            ibatch    ) {
       auto &layer0 = std::get<0>(params_in.layers);
       #ifdef PONNI_DEBUG
         if (input.extent(0) != layer0.get_num_inputs(layer0.params)) {
@@ -228,14 +239,14 @@ namespace ponni {
 
     // Traverse the layers of this model inside a GPU kernel
     template <int I=0>
-    KOKKOS_INLINE_FUNCTION void static traverse_layers_batch_parallel(TUPLE      const & layers      ,
-                                                           SAVED_TYPE const & saved_states,
-                                                           real2d     const & input_glob  ,
-                                                           real2d     const & output_glob ,
-                                                           real2d     const & tmp1        ,
-                                                           real2d     const & tmp2        ,
-                                                           int                ibatch      ,
-                                                           bool               output_in_tmp1 = false) {
+    KOKKOS_INLINE_FUNCTION void static traverse_layers_batch_parallel( TUPLE      const & layers                 ,
+                                                                       SAVED_TYPE const & saved_states           ,
+                                                                       real2d     const & input_glob             ,
+                                                                       real2d     const & output_glob            ,
+                                                                       real2d     const & tmp1                   ,
+                                                                       real2d     const & tmp2                   ,
+                                                                       int                ibatch                 ,
+                                                                       bool               output_in_tmp1 = false ) {
       using LAYER_TYPE = typename std::tuple_element<I,TUPLE>::type;
       auto &layer = std::get<I>(layers);
       // These are placeholder arrays to point to the appropriate tempoarary array, input, or output
@@ -281,6 +292,54 @@ namespace ponni {
                                             tmp1,tmp2,ibatch,output_in_tmp1);
       }
     } // traverse_layers_batch_parallel
+
+
+
+    int static constexpr IN_GL  = std::tuple_element_t<0           ,TUPLE>::INPUT_SIZE;
+    int static constexpr OUT_GL = std::tuple_element_t<num_layers-1,TUPLE>::OUTPUT_SIZE;
+    KOKKOS_INLINE_FUNCTION static void forward_batch_parallel_in_kernel( SArray<real,1,IN_GL > const & input     ,
+                                                                         SArray<real,1,OUT_GL>       & output    ,
+                                                                         Params                const & params_in ) {
+      if constexpr (num_layers == 1) {
+        auto &layer0 = std::get<0>(params_in.layers);
+        layer0.compute_all_outputs(input,output,layer0.params);
+      } else {
+        SArray<real,1,std::tuple_element_t<0,TUPLE>::OUTPUT_SIZE> tmp;
+        traverse_layers_batch_parallel( params_in.layers , input , output , SArray<real,1,IN_GL>() , tmp );
+      }
+    } // forward_batch_parallel_in_kernel
+
+
+
+    // Traverse the layers of this model inside a GPU kernel
+    template <int I = 0>
+    KOKKOS_INLINE_FUNCTION void static traverse_layers_batch_parallel( TUPLE                 const & layers   ,
+                                                                       SArray<real,1,IN_GL > const & in_glob  ,
+                                                                       SArray<real,1,OUT_GL>       & out_glob ,
+                                                                       SArray<real,1,std::tuple_element_t<I,TUPLE>::INPUT_SIZE > const & in  ,
+                                                                       SArray<real,1,std::tuple_element_t<I,TUPLE>::OUTPUT_SIZE>       & out ) {
+      auto &layer = std::get<I>(layers);
+      if constexpr (I == 0) {
+        SArray<real,1,std::tuple_element_t<I,TUPLE>::OUTPUT_SIZE> tmp;
+        layer.compute_all_outputs(in_glob,tmp,layer.params);
+        if constexpr (std::tuple_element_t<I+1,TUPLE>::overwrite_input) {
+          traverse_layers_batch_parallel<I+1>( layers , in_glob , out_glob , tmp , tmp );
+        } else {
+          SArray<real,1,std::tuple_element_t<I+1,TUPLE>::OUTPUT_SIZE> tmp2;
+          traverse_layers_batch_parallel<I+1>( layers , in_glob , out_glob , tmp , tmp2 );
+        }
+      } else if constexpr (I < num_layers-1) {
+        layer.compute_all_outputs(in,out,layer.params);
+        if constexpr (std::tuple_element_t<I+1,TUPLE>::overwrite_input) {
+          traverse_layers_batch_parallel<I+1>( layers , in_glob , out_glob , out , out );
+        } else {
+          SArray<real,1,std::tuple_element_t<I+1,TUPLE>::OUTPUT_SIZE> tmp;
+          traverse_layers_batch_parallel<I+1>( layers , in_glob , out_glob , out , tmp );
+        }
+      } else {
+        layer.compute_all_outputs(in,out_glob,layer.params);
+      }
+    }
 
 
 

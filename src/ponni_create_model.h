@@ -39,13 +39,6 @@ namespace ponni {
     return Inference<std::tuple<LAYERS...>,Kokkos::Experimental::bhalf_t>(std::make_tuple(layers...));
   }
 
-  // // Convenience Inference model creation function to allow the user to just list a bunch of successive
-  // // Layers.
-  // template <class... LAYERS>
-  // inline Inference<std::tuple<LAYERS...>,half> create_inference_model_half_precision(LAYERS const &...layers) {
-  //   return Inference<std::tuple<LAYERS...>,half>(std::make_tuple(layers...));
-  // }
-
 }
 
 
