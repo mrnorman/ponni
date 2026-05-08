@@ -4,11 +4,11 @@
 
 namespace ponni {
 
-  template <int ISAVE, class real = float, size_t N1 = 1, size_t N2 = 1>
+  template <int ISAVE, class real = float, int N1 = 1, int N2 = 1>
   struct Binop_Concatenate {
-    typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
-    typedef typename yakl::Array<real  ,1,yakl::memDevice> real1d;
-    typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
+    typedef yakl::Array<double *,Kokkos::HostSpace> doubleHost1d;
+    typedef yakl::Array<real   *                  > real1d;
+    typedef yakl::Array<real   *                  > real2d;
     
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = true; // Use two inputs?
@@ -63,10 +63,10 @@ namespace ponni {
       }
     }
 
-    KOKKOS_INLINE_FUNCTION static void compute_all_outputs( SArray<real,1,N1   > const & input1    ,
-                                                            SArray<real,1,N2   > const & input2    ,
-                                                            SArray<real,1,N1+N2>       & output    ,
-                                                            Params               const & params_in ) {
+    KOKKOS_INLINE_FUNCTION static void compute_all_outputs( SArray<real,N1   > const & input1    ,
+                                                            SArray<real,N2   > const & input2    ,
+                                                            SArray<real,N1+N2>       & output    ,
+                                                            Params             const & params_in ) {
       if (params_in.after) {
         for (int i = 0; i < N1+N2; i++) { output(i) = i < N1 ? input1(i) : input2(i - N1); }
       } else {

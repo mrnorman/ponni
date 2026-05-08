@@ -19,12 +19,13 @@ namespace ponni {
     ~Initializer_Random_Uniform() = default;
 
 
-    template <int N> void fill(yakl::Array<real,N,yakl::memDevice> a) const {
+    template <class ViewType> requires yakl::is_Array<ViewType>
+    void fill(ViewType const & a) const {
       auto c = a.collapse(); // Alias a's data pointer with collapsed array
       YAKL_SCOPE( lb   , this->lb   );
       YAKL_SCOPE( ub   , this->ub   );
       YAKL_SCOPE( seed , this->seed );
-      yakl::c::parallel_for( YAKL_AUTO_LABEL() , c.size() , KOKKOS_LAMBDA (int i) {
+      yakl::parallel_for( YAKL_AUTO_LABEL() , c.size() , KOKKOS_LAMBDA (int i) {
         yakl::Random rand(seed + i);
         c(i) = rand.genFP<real>(lb,ub);
       });

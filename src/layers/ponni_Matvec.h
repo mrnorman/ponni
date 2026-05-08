@@ -4,12 +4,12 @@
 
 namespace ponni {
 
-  template <class real = float, size_t N_IN = 1, size_t N_OUT = 1>
+  template <class real = float, int N_IN = 1, int N_OUT = 1>
   struct Matvec {
-    typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
-    typedef typename yakl::Array<real  ,1,yakl::memHost  > realHost1d;
-    typedef typename yakl::Array<real  ,1,yakl::memDevice> real1d;
-    typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
+    typedef yakl::Array<double * ,Kokkos::HostSpace> doubleHost1d;
+    typedef yakl::Array<real   * ,Kokkos::HostSpace> realHost1d;
+    typedef yakl::Array<real   *                   > real1d;
+    typedef yakl::Array<real   **                  > real2d;
     
     bool static constexpr overwrite_input = false;
     bool static constexpr binop           = false; // Use two inputs?
@@ -37,7 +37,7 @@ namespace ponni {
     Matvec( real2d const &weights , bool trainable=true ) { init(weights,trainable); }
 
     void init( real2d const &weights , bool trainable=true ) {
-      if ( ! weights.initialized() ) Kokkos::abort("ERROR: Matvec weights matrix not initialized");
+      if ( ! weights.is_allocated() ) Kokkos::abort("ERROR: Matvec weights matrix not is_allocated");
       params.weights   = weights.reshape(weights.extent(0),weights.extent(1));
       params.trainable = trainable;
     }
@@ -64,9 +64,9 @@ namespace ponni {
       }
     }
 
-    KOKKOS_INLINE_FUNCTION static void compute_all_outputs( SArray<real,1,N_IN > const & input     ,
-                                                            SArray<real,1,N_OUT>       & output    ,
-                                                            Params               const & params_in ) {
+    KOKKOS_INLINE_FUNCTION static void compute_all_outputs( SArray<real,N_IN > const & input     ,
+                                                            SArray<real,N_OUT>       & output    ,
+                                                            Params             const & params_in ) {
       for (int irow = 0; irow < N_OUT; irow++) {
         real tmp = 0;
         for (int k=0; k < N_IN; k++) { tmp += params_in.weights(k,irow) * input(k); }
@@ -75,7 +75,7 @@ namespace ponni {
     }
 
     void set_trainable_parameters(real1d const &in) {
-      if (params.trainable) in.subset_slowest_dimension(get_num_trainable_parameters()).deep_copy_to(params.weights);
+      if (params.trainable) in.subset_slowest_dimension(get_num_trainable_parameters()).deep_copy_to(params.weights.collapse());
     }
 
     real1d get_trainable_parameters() const {
@@ -103,7 +103,7 @@ namespace ponni {
     }
 
     void validate() const {
-      if (! params.weights.initialized()) Kokkos::abort("ERROR: weights not initialized");
+      if (! params.weights.is_allocated()) Kokkos::abort("ERROR: weights not is_allocated");
     }
   };
 

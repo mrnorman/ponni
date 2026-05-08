@@ -12,9 +12,9 @@ namespace ponni {
   // The only data held in this class are the saved states and each layer's parameters
   template <class TUPLE, class real = float>
   struct Inference {
-    typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
-    typedef typename yakl::Array<real  ,1,yakl::memDevice> real1d;
-    typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
+    typedef typename yakl::Array<double * ,Kokkos::HostSpace> doubleHost1d;
+    typedef typename yakl::Array<real   *                   > real1d;
+    typedef typename yakl::Array<real   **                  > real2d;
     // ***********************************************************************
     // ** FUNCTIONS AND CONSTEXPR VARIABLES NEEDED TO DECLARE CLASS MEMBERS **
     // ***********************************************************************
@@ -62,7 +62,7 @@ namespace ponni {
     };
 
     // This declares an SArray type that holds SavedState inner types to hold all necessary saved states at a given time
-    typedef typename yakl::SArray<SavedState,1,get_num_saved_states() == 0 ? 1 : get_num_saved_states()> SAVED_TYPE;
+    typedef typename yakl::SArray<SavedState,get_num_saved_states() == 0 ? 1 : get_num_saved_states()> SAVED_TYPE;
 
     // ****************************************************
     // ** ALL DATA MEMBERS ARE INSIDE THIS PARAMS STRUCT **
@@ -177,8 +177,6 @@ namespace ponni {
 
     // Perform a forward inference pass through this model parallelizing only the batch dimension
     real2d forward_batch_parallel( real2d const &input ) {
-      using yakl::c::parallel_for;
-      using yakl::c::SimpleBounds;
       YAKL_SCOPE( layers       , this->params.layers       );
       YAKL_SCOPE( saved_states , this->params.saved_states );
       YAKL_SCOPE( tmp1         , this->params.tmp1         );
@@ -199,7 +197,7 @@ namespace ponni {
       real2d output("output",num_outputs,batch_size);
       if constexpr (num_layers == 1) {  // Trivial case for one layer
         // GPU kernel threading over batches
-        parallel_for( YAKL_AUTO_LABEL() , batch_size , KOKKOS_LAMBDA (int ibatch) {
+        yakl::parallel_for( YAKL_AUTO_LABEL() , batch_size , KOKKOS_LAMBDA (int ibatch) {
           layer0.compute_all_outputs(input, output, ibatch, layer0.params);
         });
       } else {
@@ -207,7 +205,7 @@ namespace ponni {
         // This overrides the default allocate of batch size of one
         int temp_size = get_temporary_size();
         // GPU kernel threading over batch size that traverses the model's layers
-        parallel_for( YAKL_AUTO_LABEL() , batch_size , KOKKOS_LAMBDA (int ibatch) {
+        yakl::parallel_for( YAKL_AUTO_LABEL() , batch_size , KOKKOS_LAMBDA (int ibatch) {
           traverse_layers_batch_parallel(layers, saved_states, input, output, tmp1, tmp2, ibatch);
         });
       }
@@ -297,15 +295,15 @@ namespace ponni {
 
     int static constexpr IN_GL  = std::tuple_element_t<0           ,TUPLE>::INPUT_SIZE;
     int static constexpr OUT_GL = std::tuple_element_t<num_layers-1,TUPLE>::OUTPUT_SIZE;
-    KOKKOS_INLINE_FUNCTION static void forward_batch_parallel_in_kernel( SArray<real,1,IN_GL > const & input     ,
-                                                                         SArray<real,1,OUT_GL>       & output    ,
-                                                                         Params                const & params_in ) {
+    KOKKOS_INLINE_FUNCTION static void forward_batch_parallel_in_kernel( SArray<real,IN_GL > const & input     ,
+                                                                         SArray<real,OUT_GL>       & output    ,
+                                                                         Params              const & params_in ) {
       if constexpr (num_layers == 1) {
         auto &layer0 = std::get<0>(params_in.layers);
         layer0.compute_all_outputs(input,output,layer0.params);
       } else {
-        SArray<real,1,std::tuple_element_t<0,TUPLE>::OUTPUT_SIZE> tmp;
-        traverse_layers_batch_parallel( params_in.layers , input , output , SArray<real,1,IN_GL>() , tmp );
+        SArray<real,std::tuple_element_t<0,TUPLE>::OUTPUT_SIZE> tmp;
+        traverse_layers_batch_parallel( params_in.layers , input , output , SArray<real,IN_GL>() , tmp );
       }
     } // forward_batch_parallel_in_kernel
 
@@ -314,18 +312,18 @@ namespace ponni {
     // Traverse the layers of this model inside a GPU kernel
     template <int I = 0>
     KOKKOS_INLINE_FUNCTION void static traverse_layers_batch_parallel( TUPLE                 const & layers   ,
-                                                                       SArray<real,1,IN_GL > const & in_glob  ,
-                                                                       SArray<real,1,OUT_GL>       & out_glob ,
-                                                                       SArray<real,1,std::tuple_element_t<I,TUPLE>::INPUT_SIZE > const & in  ,
-                                                                       SArray<real,1,std::tuple_element_t<I,TUPLE>::OUTPUT_SIZE>       & out ) {
+                                                                       SArray<real,IN_GL > const & in_glob  ,
+                                                                       SArray<real,OUT_GL>       & out_glob ,
+                                                                       SArray<real,std::tuple_element_t<I,TUPLE>::INPUT_SIZE > const & in  ,
+                                                                       SArray<real,std::tuple_element_t<I,TUPLE>::OUTPUT_SIZE>       & out ) {
       auto &layer = std::get<I>(layers);
       if constexpr (I == 0) {
-        SArray<real,1,std::tuple_element_t<I,TUPLE>::OUTPUT_SIZE> tmp;
+        SArray<real,std::tuple_element_t<I,TUPLE>::OUTPUT_SIZE> tmp;
         layer.compute_all_outputs(in_glob,tmp,layer.params);
         if constexpr (std::tuple_element_t<I+1,TUPLE>::overwrite_input) {
           traverse_layers_batch_parallel<I+1>( layers , in_glob , out_glob , tmp , tmp );
         } else {
-          SArray<real,1,std::tuple_element_t<I+1,TUPLE>::OUTPUT_SIZE> tmp2;
+          SArray<real,std::tuple_element_t<I+1,TUPLE>::OUTPUT_SIZE> tmp2;
           traverse_layers_batch_parallel<I+1>( layers , in_glob , out_glob , tmp , tmp2 );
         }
       } else if constexpr (I < num_layers-1) {
@@ -333,7 +331,7 @@ namespace ponni {
         if constexpr (std::tuple_element_t<I+1,TUPLE>::overwrite_input) {
           traverse_layers_batch_parallel<I+1>( layers , in_glob , out_glob , out , out );
         } else {
-          SArray<real,1,std::tuple_element_t<I+1,TUPLE>::OUTPUT_SIZE> tmp;
+          SArray<real,std::tuple_element_t<I+1,TUPLE>::OUTPUT_SIZE> tmp;
           traverse_layers_batch_parallel<I+1>( layers , in_glob , out_glob , out , tmp );
         }
       } else {
@@ -420,7 +418,7 @@ namespace ponni {
       std::get<I>(params.layers).from_array(array);
       int offset = std::get<I>(params.layers).get_array_representation_size();
       if (offset > array.size()) Kokkos::abort("ERROR: Incompatible array representation");
-      doubleHost1d tmp( array.label() , array.data()+offset , array.size()-offset );
+      doubleHost1d tmp( array.data()+offset , array.size()-offset );
       if constexpr (I < num_layers-1) set_layers_from_array_representation<I+1>(tmp);
     }
 

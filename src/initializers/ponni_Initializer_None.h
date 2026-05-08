@@ -11,7 +11,8 @@ namespace ponni {
     ~Initializer_None() = default;
 
 
-    template <int N> void fill(yakl::Array<real,N,yakl::memDevice> a) const { }
+    template <class ViewType> requires yakl::is_Array<ViewType>
+    void fill(ViewType const & a) const { }
 
   };
 

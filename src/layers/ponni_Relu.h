@@ -4,12 +4,12 @@
 
 namespace ponni {
 
-  template <class real = float, size_t N = 1>
+  template <class real = float, int N = 1>
   struct Relu {
-    typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
-    typedef typename yakl::Array<real  ,1,yakl::memHost  > realHost1d;
-    typedef typename yakl::Array<real  ,1,yakl::memDevice> real1d;
-    typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
+    typedef yakl::Array<double * ,Kokkos::HostSpace> doubleHost1d;
+    typedef yakl::Array<real   * ,Kokkos::HostSpace> realHost1d;
+    typedef yakl::Array<real   *                   > real1d;
+    typedef yakl::Array<real   **                  > real2d;
 
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?
@@ -57,9 +57,9 @@ namespace ponni {
       }
     }
 
-    KOKKOS_INLINE_FUNCTION static void compute_all_outputs( SArray<real,1,N> const & input     ,
-                                                            SArray<real,1,N>       & output    ,
-                                                            Params           const & params_in ) {
+    KOKKOS_INLINE_FUNCTION static void compute_all_outputs( SArray<real,N> const & input     ,
+                                                            SArray<real,N>       & output    ,
+                                                            Params         const & params_in ) {
       for (int i = 0; i < N; i++) { output(i) = input(i) * (input(i) < 0 ? params_in.negative_slope : 1); }
     }
 

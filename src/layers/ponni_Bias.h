@@ -5,12 +5,12 @@
 namespace ponni {
 
 
-  template <class real = float, size_t N = 1>
+  template <class real = float, int N = 1>
   struct Bias {
-    typedef typename yakl::Array<double,1,yakl::memHost  > doubleHost1d;
-    typedef typename yakl::Array<real  ,1,yakl::memHost  > realHost1d;
-    typedef typename yakl::Array<real  ,1,yakl::memDevice> real1d;
-    typedef typename yakl::Array<real  ,2,yakl::memDevice> real2d;
+    typedef yakl::Array<double * ,Kokkos::HostSpace> doubleHost1d;
+    typedef yakl::Array<real   * ,Kokkos::HostSpace> realHost1d;
+    typedef yakl::Array<real   *                   > real1d;
+    typedef yakl::Array<real   **                  > real2d;
     
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?
@@ -37,7 +37,7 @@ namespace ponni {
     Bias( real1d const &weights , bool trainable=true ) { init(weights,trainable); }
 
     void init( real1d const &weights , bool trainable=true ) {
-      if ( ! weights.initialized() ) Kokkos::abort("ERROR: Bias weights vector not allocated");
+      if ( ! weights.is_allocated() ) Kokkos::abort("ERROR: Bias weights vector not allocated");
       params.weights   = weights;
       params.trainable = trainable;
     }
@@ -61,9 +61,9 @@ namespace ponni {
       }
     }
 
-    KOKKOS_INLINE_FUNCTION static void compute_all_outputs(SArray<real,1,N> const & input     ,
-                                                           SArray<real,1,N>       & output    ,
-                                                           Params           const & params_in ) {
+    KOKKOS_INLINE_FUNCTION static void compute_all_outputs(SArray<real,N> const & input     ,
+                                                           SArray<real,N>       & output    ,
+                                                           Params         const & params_in ) {
       for (int i = 0; i < N; i++) { output(i) = input(i) + params_in.weights(i); }
     }
 
@@ -94,7 +94,7 @@ namespace ponni {
     }
 
     void validate() const {
-      if (! params.weights.initialized()) Kokkos::abort("ERROR: weights not initialized");
+      if (! params.weights.is_allocated()) Kokkos::abort("ERROR: weights not is_allocated");
     }
   };
 
