@@ -5,6 +5,11 @@
 int main( int argc , char **argv ) {
   yakl::init();
   {
+    if (argc == 1) {
+      std::cerr << "Usage: " << argv[0] << " <weights.h5>" << std::endl;
+      return -1;
+    }
+
     // This is the file with the saved tensorflow weights
     std::string fname = argv[1];
 
