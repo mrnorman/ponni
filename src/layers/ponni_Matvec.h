@@ -38,7 +38,7 @@ namespace ponni {
 
     void init( real2d const &weights , bool trainable=true ) {
       if ( ! weights.is_allocated() ) Kokkos::abort("ERROR: Matvec weights matrix not is_allocated");
-      params.weights   = weights.reshape(weights.extent(0),weights.extent(1));
+      params.weights   = weights;
       params.trainable = trainable;
     }
 
@@ -97,9 +97,11 @@ namespace ponni {
       int  num_inputs    = data(0);
       int  num_outputs   = data(1);
       bool trainable     = data(2) == 1;
-      realHost1d weights("Matvec_weights",num_inputs*num_outputs);
-      for (int i=0; i < weights.size(); i++) { weights(i) = data(3+i); }
-      init( weights.createDeviceCopy().reshape(num_inputs,num_outputs) , trainable );
+      realHost1d weights_flat("Matvec_weights",num_inputs*num_outputs);
+      for (int i=0; i < weights_flat.size(); i++) { weights_flat(i) = data(3+i); }
+      real2d weights("Matvec_weights",num_inputs,num_outputs);
+      weights_flat.createDeviceCopy().deep_copy_to(weights.collapse());
+      init( weights , trainable );
     }
 
     void validate() const {
