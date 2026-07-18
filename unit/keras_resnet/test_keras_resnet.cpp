@@ -110,7 +110,7 @@ int main( int argc , char **argv ) {
                                        0.74753839,0.74756271,0.74750465,0.74751884,0.74753231,0.74750185,
                                        0.74752432,0.74751109,0.74751288,0.74754196,0.74753088,0.74754441,
                                        0.74752563,0.74750173,0.74751961,0.51605195,0.44940680};
-      yakl::Array<float,2,yakl::memHost> inputs("inputs",datavec.data(),137,1);
+      yakl::Array<float**,Kokkos::HostSpace> inputs(datavec.data(),137,1);
 
       auto out_host = model.forward_batch_parallel( inputs.createDeviceCopy() ).createHostCopy();
 
@@ -153,12 +153,12 @@ int main( int argc , char **argv ) {
                                        0.74753839,0.74756271,0.74750465,0.74751884,0.74753231,0.74750185,
                                        0.74752432,0.74751109,0.74751288,0.74754196,0.74753088,0.74754441,
                                        0.74752563,0.74750173,0.74751961,0.51605195,0.44940680};
-      yakl::Array<float,2,yakl::memHost> inputs_host("inputs",datavec.data(),137,1);
+      yakl::Array<float**,Kokkos::HostSpace> inputs_host(datavec.data(),137,1);
       auto inputs = inputs_host.createDeviceCopy();
 
       model.init( 1 );
-      yakl::Array<float,2,yakl::memDevice> outputs("outputs",5,1);
-      yakl::c::parallel_for( YAKL_AUTO_LABEL() , 1 , KOKKOS_LAMBDA (int ibatch) {
+      yakl::Array<float**> outputs("outputs",5,1);
+      yakl::parallel_for( YAKL_AUTO_LABEL() , 1 , KOKKOS_LAMBDA (int ibatch) {
         model.forward_batch_parallel_in_kernel( inputs , outputs , model.params , ibatch );
       });
       auto out_host = outputs.createHostCopy();
