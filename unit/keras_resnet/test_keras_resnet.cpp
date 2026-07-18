@@ -9,6 +9,7 @@ int main( int argc , char **argv ) {
   using ponni::Relu;
   using ponni::Save_State;
   using ponni::Binop_Add;
+  Kokkos::initialize( argc , argv );
   yakl::init();
   {
     // This is the file with the saved tensorflow weights
@@ -178,5 +179,6 @@ int main( int argc , char **argv ) {
 
   }
   yakl::finalize();
+  Kokkos::finalize();
 }
 
