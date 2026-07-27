@@ -52,7 +52,7 @@ int main( int argc , char **argv ) {
     inference.validate();
     inference.print();
 
-    yakl::Array<float,2,yakl::memHost,yakl::styleC> inputs("inputs",12,1);
+    yakl::Array<float**,Kokkos::HostSpace> inputs("inputs",12,1);
     inputs( 0,0) = 5.0881004e-01;
     inputs( 1,0) = 4.7892904e-01;
     inputs( 2,0) = 4.5426106e-01;

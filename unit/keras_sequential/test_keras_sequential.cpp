@@ -20,7 +20,7 @@ int main( int argc , char **argv ) {
     inference.print();
 
     // Load one test sample to ensure we're getting the same outputs
-    yakl::Array<float,2,yakl::memHost,yakl::styleC> inputs("inputs",12,1);
+    yakl::Array<float**,Kokkos::HostSpace> inputs("inputs",12,1);
     inputs( 0,0) = 5.08810276e-01;
     inputs( 1,0) = 4.78929254e-01;
     inputs( 2,0) = 4.54260898e-01;

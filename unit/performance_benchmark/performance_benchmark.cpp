@@ -5,8 +5,8 @@
 int main( int argc , char **argv ) {
   yakl::init();
   {
-    typedef yakl::Array<float,1,yakl::memDevice> real1d;
-    typedef yakl::Array<float,2,yakl::memDevice> real2d;
+    typedef yakl::Array<float *>  real1d;
+    typedef yakl::Array<float **> real2d;
     using ponni::create_inference_model;
     using ponni::Matvec;
     using ponni::Bias;
