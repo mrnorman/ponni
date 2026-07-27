@@ -8,7 +8,7 @@ namespace ponni {
   struct Binop_Add {
     typedef yakl::Array<double *,Kokkos::HostSpace> doubleHost1d;
     typedef yakl::Array<real   *                  > real1d;
-    typedef yakl::Array<real   *                  > real2d;
+    typedef yakl::Array<real   **                 > real2d;
     
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = true; // Use two inputs?
