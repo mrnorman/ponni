@@ -13,6 +13,11 @@ int main( int argc , char **argv ) {
     using ponni::Save_State;
     using ponni::Binop_Add;
 
+    if (argc == 1) {
+      std::cerr << "Usage: " << argv[0] << " <weights.h5>" << std::endl;
+      return -1;
+    }
+
     std::string fname = argv[1];
 
     // Create layers & load weights
