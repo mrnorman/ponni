@@ -3,6 +3,7 @@
 #include "ponni_load_h5_weights.h"
 
 int main( int argc , char **argv ) {
+  Kokkos::initialize( argc , argv );
   yakl::init();
   {
     using ponni::create_inference_model;
@@ -82,5 +83,6 @@ int main( int argc , char **argv ) {
     if ( std::abs( out_host(3,0) - (-1.02701783e-03) ) > 1.e-6 ) Kokkos::abort("ERROR Output 4 diff too large");
   }
   yakl::finalize();
+  Kokkos::finalize();
 }
 

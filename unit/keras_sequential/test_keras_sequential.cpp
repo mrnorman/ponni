@@ -3,6 +3,7 @@
 #include "ponni_load_h5_weights.h"
 
 int main( int argc , char **argv ) {
+  Kokkos::initialize( argc , argv );
   yakl::init();
   {
     // This is the file with the saved tensorflow weights
@@ -52,5 +53,6 @@ int main( int argc , char **argv ) {
     // 4.7658795e-01 4.8446856e-02 1.2472458e-03 4.0419400e-05
   }
   yakl::finalize();
+  Kokkos::finalize();
 }
 

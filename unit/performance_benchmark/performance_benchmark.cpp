@@ -3,6 +3,7 @@
 #include "ponni_load_h5_weights.h"
 
 int main( int argc , char **argv ) {
+  Kokkos::initialize( argc , argv );
   yakl::init();
   {
     typedef yakl::Array<float *>  real1d;
@@ -39,5 +40,6 @@ int main( int argc , char **argv ) {
     std::cout << yakl::intrinsics::sum( outputs ) / num_layers / num_batches << std::endl;
   }
   yakl::finalize();
+  Kokkos::finalize();
 }
 
