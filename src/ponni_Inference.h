@@ -38,7 +38,7 @@ namespace ponni {
     int static constexpr get_max_size_stack() {
       using LAYER_T = typename std::tuple_element_t<I,TUPLE>;
       int constexpr mx = std::max( LAYER_T::INPUT_SIZE , LAYER_T::OUTPUT_SIZE );
-      if constexpr (I < num_layers-1) { return std::max( mx , get_temporary_size_stack<I+1>() ); }
+      if constexpr (I < num_layers-1) { return std::max( mx , get_max_size_stack<I+1>() ); }
       else                            { return mx; }
     }
 
@@ -106,7 +106,7 @@ namespace ponni {
 
 
     
-    bool initialized() const { return params.tmp1.initialized(); }
+    bool initialized() const { return params.tmp1.is_allocated(); }
 
 
 
@@ -378,7 +378,7 @@ namespace ponni {
     real1d get_trainable_parameters(real1d params_glob = real1d() , int offset = 0) const {
       if constexpr (I == 0) params_glob = real1d("params_glob",get_num_trainable_parameters());
       auto params_loc = std::get<I>(params.layers).get_trainable_parameters();
-      if (params_loc.initialized()) {
+      if (params_loc.is_allocated()) {
         auto arr = params_glob.subset_slowest_dimension(offset,offset+params_loc.size()-1);
         params_loc.deep_copy_to(arr);
         offset += params_loc.size();

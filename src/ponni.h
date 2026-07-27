@@ -4,6 +4,8 @@
 #include "YAKL.h"
 
 namespace ponni {
+  using yakl::SArray;
+
   inline void debug_print( char const * file , int line ) {
     std::cout << "*** DEBUG: " << file << ": " << line << std::endl;
   }
