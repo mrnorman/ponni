@@ -11,7 +11,6 @@ endif()
 
 # YAKL library
 add_subdirectory($ENV{KOKKOS_HOME} ./kokkos )
-include_directories(${Kokkos_INCLUDE_DIRS_RET})
 add_subdirectory($ENV{YAKL_HOME}   ./yakl   )
 add_subdirectory(..                ./ponni  )
 
