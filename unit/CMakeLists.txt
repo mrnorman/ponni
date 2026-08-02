@@ -5,6 +5,17 @@ enable_testing()
 enable_language(CXX)
 enable_language(C)
 
+option(PONNI_ENABLE_COVERAGE "Enable gcov coverage flags and coverage report targets" OFF)
+
+if (PONNI_ENABLE_COVERAGE)
+	if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+		add_compile_options(-O0 -g --coverage)
+		add_link_options(--coverage)
+	else()
+		message(WARNING "PONNI_ENABLE_COVERAGE requested, but compiler is not GCC/Clang. Coverage flags were not applied.")
+	endif()
+endif()
+
 add_subdirectory($ENV{KOKKOS_HOME} ./kokkos )
 add_subdirectory(..                ./ponni  )
 
@@ -18,4 +29,52 @@ add_subdirectory(keras_sequential)
 add_subdirectory(performance_benchmark)
 add_subdirectory(pytorch_resnet)
 add_subdirectory(keras_resnet)
+add_subdirectory(core core_unit_tests)
+
+add_test(NAME src_gcov_summary_test
+		 COMMAND /bin/bash ${CMAKE_SOURCE_DIR}/report_src_gcov_summary.sh ${CMAKE_BINARY_DIR})
+set_tests_properties(src_gcov_summary_test PROPERTIES
+					 DEPENDS "keras_sequential_test;pytorch_resnet_test;keras_resnet_test;core_unit_test")
+
+if (PONNI_ENABLE_COVERAGE)
+	find_program(GCOV_EXECUTABLE gcov)
+	find_program(GCOVR_EXECUTABLE gcovr)
+
+	if (GCOV_EXECUTABLE)
+		add_custom_target(coverage
+			COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+			COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/coverage
+			COMMAND ${CMAKE_COMMAND}
+					-DGCOV_EXECUTABLE=${GCOV_EXECUTABLE}
+					-DCOVERAGE_BUILD_DIR=${CMAKE_BINARY_DIR}
+					-P ${CMAKE_SOURCE_DIR}/run_gcov.cmake
+			COMMAND ${CMAKE_COMMAND} -E echo "gcov report written to ${CMAKE_BINARY_DIR}/coverage/gcov.txt"
+			WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+			COMMENT "Running unit tests and generating gcov coverage report"
+		)
+
+		if (GCOVR_EXECUTABLE)
+			add_custom_command(TARGET coverage POST_BUILD
+				COMMAND ${GCOVR_EXECUTABLE}
+						--root ${CMAKE_SOURCE_DIR}/..
+						--object-directory ${CMAKE_BINARY_DIR}
+						--gcov-executable ${GCOV_EXECUTABLE}
+						--filter ${CMAKE_SOURCE_DIR}/../src
+						--exclude ${CMAKE_SOURCE_DIR}/../unit/externals
+						--print-summary
+						--txt ${CMAKE_BINARY_DIR}/coverage/coverage.txt
+						--html-details ${CMAKE_BINARY_DIR}/coverage/index.html
+				WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+				COMMENT "gcovr detected: generating summary text/html reports"
+			)
+		endif()
+	else()
+		add_custom_target(coverage
+			COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+			COMMAND ${CMAKE_COMMAND} -E echo "gcov not found: tests ran with coverage flags, but report generation was skipped."
+			WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+			COMMENT "Running unit tests with coverage instrumentation"
+		)
+	endif()
+endif()
 

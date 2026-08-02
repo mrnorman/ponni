@@ -15,16 +15,56 @@ add_library(MyProject ${MY_SOURCES})  # or add_executable
 target_link_libraries(MyProject ponni)
 ```
 
-To run the unit tests:
+## Unit tests
+
+Run all unit tests:
+
 ```bash
 git clone git@github.com:mrnorman/ponni.git
 cd ponni
-# Run command below to use the kokkos submodule of this repo
 git submodule update --init --checkout -- unit/build/externals/kokkos
 cd unit/build
-# To change the kokkos used for testing, change KOKKOS_HOME in the machine file
-source machines/[machine_name]/[machine_file]
+# Choose or create a machine profile
+source machines/thatchroof/thatchroof_cpu_coverage.env
 ./cmakescript.sh
 make -j8
-ctest
+ctest -V
+```
+
+Notes:
+
+- All unit tests are registered through CTest.
+- The performance benchmark executable is built, but it is not registered as a CTest test and is not run by `ctest`.
+
+## Coverage tests with gcov
+
+To run tests with gcov instrumentation and print per-file coverage summaries for all files discovered under `ponni/src`:
+
+```bash
+cd unit/build
+source machines/thatchroof/thatchroof_cpu_coverage.env
+export PONNI_COVERAGE=ON
+./cmakescript.sh
+make -j8
+# Optional but recommended before collecting fresh coverage:
+find . -name '*.gcda' -delete
+ctest -V
+```
+
+The CTest run includes `src_gcov_summary_test`, which executes `unit/report_src_gcov_summary.sh` and reports:
+
+- Number of source files found recursively under `ponni/src`
+- Per-file gcov line coverage summaries
+- Files missing gcov data
+
+Coverage artifacts are written to:
+
+- `unit/build/coverage/src_gcov_summary.txt`
+- `unit/build/coverage/gcov_intermediate_all.txt`
+
+You can also run the summary script directly:
+
+```bash
+cd unit/build
+/bin/bash ../report_src_gcov_summary.sh "$PWD"
 ```

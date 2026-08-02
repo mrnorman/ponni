@@ -84,6 +84,22 @@ namespace Kokkos {
 
     #else
 
+    #if defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_OPENMP) || defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_THREADS)
+
+    template <> struct MemorySpaceAccess<HostSpace,ponni::DeviceSpace> {
+      enum : bool { assignable = true };
+      enum : bool { accessible = true };
+      enum : bool { deepcopy   = true };
+    };
+
+    template <> struct MemorySpaceAccess<ponni::DeviceSpace,HostSpace> {
+      enum : bool { assignable = true };
+      enum : bool { accessible = true };
+      enum : bool { deepcopy   = true };
+    };
+
+    #else
+
     template <> struct MemorySpaceAccess<HostSpace,ponni::DeviceSpace> {
       enum : bool { assignable = false };
       enum : bool { accessible = false };
@@ -107,6 +123,8 @@ namespace Kokkos {
       enum : bool { accessible = true  };
       enum : bool { deepcopy   = true  };
     };
+
+    #endif
     #endif
 
     template <typename ExecSpace>
@@ -139,7 +157,7 @@ namespace Kokkos {
       }
     };
 
-    #ifndef KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL
+    #if ! defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_SERIAL) && ! defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_OPENMP) && ! defined(KOKKOS_ENABLE_DEFAULT_DEVICE_TYPE_THREADS)
     template <typename ExecSpace>
     struct DeepCopy<ponni::DeviceSpace,Kokkos::DefaultExecutionSpace::memory_space,ExecSpace> {
       DeepCopy(void * dst , void const * src , size_t n) {

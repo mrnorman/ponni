@@ -25,7 +25,7 @@ namespace ponni {
     void fill(ViewType const & a) const {
       using execution_space = typename ViewType::execution_space;
 
-      auto c = a.collapse(); // Alias a's data pointer with collapsed array
+      auto c = ponni::flatten(a);
       PONNI_SCOPE( lb   , this->lb   );
       PONNI_SCOPE( ub   , this->ub   );
       PONNI_SCOPE( seed , this->seed );

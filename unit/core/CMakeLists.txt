@@ -1,0 +1,10 @@
+add_executable(core_unit test_core_unit.cpp)
+target_link_libraries(core_unit ponni Kokkos::kokkos ${PONNI_LINK_FLAGS})
+target_compile_options(core_unit PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${PONNI_CXX_FLAGS}>)
+
+if (DEFINED MPI_COMMAND)
+  separate_arguments(REAL_MPI_COMMAND UNIX_COMMAND $ENV{MPI_COMMAND})
+  add_test(NAME core_unit_test COMMAND ${REAL_MPI_COMMAND} ./core_unit)
+else()
+  add_test(NAME core_unit_test COMMAND ./core_unit)
+endif()
