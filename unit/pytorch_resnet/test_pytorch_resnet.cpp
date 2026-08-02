@@ -9,7 +9,7 @@ int main( int argc , char **argv ) {
     using ponni::create_inference_model;
     using ponni::Matvec;
     using ponni::Bias;
-    using ponni::Relu;
+    using ponni::Silu;
     using ponni::Save_State;
     using ponni::Binop_Add;
 
@@ -36,21 +36,21 @@ int main( int argc , char **argv ) {
     // Create an inference model to perform batched forward predictions
     auto inference = create_inference_model( matvec_1                       ,
                                              bias_1                         ,
-                                             Relu        <float>( 5 , 0.1 ) ,
+                                             Silu        <float>( 5 )                            ,
                                              Save_State<0,float>( 5 )       ,
                                              matvec_2                       ,
                                              bias_2                         ,
-                                             Relu        <float>( 5 , 0.1 ) ,
+                                             Silu        <float>( 5 )                            ,
                                              Binop_Add <0,float>( 5 )       ,
                                              Save_State<0,float>( 5 )       ,
                                              matvec_3                       ,
                                              bias_3                         ,
-                                             Relu        <float>( 5 , 0.1 ) ,
+                                             Silu        <float>( 5 )                            ,
                                              Binop_Add <0,float>( 5 )       ,
                                              Save_State<0,float>( 5 )       ,
                                              matvec_4                       ,
                                              bias_4                         ,
-                                             Relu        <float>( 5 , 0.1 ) ,
+                                             Silu        <float>( 5 )                            ,
                                              Binop_Add <0,float>( 5 )       ,
                                              matvec_5                       ,
                                              bias_5                         );
@@ -80,4 +80,3 @@ int main( int argc , char **argv ) {
   ponni::finalize_device_pool();
   Kokkos::finalize();
 }
-

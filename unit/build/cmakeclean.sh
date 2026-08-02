@@ -7,5 +7,5 @@ rm -rf CArray CMakeCache.txt CMakeFiles cmake_install.cmake CTestTestfile.cmake 
        performance_benchmark.cpp.gcov.json.gz ponni_DeviceSpace.cpp.gcov.json.gz             \
        test_core_unit.cpp.gcov.json.gz test_keras_resnet.cpp.gcov.json.gz                    \
        test_keras_sequential.cpp.gcov.json.gz test_pytorch_resnet.cpp.gcov.json.gz           \
-       uv_path.txt
+       uv_path.txt test_projection_skip.cpp.gcov.json.gz projection_skip
 

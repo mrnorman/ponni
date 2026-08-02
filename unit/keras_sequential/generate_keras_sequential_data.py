@@ -20,7 +20,7 @@ def main() -> None:
 
     inputs = keras.Input(shape=(12,), name="input")
     x = layers.Dense(10, name="dense")(inputs)
-    x = layers.LeakyReLU(negative_slope=0.1, name="relu_1")(x)
+    x = layers.Activation("tanh", name="tanh_1")(x)
     outputs = layers.Dense(4, name="dense_1")(x)
     model = keras.Model(inputs, outputs)
 

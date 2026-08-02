@@ -21,18 +21,18 @@ class TinyResNet(nn.Module):
         self.fc5 = nn.Linear(5, 4)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = F.leaky_relu(self.fc1(x), negative_slope=0.1)
+        x = F.silu(self.fc1(x))
         saved = x
 
-        x = F.leaky_relu(self.fc2(x), negative_slope=0.1)
+        x = F.silu(self.fc2(x))
         x = x + saved
         saved = x
 
-        x = F.leaky_relu(self.fc3(x), negative_slope=0.1)
+        x = F.silu(self.fc3(x))
         x = x + saved
         saved = x
 
-        x = F.leaky_relu(self.fc4(x), negative_slope=0.1)
+        x = F.silu(self.fc4(x))
         x = x + saved
 
         return self.fc5(x)

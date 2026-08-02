@@ -15,6 +15,24 @@ add_library(MyProject ${MY_SOURCES})  # or add_executable
 target_link_libraries(MyProject ponni)
 ```
 
+## Activation layers
+
+PONNI provides the following activation layers:
+
+- `Relu` (`ReLU`), `LeakyRelu` (`LeakyReLU`), `Elu` (`ELU`), and `Selu` (`SELU`)
+- `Gelu` (`GELU`), `Silu` (`SiLU`), `Sigmoid`, and `Tanh`
+- `Softmax`, `LogSoftmax`, and `Softplus`
+- `HardSigmoid`, `HardSwish`, and `Mish`
+
+Include `ponni.h` to make all activation layers available. Each activation is implemented in its own
+`src/layers/ponni_<Activation>.h` header, following the same one-layer-per-header organization as the other PONNI
+layers.
+
+Every activation supports both dynamic `Kokkos::View` execution and fixed-size `SArray` execution. Activation
+configuration is validated by the layer itself and can be serialized with `to_array()` and restored with
+`from_array()`. Activation layers have no trainable parameters, so `get_num_trainable_parameters()` returns zero and
+`get_trainable_parameters()` returns an empty view.
+
 ## Unit tests
 
 Run all unit tests:
@@ -34,6 +52,8 @@ ctest -V
 Notes:
 
 - All unit tests are registered through CTest.
+- The core unit test covers every activation's host API, configuration serialization, fixed-size `SArray` path, and
+  accelerator-capable `DeviceSpace` path.
 - The performance benchmark executable is built, but it is not registered as a CTest test and is not run by `ctest`.
 - The `keras_sequential`, `keras_resnet`, and `pytorch_resnet` unit tests require Python-generated HDF5 test data.
 

@@ -4,7 +4,7 @@
 namespace ponni {
 
   template <class real = float, int N = 1>
-  struct Relu {
+  struct LeakyRelu {
     typedef Kokkos::View<double *, Kokkos::LayoutRight, Kokkos::HostSpace> doubleHost1d;
     typedef Kokkos::View<real *, Kokkos::LayoutRight, ponni::DeviceSpace> real1d;
     typedef Kokkos::View<real **, Kokkos::LayoutRight, ponni::DeviceSpace> real2d;
@@ -16,52 +16,62 @@ namespace ponni {
     int static constexpr INPUT_SIZE  = static_cast<int>(N);
     int static constexpr OUTPUT_SIZE = static_cast<int>(N);
 
-    struct Params { int num_inputs; };
+    struct Params { int num_inputs; real negative_slope; };
     Params params;
 
-    Relu() = default;
-    ~Relu() = default;
-    explicit Relu(int num_inputs) { init(num_inputs); }
+    LeakyRelu() = default;
+    ~LeakyRelu() = default;
+    explicit LeakyRelu(int num_inputs, real negative_slope = static_cast<real>(0.01)) {
+      init(num_inputs, negative_slope);
+    }
 
-    void init(int num_inputs) { params.num_inputs = num_inputs; }
+    void init(int num_inputs, real negative_slope = static_cast<real>(0.01)) {
+      params.num_inputs = num_inputs;
+      params.negative_slope = negative_slope;
+    }
 
-    char const * get_label() const { return "ReLU"; }
+    char const * get_label() const { return "LeakyReLU"; }
     KOKKOS_INLINE_FUNCTION static int get_num_inputs(Params const & params_in) { return params_in.num_inputs; }
     KOKKOS_INLINE_FUNCTION static int get_num_outputs(Params const & params_in) { return params_in.num_inputs; }
     int get_num_inputs() const { return params.num_inputs; }
     int get_num_outputs() const { return params.num_inputs; }
     int get_num_trainable_parameters() const { return 0; }
-    int get_array_representation_size() const { return 1; }
+    int get_array_representation_size() const { return 2; }
 
-    KOKKOS_INLINE_FUNCTION static real apply(real x) {
-      return x > static_cast<real>(0) ? x : static_cast<real>(0);
+    KOKKOS_INLINE_FUNCTION static real apply(real x, Params const & params_in) {
+      return x > static_cast<real>(0) ? x : params_in.negative_slope * x;
     }
 
     KOKKOS_INLINE_FUNCTION static void compute_all_outputs(real2d const & input, real2d const & output,
                                                            int ibatch, Params const & params_in) {
-      for (int i = 0; i < params_in.num_inputs; i++) output(i,ibatch) = apply(input(i,ibatch));
+      for (int i = 0; i < params_in.num_inputs; i++) output(i,ibatch) = apply(input(i,ibatch), params_in);
     }
 
     KOKKOS_INLINE_FUNCTION static void compute_all_outputs(ponni::SArray<real,N> const & input,
-                                                           ponni::SArray<real,N> & output, Params const &) {
-      for (int i = 0; i < N; i++) output(i) = apply(input(i));
+                                                           ponni::SArray<real,N> & output,
+                                                           Params const & params_in) {
+      for (int i = 0; i < N; i++) output(i) = apply(input(i), params_in);
     }
 
     void set_trainable_parameters(real1d const &) { }
     real1d get_trainable_parameters() const { return real1d(); }
 
     doubleHost1d to_array() const {
-      doubleHost1d data("ReLU_params", get_array_representation_size());
+      doubleHost1d data("LeakyReLU_params", get_array_representation_size());
       data(0) = params.num_inputs;
+      data(1) = params.negative_slope;
       return data;
     }
 
-    void from_array(doubleHost1d const & data) { init(static_cast<int>(data(0))); }
+    void from_array(doubleHost1d const & data) {
+      init(static_cast<int>(data(0)), static_cast<real>(data(1)));
+    }
+
     void validate() const {
-      if (params.num_inputs <= 0) Kokkos::abort("ERROR: ReLU num_inputs must be > 0");
+      if (params.num_inputs <= 0) Kokkos::abort("ERROR: LeakyReLU num_inputs must be > 0");
     }
   };
 
-  template <class real = float, int N = 1> using ReLU = Relu<real,N>;
+  template <class real = float, int N = 1> using LeakyReLU = LeakyRelu<real,N>;
 
 }

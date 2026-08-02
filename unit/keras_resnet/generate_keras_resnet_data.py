@@ -15,12 +15,12 @@ def build_model() -> keras.Model:
     inp = keras.Input(shape=(137,), name="input")
 
     x = layers.Dense(20, name="dense")(inp)
-    x = layers.LeakyReLU(negative_slope=0.1, name="relu_0")(x)
+    x = layers.Activation("silu", name="act_0")(x)
     saved = x
 
     for i in range(1, 9):
         y = layers.Dense(20, name=f"dense_{i}")(x)
-        y = layers.LeakyReLU(negative_slope=0.1, name=f"relu_{i}")(y)
+        y = layers.Activation("silu", name=f"act_{i}")(y)
         x = layers.Add(name=f"add_{i}")([y, saved])
         if i <= 7:
             saved = x

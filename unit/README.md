@@ -1,6 +1,6 @@
 # Unit testing
 
-Workflow to to run the unit tests:
+Workflow to run the unit tests:
 
 ```bash
 git clone git@github.com:mrnorman/ponni.git
@@ -14,6 +14,29 @@ source machines/[machine_name]/[machine_file]
 make -j8
 ctest -V
 ```
+
+For a clean GPU debug build on `thatchroof`, run:
+
+```bash
+cd unit/build
+source machines/thatchroof/thatchroof_gpu_debug.env
+./cmakescript.sh
+make -j
+ctest -V
+```
+
+All tests are registered with CTest except `performance_benchmark`, which is built but not run by `ctest`.
+
+## Activation coverage
+
+`core_unit_test` exercises every activation layer:
+
+- `Relu`, `LeakyRelu`, `Elu`, `Selu`, `Gelu` (exact and approximate), `Silu`, `Sigmoid`, and `Tanh`
+- `Softmax`, `LogSoftmax`, `Softplus`, `HardSigmoid`, `HardSwish`, and `Mish`
+
+For each activation, the test covers validation and metadata, the zero-trainable-parameter API, `to_array()` and
+`from_array()` round trips, fixed-size `SArray` evaluation, and `DeviceSpace` `Kokkos::View` evaluation. This makes the
+GPU debug profile useful for detecting accidental host access to device memory.
 
 ## Python-generated test data (Keras/PyTorch tests)
 

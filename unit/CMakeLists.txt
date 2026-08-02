@@ -65,12 +65,13 @@ add_subdirectory(keras_sequential)
 add_subdirectory(performance_benchmark)
 add_subdirectory(pytorch_resnet)
 add_subdirectory(keras_resnet)
+add_subdirectory(projection_skip)
 add_subdirectory(core core_unit_tests)
 
 add_test(NAME src_gcov_summary_test
 		 COMMAND /bin/bash ${CMAKE_SOURCE_DIR}/report_src_gcov_summary.sh ${CMAKE_BINARY_DIR})
 set_tests_properties(src_gcov_summary_test PROPERTIES
-					 DEPENDS "keras_sequential_test;pytorch_resnet_test;keras_resnet_test;core_unit_test")
+					 DEPENDS "keras_sequential_test;pytorch_resnet_test;keras_resnet_test;projection_skip_test;core_unit_test")
 
 if (PONNI_ENABLE_COVERAGE)
 	find_program(GCOV_EXECUTABLE gcov)

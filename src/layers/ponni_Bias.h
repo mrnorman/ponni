@@ -69,6 +69,7 @@ namespace ponni {
 
     void set_trainable_parameters(real1d const &in) {
       if (params.trainable) {
+        if (in.extent(0) < get_num_trainable_parameters()) Kokkos::abort("ERROR: Bias trainable input too small");
         auto in_reduced = Kokkos::subview(in,std::pair<int,int>(0,get_num_trainable_parameters()));
         Kokkos::deep_copy(params.weights,in_reduced);
       }
@@ -98,9 +99,9 @@ namespace ponni {
 
     void validate() const {
       if (! params.weights.is_allocated()) Kokkos::abort("ERROR: weights not is_allocated");
+      if (params.weights.extent(0) == 0) Kokkos::abort("ERROR: Bias weights must not be empty");
     }
   };
 
 }
-
 

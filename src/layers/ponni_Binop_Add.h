@@ -77,6 +77,9 @@ namespace ponni {
     }
 
     void validate(int saved_layer_num_inputs) const {
+      if (params.num_inputs <= 0 || params.num_outputs != params.num_inputs) {
+        Kokkos::abort("ERROR: Binop_Add invalid input/output size");
+      }
       if ( params.num_inputs != saved_layer_num_inputs ) {
         Kokkos::abort("ERROR: Binop_Add: Saved layer num inputs != this layer's num inputs");
       }
@@ -84,5 +87,4 @@ namespace ponni {
   };
 
 }
-
 

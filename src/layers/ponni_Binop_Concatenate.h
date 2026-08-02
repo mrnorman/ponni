@@ -33,6 +33,7 @@ namespace ponni {
     void init( int num_inputs , int num_outputs , bool after=true ) {
       params.num_inputs  = num_inputs;
       params.num_outputs = num_outputs;
+      params.after       = after;
     }
 
     char const * get_label() const { return "Binop_Concatenate"; }
@@ -93,6 +94,9 @@ namespace ponni {
     }
 
     void validate(int saved_layer_num_inputs) const {
+      if (params.num_inputs <= 0 || saved_layer_num_inputs <= 0) {
+        Kokkos::abort("ERROR: Binop_Concatenate input sizes must be > 0");
+      }
       if ( params.num_outputs != saved_layer_num_inputs + params.num_inputs ) {
         Kokkos::abort("ERROR: Binop_Concatenate: this layer's num outputs != "
                          "this layer's num inputs + saved layer's num inputs");
@@ -101,5 +105,4 @@ namespace ponni {
   };
 
 }
-
 

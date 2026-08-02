@@ -74,9 +74,11 @@ namespace ponni {
       init( static_cast<int>(data(0)) );
     }
 
-    void validate() const { }
+    void validate() const {
+      if (params.num_inputs <= 0) Kokkos::abort("ERROR: Save_State num_inputs must be > 0");
+      if (params.num_outputs != params.num_inputs) Kokkos::abort("ERROR: Save_State input/output size mismatch");
+    }
   };
 
 }
-
 

@@ -11,7 +11,7 @@ int main( int argc , char **argv ) {
     using ponni::create_inference_model;
     using ponni::Matvec;
     using ponni::Bias;
-    using ponni::Relu;
+    using ponni::LeakyRelu;
     using ponni::Save_State;
     using ponni::Binop_Add;
 
@@ -32,10 +32,10 @@ int main( int argc , char **argv ) {
     // Create an inference model to perform batched forward predictions
     auto inference = create_inference_model( Matvec<float>( weights_1 )        ,
                                              Bias  <float>( weights_2 )        ,
-                                             Relu  <float>( num_layers , 0.1 ) ,
+                                             LeakyRelu<float>(num_layers, 0.1) ,
                                              Matvec<float>( weights_3 )        ,
                                              Bias  <float>( weights_4 )        ,
-                                             Relu  <float>( num_layers , 0.1 ) );
+                                             LeakyRelu<float>(num_layers, 0.1) );
                                               
     inference.validate();
     inference.print();
@@ -57,4 +57,3 @@ int main( int argc , char **argv ) {
   ponni::finalize_device_pool();
   Kokkos::finalize();
 }
-

@@ -6,7 +6,7 @@ int main( int argc , char **argv ) {
   using ponni::load_h5_weights;
   using ponni::Matvec;
   using ponni::Bias;
-  using ponni::Relu;
+  using ponni::Silu;
   using ponni::Save_State;
   using ponni::Binop_Add;
   Kokkos::initialize( argc , argv );
@@ -21,60 +21,58 @@ int main( int argc , char **argv ) {
     std::string fname_h5 = argv[1];
 
     int   neurons = 20;
-    float negative_slope = 0.1;
-
     auto model = create_inference_model(
                     // Layer 1
                     Matvec      <float>( load_h5_weights<2>( fname_h5 , "/dense/dense"     , "kernel:0" ) ) ,
                     Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense/dense"     , "bias:0"   ) ) ,
-                    Relu        <float>( neurons , negative_slope )                                         ,
+                    Silu        <float>( neurons )                                                         ,
                     Save_State<0,float>( neurons )                                                          ,
                     // Layer 2
                     Matvec      <float>( load_h5_weights<2>( fname_h5 , "/dense_1/dense_1" , "kernel:0" ) ) ,
                     Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense_1/dense_1" , "bias:0"   ) ) ,
-                    Relu        <float>( neurons , negative_slope )                                         ,
+                    Silu        <float>( neurons )                                                         ,
                     Binop_Add <0,float>( neurons )                                                          ,
                     Save_State<0,float>( neurons )                                                          ,
                     // Layer 3
                     Matvec      <float>( load_h5_weights<2>( fname_h5 , "/dense_2/dense_2" , "kernel:0" ) ) ,
                     Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense_2/dense_2" , "bias:0"   ) ) ,
-                    Relu        <float>( neurons , negative_slope )                                         ,
+                    Silu        <float>( neurons )                                                         ,
                     Binop_Add <0,float>( neurons )                                                          ,
                     Save_State<0,float>( neurons )                                                          ,
                     // Layer 4
                     Matvec      <float>( load_h5_weights<2>( fname_h5 , "/dense_3/dense_3" , "kernel:0" ) ) ,
                     Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense_3/dense_3" , "bias:0"   ) ) ,
-                    Relu        <float>( neurons , negative_slope )                                         ,
+                    Silu        <float>( neurons )                                                         ,
                     Binop_Add <0,float>( neurons )                                                          ,
                     Save_State<0,float>( neurons )                                                          ,
                     // Layer 5
                     Matvec      <float>( load_h5_weights<2>( fname_h5 , "/dense_4/dense_4" , "kernel:0" ) ) ,
                     Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense_4/dense_4" , "bias:0"   ) ) ,
-                    Relu        <float>( neurons , negative_slope )                                         ,
+                    Silu        <float>( neurons )                                                         ,
                     Binop_Add <0,float>( neurons )                                                          ,
                     Save_State<0,float>( neurons )                                                          ,
                     // Layer 6
                     Matvec      <float>( load_h5_weights<2>( fname_h5 , "/dense_5/dense_5" , "kernel:0" ) ) ,
                     Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense_5/dense_5" , "bias:0"   ) ) ,
-                    Relu        <float>( neurons , negative_slope )                                         ,
+                    Silu        <float>( neurons )                                                         ,
                     Binop_Add <0,float>( neurons )                                                          ,
                     Save_State<0,float>( neurons )                                                          ,
                     // Layer 7
                     Matvec      <float>( load_h5_weights<2>( fname_h5 , "/dense_6/dense_6" , "kernel:0" ) ) ,
                     Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense_6/dense_6" , "bias:0"   ) ) ,
-                    Relu        <float>( neurons , negative_slope )                                         ,
+                    Silu        <float>( neurons )                                                         ,
                     Binop_Add <0>( neurons )                                                                ,
                     Save_State<0>( neurons )                                                                ,
                     // Layer 8
                     Matvec      <float>( load_h5_weights<2>( fname_h5 , "/dense_7/dense_7" , "kernel:0" ) ) ,
                     Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense_7/dense_7" , "bias:0"   ) ) ,
-                    Relu        <float>( neurons , negative_slope )                                         ,
+                    Silu        <float>( neurons )                                                         ,
                     Binop_Add <0,float>( neurons )                                                          ,
                     Save_State<0,float>( neurons )                                                          ,
                     // Layer 9
                     Matvec      <float>( load_h5_weights<2>( fname_h5 , "/dense_8/dense_8" , "kernel:0" ) ) ,
                     Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense_8/dense_8" , "bias:0"   ) ) ,
-                    Relu        <float>( neurons , negative_slope )                                         ,
+                    Silu        <float>( neurons )                                                         ,
                     Binop_Add <0,float>( neurons )                                                          ,
                     // Layer 10
                     Matvec      <float>( load_h5_weights<2>( fname_h5 , "/dense_9/dense_9" , "kernel:0" ) ) ,
@@ -142,4 +140,3 @@ int main( int argc , char **argv ) {
   ponni::finalize_device_pool();
   Kokkos::finalize();
 }
-
