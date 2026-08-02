@@ -1,6 +1,6 @@
 
 add_executable(keras_resnet test_keras_resnet.cpp)
-target_link_libraries(keras_resnet ponni yakl ${HDF5_LIBRARIES} ${PONNI_LINK_FLAGS})
+target_link_libraries(keras_resnet ponni Kokkos::kokkos ${HDF5_LIBRARIES} ${PONNI_LINK_FLAGS})
 target_compile_options(keras_resnet PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${PONNI_CXX_FLAGS}>)
 
 if (DEFINED MPI_COMMAND)

@@ -2,16 +2,10 @@ cmake_minimum_required(VERSION 3.0)
 project(ponni_unit)
 enable_testing()
 
-enable_language(Fortran)
 enable_language(CXX)
 enable_language(C)
-if ("${YAKL_ARCH}" STREQUAL "CUDA")
-  enable_language(CUDA)
-endif()
 
-# YAKL library
 add_subdirectory($ENV{KOKKOS_HOME} ./kokkos )
-add_subdirectory($ENV{YAKL_HOME}   ./yakl   )
 add_subdirectory(..                ./ponni  )
 
 include(FindHDF5)

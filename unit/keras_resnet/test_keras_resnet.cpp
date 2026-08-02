@@ -10,7 +10,7 @@ int main( int argc , char **argv ) {
   using ponni::Save_State;
   using ponni::Binop_Add;
   Kokkos::initialize( argc , argv );
-  yakl::init();
+  ponni::init_device_pool(128ULL*1024ULL*1024ULL); // 128 MB
   {
     if (argc == 1) {
       std::cerr << "Usage: " << argv[0] << " <weights.h5>" << std::endl;
@@ -116,9 +116,9 @@ int main( int argc , char **argv ) {
                                        0.74753839,0.74756271,0.74750465,0.74751884,0.74753231,0.74750185,
                                        0.74752432,0.74751109,0.74751288,0.74754196,0.74753088,0.74754441,
                                        0.74752563,0.74750173,0.74751961,0.51605195,0.44940680};
-      yakl::Array<float**,Kokkos::HostSpace> inputs(datavec.data(),137,1);
+      Kokkos::View<float**,Kokkos::LayoutRight,Kokkos::HostSpace> inputs(datavec.data(),137,1);
 
-      auto out_host = model.forward_batch_parallel( inputs.createDeviceCopy() ).createHostCopy();
+      auto out_host = ponni::create_host_copy( model.forward_batch_parallel( ponni::create_device_copy(inputs) ) );
 
       std::cout << "Absolute difference for Output 1: " << std::abs( out_host(0,0) - 0.50536489 ) << std::endl;
       std::cout << "Absolute difference for Output 2: " << std::abs( out_host(1,0) - 0.54642177 ) << std::endl;
@@ -159,15 +159,15 @@ int main( int argc , char **argv ) {
                                        0.74753839,0.74756271,0.74750465,0.74751884,0.74753231,0.74750185,
                                        0.74752432,0.74751109,0.74751288,0.74754196,0.74753088,0.74754441,
                                        0.74752563,0.74750173,0.74751961,0.51605195,0.44940680};
-      yakl::Array<float**,Kokkos::HostSpace> inputs_host(datavec.data(),137,1);
-      auto inputs = inputs_host.createDeviceCopy();
+      Kokkos::View<float**,Kokkos::LayoutRight,Kokkos::HostSpace> inputs_host(datavec.data(),137,1);
+      auto inputs = ponni::create_device_copy( inputs_host );
 
       model.init( 1 );
-      yakl::Array<float**> outputs("outputs",5,1);
-      yakl::parallel_for( YAKL_AUTO_LABEL() , 1 , KOKKOS_LAMBDA (int ibatch) {
+      Kokkos::View<float**,Kokkos::LayoutRight,ponni::DeviceSpace> outputs("outputs",5,1);
+      Kokkos::parallel_for( PONNI_AUTO_LABEL() , 1 , KOKKOS_LAMBDA (int ibatch) {
         model.forward_batch_parallel_in_kernel( inputs , outputs , model.params , ibatch );
       });
-      auto out_host = outputs.createHostCopy();
+      auto out_host = ponni::create_host_copy( outputs );
 
       std::cout << "Absolute difference for Output 1: " << std::abs( out_host(0,0) - 0.50536489 ) << std::endl;
       std::cout << "Absolute difference for Output 2: " << std::abs( out_host(1,0) - 0.54642177 ) << std::endl;
@@ -183,7 +183,7 @@ int main( int argc , char **argv ) {
     }
 
   }
-  yakl::finalize();
+  ponni::finalize_device_pool();
   Kokkos::finalize();
 }
 

@@ -4,7 +4,7 @@
 
 int main( int argc , char **argv ) {
   Kokkos::initialize( argc , argv );
-  yakl::init();
+  ponni::init_device_pool(128ULL*1024ULL*1024ULL); // 128 MB
   {
     if (argc == 1) {
       std::cerr << "Usage: " << argv[0] << " <weights.h5>" << std::endl;
@@ -26,7 +26,7 @@ int main( int argc , char **argv ) {
     inference.print();
 
     // Load one test sample to ensure we're getting the same outputs
-    yakl::Array<float**,Kokkos::HostSpace> inputs("inputs",12,1);
+    Kokkos::View<float**,Kokkos::LayoutRight,Kokkos::HostSpace> inputs("inputs",12,1);
     inputs( 0,0) = 5.08810276e-01;
     inputs( 1,0) = 4.78929254e-01;
     inputs( 2,0) = 4.54260898e-01;
@@ -41,9 +41,9 @@ int main( int argc , char **argv ) {
     inputs(11,0) = 6.08758314e-06;
 
     // Perform a batched inference
-    auto outputs = inference.forward_batch_parallel( inputs.createDeviceCopy() );
+    auto outputs = inference.forward_batch_parallel( ponni::create_device_copy(inputs) );
 
-    auto out_host = outputs.createHostCopy();
+    auto out_host = ponni::create_host_copy(outputs);
 
     std::cout << "Absolute difference for Output 1: " << std::abs( out_host(0,0) - 4.7658795e-01 ) << std::endl;
     std::cout << "Absolute difference for Output 2: " << std::abs( out_host(1,0) - 4.8446856e-02 ) << std::endl;
@@ -57,7 +57,7 @@ int main( int argc , char **argv ) {
 
     // 4.7658795e-01 4.8446856e-02 1.2472458e-03 4.0419400e-05
   }
-  yakl::finalize();
+  ponni::finalize_device_pool();
   Kokkos::finalize();
 }
 

@@ -1,6 +1,6 @@
 
 add_executable(keras_sequential test_keras_sequential.cpp)
-target_link_libraries(keras_sequential ponni yakl ${HDF5_LIBRARIES} ${PONNI_LINK_FLAGS})
+target_link_libraries(keras_sequential ponni Kokkos::kokkos ${HDF5_LIBRARIES} ${PONNI_LINK_FLAGS})
 target_compile_options(keras_sequential PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${PONNI_CXX_FLAGS}>)
 
 if (DEFINED MPI_COMMAND)

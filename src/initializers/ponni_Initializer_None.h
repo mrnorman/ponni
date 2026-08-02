@@ -11,7 +11,7 @@ namespace ponni {
     ~Initializer_None() = default;
 
 
-    template <class ViewType> requires yakl::is_Array<ViewType>
+    template <class ViewType> requires Kokkos::is_view_v<ViewType>
     void fill(ViewType const & a) const { }
 
   };

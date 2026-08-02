@@ -7,10 +7,10 @@ namespace ponni {
 
   template <class real = float, int N = 1>
   struct Bias {
-    typedef yakl::Array<double * ,Kokkos::HostSpace> doubleHost1d;
-    typedef yakl::Array<real   * ,Kokkos::HostSpace> realHost1d;
-    typedef yakl::Array<real   *                   > real1d;
-    typedef yakl::Array<real   **                  > real2d;
+    typedef Kokkos::View<double * ,Kokkos::LayoutRight,Kokkos::HostSpace > doubleHost1d;
+    typedef Kokkos::View<real   * ,Kokkos::LayoutRight,Kokkos::HostSpace > realHost1d;
+    typedef Kokkos::View<real   * ,Kokkos::LayoutRight,ponni::DeviceSpace> real1d;
+    typedef Kokkos::View<real   **,Kokkos::LayoutRight,ponni::DeviceSpace> real2d;
     
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?
@@ -61,14 +61,17 @@ namespace ponni {
       }
     }
 
-    KOKKOS_INLINE_FUNCTION static void compute_all_outputs(SArray<real,N> const & input     ,
-                                                           SArray<real,N>       & output    ,
-                                                           Params         const & params_in ) {
+    KOKKOS_INLINE_FUNCTION static void compute_all_outputs(ponni::SArray<real,N> const & input     ,
+                                                           ponni::SArray<real,N>       & output    ,
+                                                           Params                const & params_in ) {
       for (int i = 0; i < N; i++) { output(i) = input(i) + params_in.weights(i); }
     }
 
     void set_trainable_parameters(real1d const &in) {
-      if (params.trainable) in.subset_slowest_dimension(get_num_trainable_parameters()).deep_copy_to(params.weights);
+      if (params.trainable) {
+        auto in_reduced = Kokkos::subview(in,std::pair<int,int>(0,get_num_trainable_parameters()));
+        Kokkos::deep_copy(params.weights,in_reduced);
+      }
     }
 
     real1d get_trainable_parameters() const {
@@ -80,7 +83,7 @@ namespace ponni {
       doubleHost1d data("Bias_weights",get_array_representation_size());
       data(0) = get_num_inputs   ();
       data(1) = params.trainable ? 1 : 0;
-      auto weights = params.weights.createHostCopy().collapse();
+      auto weights = ponni::flatten(ponni::create_host_copy(params.weights));
       for (int i=0; i < weights.size(); i++) { data(2+i) = weights(i); }
       return data;
     }
@@ -90,7 +93,7 @@ namespace ponni {
       bool trainable     = data(1) == 1;
       realHost1d weights("Bias_weights",num_inputs);
       for (int i=0; i < num_inputs; i++) { weights(i) = data(2+i); }
-      init( weights.createDeviceCopy() , trainable );
+      init( ponni::create_device_copy(weights) , trainable );
     }
 
     void validate() const {

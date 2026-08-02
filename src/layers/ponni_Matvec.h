@@ -6,10 +6,10 @@ namespace ponni {
 
   template <class real = float, int N_IN = 1, int N_OUT = 1>
   struct Matvec {
-    typedef yakl::Array<double * ,Kokkos::HostSpace> doubleHost1d;
-    typedef yakl::Array<real   * ,Kokkos::HostSpace> realHost1d;
-    typedef yakl::Array<real   *                   > real1d;
-    typedef yakl::Array<real   **                  > real2d;
+    typedef Kokkos::View<double * ,Kokkos::LayoutRight,Kokkos::HostSpace > doubleHost1d;
+    typedef Kokkos::View<real   * ,Kokkos::LayoutRight,Kokkos::HostSpace > realHost1d;
+    typedef Kokkos::View<real   * ,Kokkos::LayoutRight,ponni::DeviceSpace> real1d;
+    typedef Kokkos::View<real   **,Kokkos::LayoutRight,ponni::DeviceSpace> real2d;
     
     bool static constexpr overwrite_input = false;
     bool static constexpr binop           = false; // Use two inputs?
@@ -64,9 +64,9 @@ namespace ponni {
       }
     }
 
-    KOKKOS_INLINE_FUNCTION static void compute_all_outputs( SArray<real,N_IN > const & input     ,
-                                                            SArray<real,N_OUT>       & output    ,
-                                                            Params             const & params_in ) {
+    KOKKOS_INLINE_FUNCTION static void compute_all_outputs( ponni::SArray<real,N_IN > const & input     ,
+                                                            ponni::SArray<real,N_OUT>       & output    ,
+                                                            Params                    const & params_in ) {
       for (int irow = 0; irow < N_OUT; irow++) {
         real tmp = 0;
         for (int k=0; k < N_IN; k++) { tmp += params_in.weights(k,irow) * input(k); }
@@ -75,7 +75,10 @@ namespace ponni {
     }
 
     void set_trainable_parameters(real1d const &in) {
-      if (params.trainable) in.subset_slowest_dimension(get_num_trainable_parameters()).deep_copy_to(params.weights.collapse());
+      if (params.trainable) {
+        auto in_reduced = Kokkos::subview(in,std::pair<int,int>(0,get_num_trainable_parameters()));
+        Kokkos::deep_copy(ponni::flatten(params.weights),in_reduced);
+      }
     }
 
     real1d get_trainable_parameters() const {
@@ -88,7 +91,7 @@ namespace ponni {
       data(0) = get_num_inputs   ();
       data(1) = get_num_outputs  ();
       data(2) = params.trainable ? 1 : 0;
-      auto weights = params.weights.createHostCopy().collapse();
+      auto weights = ponni::flatten(ponni::create_host_copy(params.weights));
       for (int i=0; i < weights.size(); i++) { data(3+i) = weights(i); }
       return data;
     }
@@ -100,7 +103,7 @@ namespace ponni {
       realHost1d weights_flat("Matvec_weights",num_inputs*num_outputs);
       for (int i=0; i < weights_flat.size(); i++) { weights_flat(i) = data(3+i); }
       real2d weights("Matvec_weights",num_inputs,num_outputs);
-      weights_flat.createDeviceCopy().deep_copy_to(weights.collapse());
+      Kokkos::deep_copy(ponni::flatten(weights), ponni::create_device_copy(weights_flat));
       init( weights , trainable );
     }
 

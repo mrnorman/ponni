@@ -8,15 +8,15 @@
 namespace ponni {
 
   template <int N>
-  inline yakl::Array<typename yakl::ViewType<float,N>::type> 
+  inline Kokkos::View<typename ponni::TypeIntToViewType<float,N>::type,Kokkos::LayoutRight,ponni::DeviceSpace> 
   load_h5_weights( std::string file_name    ,
                    std::string group_name   ,
                    std::string dataset_name ,
                    bool transpose = false   ) {
     static_assert( N >= 1 && N <= 4 , "ERROR: load_h5_weights array rank must be betwee 1 and 4" );
-    using view_t   = typename yakl::ViewType<float,N>::type;
-    using ARR_TYPE = yakl::Array<view_t>;
-    using ARR_HOST = yakl::Array<view_t,Kokkos::HostSpace>;
+    using view_t   = typename ponni::TypeIntToViewType<float,N>::type;
+    using ARR_TYPE = Kokkos::View<view_t,Kokkos::LayoutRight,ponni::DeviceSpace>;
+    using ARR_HOST = Kokkos::View<view_t,Kokkos::LayoutRight,Kokkos::HostSpace >;
     auto f_id = H5Fopen( file_name.c_str() , H5F_ACC_RDONLY , H5P_DEFAULT );
     auto g_id = H5Gopen( f_id , group_name  .c_str() , H5P_DEFAULT );
     auto d_id = H5Dopen( g_id , dataset_name.c_str() , H5P_DEFAULT );
@@ -34,24 +34,30 @@ namespace ponni {
     H5Fclose( f_id );
 
     if ( N == 1 || (! transpose) ) {
-      return weights_host.createDeviceCopy();
+      return ponni::create_device_copy( weights_host );
     } else {
-      auto weights_tmp = weights_host.createDeviceCopy();
+      auto weights_tmp = ponni::create_device_copy( weights_host );
       if        constexpr (N == 2) {
         ARR_TYPE weights_transposed("weights_transposed",dims[1],dims[0]);
-        yakl::parallel_for( yakl::SimpleBounds<N>(dims[0],dims[1]) , KOKKOS_LAMBDA (int i0, int i1) {
+        Kokkos::parallel_for( PONNI_AUTO_LABEL() ,
+                              Kokkos::MDRangePolicy<Kokkos::Rank<2>>({0,0},{dims[0],dims[1]}) ,
+                              KOKKOS_LAMBDA (int i0, int i1) {
           weights_transposed(i1,i0) = weights_tmp(i0,i1);
         });
         return weights_transposed;
       } else if constexpr (N == 3) {
         ARR_TYPE weights_transposed("weights_transposed",dims[2],dims[1],dims[0]);
-        yakl::parallel_for( yakl::SimpleBounds<N>(dims[0],dims[1],dims[2]) , KOKKOS_LAMBDA (int i0, int i1, int i2) {
+        Kokkos::parallel_for( PONNI_AUTO_LABEL() ,
+                              Kokkos::MDRangePolicy<Kokkos::Rank<3>>({0,0,0},{dims[0],dims[1],dims[2]}) ,
+                              KOKKOS_LAMBDA (int i0, int i1, int i2) {
           weights_transposed(i2,i1,i0) = weights_tmp(i0,i1,i2);
         });
         return weights_transposed;
       } else if constexpr (N == 4) {
         ARR_TYPE weights_transposed("weights_transposed",dims[3],dims[2],dims[1],dims[0]);
-        yakl::parallel_for( yakl::SimpleBounds<N>(dims[0],dims[1],dims[2],dims[3]) , KOKKOS_LAMBDA (int i0, int i1, int i2, int i3) {
+        Kokkos::parallel_for( PONNI_AUTO_LABEL() ,
+                              Kokkos::MDRangePolicy<Kokkos::Rank<4>>({0,0,0,0},{dims[0],dims[1],dims[2],dims[3]}) ,
+                              KOKKOS_LAMBDA (int i0, int i1, int i2, int i3) {
           weights_transposed(i3,i2,i1,i0) = weights_tmp(i0,i1,i2,i3);
         });
         return weights_transposed;

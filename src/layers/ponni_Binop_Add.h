@@ -6,9 +6,9 @@ namespace ponni {
 
   template <int ISAVE, class real = float, int N = 1>
   struct Binop_Add {
-    typedef yakl::Array<double *,Kokkos::HostSpace> doubleHost1d;
-    typedef yakl::Array<real   *                  > real1d;
-    typedef yakl::Array<real   **                 > real2d;
+    typedef Kokkos::View<double * ,Kokkos::LayoutRight,Kokkos::HostSpace > doubleHost1d;
+    typedef Kokkos::View<real   * ,Kokkos::LayoutRight,ponni::DeviceSpace> real1d;
+    typedef Kokkos::View<real   **,Kokkos::LayoutRight,ponni::DeviceSpace> real2d;
     
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = true; // Use two inputs?
@@ -53,10 +53,10 @@ namespace ponni {
       }
     }
 
-    KOKKOS_INLINE_FUNCTION static void compute_all_outputs( SArray<real,N> const & input1    ,
-                                                            SArray<real,N> const & input2    ,
-                                                            SArray<real,N>       & output    ,
-                                                            Params         const & params_in ) {
+    KOKKOS_INLINE_FUNCTION static void compute_all_outputs( ponni::SArray<real,N> const & input1    ,
+                                                            ponni::SArray<real,N> const & input2    ,
+                                                            ponni::SArray<real,N>       & output    ,
+                                                            Params                const & params_in ) {
       for (int i = 0; i < N; i++) { output(i) = input1(i) + input2(i); }
     }
 

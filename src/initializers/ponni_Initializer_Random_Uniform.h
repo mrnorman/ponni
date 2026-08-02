@@ -1,6 +1,8 @@
 
 #pragma once
 
+#include <Kokkos_Random.hpp>
+
 namespace ponni {
 
   template <class real>
@@ -19,15 +21,19 @@ namespace ponni {
     ~Initializer_Random_Uniform() = default;
 
 
-    template <class ViewType> requires yakl::is_Array<ViewType>
+    template <class ViewType> requires Kokkos::is_view_v<ViewType>
     void fill(ViewType const & a) const {
+      using execution_space = typename ViewType::execution_space;
+
       auto c = a.collapse(); // Alias a's data pointer with collapsed array
-      YAKL_SCOPE( lb   , this->lb   );
-      YAKL_SCOPE( ub   , this->ub   );
-      YAKL_SCOPE( seed , this->seed );
-      yakl::parallel_for( YAKL_AUTO_LABEL() , c.size() , KOKKOS_LAMBDA (int i) {
-        yakl::Random rand(seed + i);
-        c(i) = rand.genFP<real>(lb,ub);
+      PONNI_SCOPE( lb   , this->lb   );
+      PONNI_SCOPE( ub   , this->ub   );
+      PONNI_SCOPE( seed , this->seed );
+      Kokkos::Random_XorShift64_Pool<execution_space> rand_pool(seed);
+      Kokkos::parallel_for( PONNI_AUTO_LABEL() , c.size() , KOKKOS_LAMBDA (int i) {
+        auto rand_gen = rand_pool.get_state();
+        c(i) = rand_gen.drand(lb,ub);
+        rand_pool.free_state(rand_gen);
       });
     }
 

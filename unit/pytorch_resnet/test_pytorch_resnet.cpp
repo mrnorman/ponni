@@ -4,7 +4,7 @@
 
 int main( int argc , char **argv ) {
   Kokkos::initialize( argc , argv );
-  yakl::init();
+  ponni::init_device_pool(128ULL*1024ULL*1024ULL); // 128 MB
   {
     using ponni::create_inference_model;
     using ponni::Matvec;
@@ -58,7 +58,7 @@ int main( int argc , char **argv ) {
     inference.validate();
     inference.print();
 
-    yakl::Array<float**,Kokkos::HostSpace> inputs("inputs",12,1);
+    Kokkos::View<float**,Kokkos::LayoutRight,Kokkos::HostSpace> inputs("inputs",12,1);
     inputs( 0,0) = 5.0881004e-01;
     inputs( 1,0) = 4.7892904e-01;
     inputs( 2,0) = 4.5426106e-01;
@@ -73,9 +73,9 @@ int main( int argc , char **argv ) {
     inputs(11,0) = 6.0875832e-06;
 
     // Perform a batched inference
-    auto outputs = inference.forward_batch_parallel( inputs.createDeviceCopy() );
+    auto outputs = inference.forward_batch_parallel( ponni::create_device_copy(inputs) );
 
-    auto out_host = outputs.createHostCopy();
+    auto out_host = ponni::create_host_copy(outputs);
 
     std::cout << "Absolute difference for Output 1: " << std::abs( out_host(0,0) - ( 4.75395530e-01) ) << std::endl;
     std::cout << "Absolute difference for Output 2: " << std::abs( out_host(1,0) - ( 4.74427342e-02) ) << std::endl;
@@ -87,7 +87,7 @@ int main( int argc , char **argv ) {
     if ( std::abs( out_host(2,0) - ( 4.08545136e-04) ) > 1.e-6 ) Kokkos::abort("ERROR Output 3 diff too large");
     if ( std::abs( out_host(3,0) - (-1.02701783e-03) ) > 1.e-6 ) Kokkos::abort("ERROR Output 4 diff too large");
   }
-  yakl::finalize();
+  ponni::finalize_device_pool();
   Kokkos::finalize();
 }
 

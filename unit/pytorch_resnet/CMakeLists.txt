@@ -1,6 +1,6 @@
 
 add_executable(pytorch_resnet test_pytorch_resnet.cpp)
-target_link_libraries(pytorch_resnet ponni yakl ${HDF5_LIBRARIES} ${PONNI_LINK_FLAGS})
+target_link_libraries(pytorch_resnet ponni Kokkos::kokkos ${HDF5_LIBRARIES} ${PONNI_LINK_FLAGS})
 target_compile_options(pytorch_resnet PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${PONNI_CXX_FLAGS}>)
 
 if (DEFINED MPI_COMMAND)
