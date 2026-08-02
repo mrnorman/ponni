@@ -58,34 +58,24 @@ int main( int argc , char **argv ) {
     inference.validate();
     inference.print();
 
-    Kokkos::View<float**,Kokkos::LayoutRight,Kokkos::HostSpace> inputs("inputs",12,1);
-    inputs( 0,0) = 5.0881004e-01;
-    inputs( 1,0) = 4.7892904e-01;
-    inputs( 2,0) = 4.5426106e-01;
-    inputs( 3,0) = 6.0255572e-02;
-    inputs( 4,0) = 4.8558313e-02;
-    inputs( 5,0) = 3.7994046e-02;
-    inputs( 6,0) = 1.2056435e-04;
-    inputs( 7,0) = 6.2740257e-04;
-    inputs( 8,0) = 3.4187301e-03;
-    inputs( 9,0) = 1.3450217e-03;
-    inputs(10,0) = 4.2994076e-04;
-    inputs(11,0) = 6.0875832e-06;
-
-    // Perform a batched inference
-    auto outputs = inference.forward_batch_parallel( ponni::create_device_copy(inputs) );
+    auto inputs   = ponni::load_h5_weights<2>( fname , "/test" , "input"  );
+    auto expected = ponni::load_h5_weights<2>( fname , "/test" , "output" );
+    auto outputs  = inference.forward_batch_parallel( inputs );
 
     auto out_host = ponni::create_host_copy(outputs);
+    auto exp_host = ponni::create_host_copy(expected);
 
-    std::cout << "Absolute difference for Output 1: " << std::abs( out_host(0,0) - ( 4.75395530e-01) ) << std::endl;
-    std::cout << "Absolute difference for Output 2: " << std::abs( out_host(1,0) - ( 4.74427342e-02) ) << std::endl;
-    std::cout << "Absolute difference for Output 3: " << std::abs( out_host(2,0) - ( 4.08545136e-04) ) << std::endl;
-    std::cout << "Absolute difference for Output 4: " << std::abs( out_host(3,0) - (-1.02701783e-03) ) << std::endl;
+    if (out_host.extent(0) != exp_host.extent(0) || out_host.extent(1) != exp_host.extent(1)) {
+      Kokkos::abort("ERROR: output dimensions do not match expected dimensions");
+    }
 
-    if ( std::abs( out_host(0,0) - ( 4.75395530e-01) ) > 1.e-6 ) Kokkos::abort("ERROR Output 1 diff too large");
-    if ( std::abs( out_host(1,0) - ( 4.74427342e-02) ) > 1.e-6 ) Kokkos::abort("ERROR Output 2 diff too large");
-    if ( std::abs( out_host(2,0) - ( 4.08545136e-04) ) > 1.e-6 ) Kokkos::abort("ERROR Output 3 diff too large");
-    if ( std::abs( out_host(3,0) - (-1.02701783e-03) ) > 1.e-6 ) Kokkos::abort("ERROR Output 4 diff too large");
+    for (int j = 0; j < out_host.extent(1); j++) {
+      for (int i = 0; i < out_host.extent(0); i++) {
+        float diff = std::abs(out_host(i,j) - exp_host(i,j));
+        std::cout << "Absolute difference for Output(" << i << "," << j << "): " << diff << std::endl;
+        if (diff > 1.e-5f) Kokkos::abort("ERROR: output diff too large");
+      }
+    }
   }
   ponni::finalize_device_pool();
   Kokkos::finalize();

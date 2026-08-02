@@ -7,6 +7,42 @@ enable_language(C)
 
 option(PONNI_ENABLE_COVERAGE "Enable gcov coverage flags and coverage report targets" OFF)
 
+if (WIN32)
+	message(FATAL_ERROR "Python uv test-data workflow is supported only on Linux and macOS")
+endif()
+
+find_package(Python3 3 REQUIRED COMPONENTS Interpreter)
+find_program(UV_EXECUTABLE uv)
+
+set(PONNI_UV_PATH_FILE "${CMAKE_BINARY_DIR}/uv_path.txt")
+set(PONNI_UV_ENV_DIR "${CMAKE_BINARY_DIR}/uv_env")
+
+add_custom_command(
+	OUTPUT ${PONNI_UV_PATH_FILE}
+	COMMAND /bin/bash ${CMAKE_SOURCE_DIR}/ensure_uv.sh ${PONNI_UV_PATH_FILE} ${Python3_EXECUTABLE} ${PONNI_UV_ENV_DIR} "${UV_EXECUTABLE}"
+	DEPENDS ${CMAKE_SOURCE_DIR}/ensure_uv.sh
+	COMMENT "Ensuring uv is available (installing in build/uv_env if needed)"
+	VERBATIM
+)
+
+add_custom_target(ponni_uv_tool DEPENDS ${PONNI_UV_PATH_FILE})
+
+set(PONNI_TEST_PYTHON_ENV_DIR "${CMAKE_BINARY_DIR}/python_env")
+set(PONNI_TEST_PYTHON_EXECUTABLE "${PONNI_TEST_PYTHON_ENV_DIR}/bin/python")
+
+add_custom_command(
+	OUTPUT ${PONNI_TEST_PYTHON_ENV_DIR}/.ready
+	COMMAND /bin/bash ${CMAKE_SOURCE_DIR}/ensure_python_env.sh ${PONNI_UV_PATH_FILE} ${Python3_EXECUTABLE} ${PONNI_TEST_PYTHON_ENV_DIR}
+	DEPENDS ${PONNI_UV_PATH_FILE}
+	DEPENDS ${CMAKE_SOURCE_DIR}/ensure_python_env.sh
+	COMMAND ${CMAKE_COMMAND} -E touch ${PONNI_TEST_PYTHON_ENV_DIR}/.ready
+	COMMENT "Ensuring Python test environment (uv + CPU torch + keras)"
+	VERBATIM
+)
+
+add_custom_target(ponni_python_env DEPENDS ${PONNI_TEST_PYTHON_ENV_DIR}/.ready)
+add_dependencies(ponni_python_env ponni_uv_tool)
+
 if (PONNI_ENABLE_COVERAGE)
 	if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 		add_compile_options(-O0 -g --coverage)

@@ -35,6 +35,24 @@ Notes:
 
 - All unit tests are registered through CTest.
 - The performance benchmark executable is built, but it is not registered as a CTest test and is not run by `ctest`.
+- The `keras_sequential`, `keras_resnet`, and `pytorch_resnet` unit tests require Python-generated HDF5 test data.
+
+### Python environment for unit tests
+
+During the **make phase** (not configure), unit test dependencies are prepared with `uv`:
+
+- CMake finds Python 3.x with `find_package(Python3 ...)`.
+- `uv` is resolved and installed locally in the build tree at `unit/build/uv_env` (no install into `~/.local`).
+- The Python virtual environment is created in `unit/build/python_env` and installs CPU packages used by tests:
+	- `torch`
+	- `keras`
+	- `numpy`
+	- `h5py`
+- Python scripts generate test HDF5 files in the build tree, and C++ tests consume those generated files.
+
+This unit-test workflow keeps tooling and Python dependencies inside `ponni/unit/build` and does not place files in the user's `~/.local`.
+
+This workflow is intended for Linux/macOS (Windows is not supported by this path).
 
 ## Coverage tests with gcov
 
@@ -50,6 +68,8 @@ make -j8
 find . -name '*.gcda' -delete
 ctest -V
 ```
+
+The coverage `ctest` run also executes `src_gcov_summary_test`, which prints per-file coverage summaries for files under `src/`.
 
 The CTest run includes `src_gcov_summary_test`, which executes `unit/report_src_gcov_summary.sh` and reports:
 

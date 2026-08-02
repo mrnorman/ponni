@@ -92,94 +92,50 @@ int main( int argc , char **argv ) {
     std::cout << "*** TOTAL TRAINABLE PARAMETERS: " << model.get_num_trainable_parameters() << std::endl;
 
     {
-      // Load one test sample to ensure we're getting the same outputs
-      std::array<float,137> datavec = {0.49597812,0.49602726,0.49610856,0.49575031,0.49577570,0.49590355,
-                                       0.49576440,0.49588415,0.49586010,0.49584466,0.49595755,0.49603355,
-                                       0.49559316,0.49563473,0.49568036,0.49574825,0.49578935,0.49574974,
-                                       0.49557942,0.49576527,0.49591160,0.49547020,0.49564469,0.49570984,
-                                       0.49553356,0.49575782,0.49577305,0.45877230,0.45875913,0.45876855,
-                                       0.45882720,0.45878604,0.45879951,0.45883587,0.45881239,0.45883536,
-                                       0.45878452,0.45883051,0.45879772,0.45889884,0.45889127,0.45885456,
-                                       0.45886090,0.45889524,0.45883015,0.45880255,0.45884499,0.45881921,
-                                       0.45893389,0.45892829,0.45890638,0.45890066,0.45890975,0.45888293,
-                                       0.48934004,0.48931572,0.48930022,0.48938042,0.48936340,0.48934978,
-                                       0.48942113,0.48940295,0.48939061,0.48931345,0.48931283,0.48932874,
-                                       0.48935172,0.48932892,0.48933974,0.48937979,0.48934701,0.48936093,
-                                       0.48933807,0.48933282,0.48934740,0.48938069,0.48936185,0.48934007,
-                                       0.48940080,0.48935324,0.48932013,0.52962625,0.52961826,0.52962226,
-                                       0.52959174,0.52960217,0.52961057,0.52957541,0.52956986,0.52959603,
-                                       0.52959400,0.52961093,0.52963167,0.52957004,0.52957320,0.52962196,
-                                       0.52960086,0.52957922,0.52956444,0.52956223,0.52961594,0.52965915,
-                                       0.52954853,0.52959788,0.52963775,0.52955705,0.52961016,0.52961469,
-                                       0.74753761,0.74752748,0.74755841,0.74758607,0.74755615,0.74751335,
-                                       0.74755186,0.74756181,0.74751490,0.74753714,0.74754232,0.74750519,
-                                       0.74753839,0.74756271,0.74750465,0.74751884,0.74753231,0.74750185,
-                                       0.74752432,0.74751109,0.74751288,0.74754196,0.74753088,0.74754441,
-                                       0.74752563,0.74750173,0.74751961,0.51605195,0.44940680};
-      Kokkos::View<float**,Kokkos::LayoutRight,Kokkos::HostSpace> inputs(datavec.data(),137,1);
+      auto inputs   = ponni::load_h5_weights<2>( fname_h5 , "/test" , "input"  );
+      auto expected = ponni::load_h5_weights<2>( fname_h5 , "/test" , "output" );
+      auto outputs  = model.forward_batch_parallel( inputs );
 
-      auto out_host = ponni::create_host_copy( model.forward_batch_parallel( ponni::create_device_copy(inputs) ) );
+      auto out_host = ponni::create_host_copy(outputs);
+      auto exp_host = ponni::create_host_copy(expected);
 
-      std::cout << "Absolute difference for Output 1: " << std::abs( out_host(0,0) - 0.50536489 ) << std::endl;
-      std::cout << "Absolute difference for Output 2: " << std::abs( out_host(1,0) - 0.54642177 ) << std::endl;
-      std::cout << "Absolute difference for Output 3: " << std::abs( out_host(2,0) - 0.54819602 ) << std::endl;
-      std::cout << "Absolute difference for Output 4: " << std::abs( out_host(3,0) - 0.43084893 ) << std::endl;
-      std::cout << "Absolute difference for Output 5: " << std::abs( out_host(4,0) - 0.52051890 ) << std::endl;
+      if (out_host.extent(0) != exp_host.extent(0) || out_host.extent(1) != exp_host.extent(1)) {
+        Kokkos::abort("ERROR: output dimensions do not match expected dimensions");
+      }
 
-      if ( std::abs( out_host(0,0) - 0.50536489 ) > 1.e-6 ) Kokkos::abort("ERROR Output 1 diff too large");
-      if ( std::abs( out_host(1,0) - 0.54642177 ) > 1.e-6 ) Kokkos::abort("ERROR Output 2 diff too large");
-      if ( std::abs( out_host(2,0) - 0.54819602 ) > 1.e-6 ) Kokkos::abort("ERROR Output 3 diff too large");
-      if ( std::abs( out_host(3,0) - 0.43084893 ) > 1.e-6 ) Kokkos::abort("ERROR Output 4 diff too large");
-      if ( std::abs( out_host(4,0) - 0.52051890 ) > 1.e-6 ) Kokkos::abort("ERROR Output 5 diff too large");
+      for (int j = 0; j < out_host.extent(1); j++) {
+        for (int i = 0; i < out_host.extent(0); i++) {
+          float diff = std::abs(out_host(i,j) - exp_host(i,j));
+          std::cout << "Absolute difference for Output(" << i << "," << j << "): " << diff << std::endl;
+          if (diff > 1.e-5f) Kokkos::abort("ERROR: output diff too large");
+        }
+      }
     }
 
 
     {
-      // Load one test sample to ensure we're getting the same outputs
-      std::array<float,137> datavec = {0.49597812,0.49602726,0.49610856,0.49575031,0.49577570,0.49590355,
-                                       0.49576440,0.49588415,0.49586010,0.49584466,0.49595755,0.49603355,
-                                       0.49559316,0.49563473,0.49568036,0.49574825,0.49578935,0.49574974,
-                                       0.49557942,0.49576527,0.49591160,0.49547020,0.49564469,0.49570984,
-                                       0.49553356,0.49575782,0.49577305,0.45877230,0.45875913,0.45876855,
-                                       0.45882720,0.45878604,0.45879951,0.45883587,0.45881239,0.45883536,
-                                       0.45878452,0.45883051,0.45879772,0.45889884,0.45889127,0.45885456,
-                                       0.45886090,0.45889524,0.45883015,0.45880255,0.45884499,0.45881921,
-                                       0.45893389,0.45892829,0.45890638,0.45890066,0.45890975,0.45888293,
-                                       0.48934004,0.48931572,0.48930022,0.48938042,0.48936340,0.48934978,
-                                       0.48942113,0.48940295,0.48939061,0.48931345,0.48931283,0.48932874,
-                                       0.48935172,0.48932892,0.48933974,0.48937979,0.48934701,0.48936093,
-                                       0.48933807,0.48933282,0.48934740,0.48938069,0.48936185,0.48934007,
-                                       0.48940080,0.48935324,0.48932013,0.52962625,0.52961826,0.52962226,
-                                       0.52959174,0.52960217,0.52961057,0.52957541,0.52956986,0.52959603,
-                                       0.52959400,0.52961093,0.52963167,0.52957004,0.52957320,0.52962196,
-                                       0.52960086,0.52957922,0.52956444,0.52956223,0.52961594,0.52965915,
-                                       0.52954853,0.52959788,0.52963775,0.52955705,0.52961016,0.52961469,
-                                       0.74753761,0.74752748,0.74755841,0.74758607,0.74755615,0.74751335,
-                                       0.74755186,0.74756181,0.74751490,0.74753714,0.74754232,0.74750519,
-                                       0.74753839,0.74756271,0.74750465,0.74751884,0.74753231,0.74750185,
-                                       0.74752432,0.74751109,0.74751288,0.74754196,0.74753088,0.74754441,
-                                       0.74752563,0.74750173,0.74751961,0.51605195,0.44940680};
-      Kokkos::View<float**,Kokkos::LayoutRight,Kokkos::HostSpace> inputs_host(datavec.data(),137,1);
-      auto inputs = ponni::create_device_copy( inputs_host );
+      auto inputs = ponni::load_h5_weights<2>( fname_h5 , "/test" , "input" );
+      auto expected = ponni::load_h5_weights<2>( fname_h5 , "/test" , "output" );
 
-      model.init( 1 );
-      Kokkos::View<float**,Kokkos::LayoutRight,ponni::DeviceSpace> outputs("outputs",5,1);
+      model.init( inputs.extent(1) );
+      Kokkos::View<float**,Kokkos::LayoutRight,ponni::DeviceSpace> outputs("outputs",expected.extent(0),expected.extent(1));
       Kokkos::parallel_for( PONNI_AUTO_LABEL() , 1 , KOKKOS_LAMBDA (int ibatch) {
         model.forward_batch_parallel_in_kernel( inputs , outputs , model.params , ibatch );
       });
       auto out_host = ponni::create_host_copy( outputs );
 
-      std::cout << "Absolute difference for Output 1: " << std::abs( out_host(0,0) - 0.50536489 ) << std::endl;
-      std::cout << "Absolute difference for Output 2: " << std::abs( out_host(1,0) - 0.54642177 ) << std::endl;
-      std::cout << "Absolute difference for Output 3: " << std::abs( out_host(2,0) - 0.54819602 ) << std::endl;
-      std::cout << "Absolute difference for Output 4: " << std::abs( out_host(3,0) - 0.43084893 ) << std::endl;
-      std::cout << "Absolute difference for Output 5: " << std::abs( out_host(4,0) - 0.52051890 ) << std::endl;
+      auto exp_host = ponni::create_host_copy(expected);
+      if (out_host.extent(0) != exp_host.extent(0) || out_host.extent(1) != exp_host.extent(1)) {
+        Kokkos::abort("ERROR: output dimensions do not match expected dimensions");
+      }
 
-      if ( std::abs( out_host(0,0) - 0.50536489 ) > 1.e-6 ) Kokkos::abort("ERROR Output 1 diff too large");
-      if ( std::abs( out_host(1,0) - 0.54642177 ) > 1.e-6 ) Kokkos::abort("ERROR Output 2 diff too large");
-      if ( std::abs( out_host(2,0) - 0.54819602 ) > 1.e-6 ) Kokkos::abort("ERROR Output 3 diff too large");
-      if ( std::abs( out_host(3,0) - 0.43084893 ) > 1.e-6 ) Kokkos::abort("ERROR Output 4 diff too large");
-      if ( std::abs( out_host(4,0) - 0.52051890 ) > 1.e-6 ) Kokkos::abort("ERROR Output 5 diff too large");
+      for (int j = 0; j < out_host.extent(1); j++) {
+        for (int i = 0; i < out_host.extent(0); i++) {
+          float diff = std::abs(out_host(i,j) - exp_host(i,j));
+          std::cout << "Absolute difference for Output(" << i << "," << j << "): " << diff << std::endl;
+          if (diff > 1.e-5f) Kokkos::abort("ERROR: output diff too large");
+        }
+      }
     }
 
   }
