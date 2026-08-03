@@ -223,6 +223,41 @@ def import_onnx(path: str | Path) -> Graph:
         },
     )
     graph.rebuild_links()
+    # ONNX does not carry a general requires-gradient flag. Mark only constants in
+    # well-defined learned roles. Literal constants, shape/axis inputs, clipping
+    # bounds, and BatchNormalization running statistics remain static.
+    for node in graph.nodes:
+        learned_inputs: list[int] = []
+        if node.op == "Gemm":
+            learned_inputs = node.inputs[1:3]
+        elif node.op == "MatMul" and len(node.inputs) == 2:
+            learned_inputs = [node.inputs[1]]
+        elif node.op == "LayerNormalization":
+            learned_inputs = node.inputs[1:3]
+        elif node.op == "BatchNormalization":
+            learned_inputs = node.inputs[1:3]
+        for tensor_id in learned_inputs:
+            tensor = graph.tensors[tensor_id]
+            if tensor.is_constant and tensor.constant_name is not None:
+                graph.constants[tensor.constant_name].learned = True
+
+    # A constant Add immediately following a matrix product is the conventional
+    # dense bias spelling used by PyTorch, Keras, and TensorFlow exporters.
+    graph.rebuild_links()
+    for node in graph.nodes:
+        if node.op != "Add":
+            continue
+        has_matrix_product = any(
+            graph.tensors[tensor_id].producer is not None and
+            graph.node_by_id(graph.tensors[tensor_id].producer).op in {"Gemm", "MatMul"}
+            for tensor_id in node.inputs
+        )
+        if not has_matrix_product:
+            continue
+        for tensor_id in node.inputs:
+            tensor = graph.tensors[tensor_id]
+            if tensor.is_constant and tensor.constant_name is not None:
+                graph.constants[tensor.constant_name].learned = True
     validate_graph(graph)
     return graph
 

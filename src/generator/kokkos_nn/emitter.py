@@ -164,7 +164,7 @@ class CppEmitter:
         if tensor.is_constant:
             if tensor_id not in self.weight_offsets:
                 raise CompilerError(f"no emitted weight offset for constant tensor {tensor.name!r}")
-            return f"weights_({self.weight_offsets[tensor_id]} + {use_index})"
+            return f"parameters_({self.weight_offsets[tensor_id]} + {use_index})"
         if tensor_id == self.graph.inputs[0]:
             return f"inputs({use_index})"
         if tensor_id == self.graph.outputs[0]:
@@ -1439,6 +1439,27 @@ static __global__ void {kernel_name}(float const * inputs, float * outputs,
              explicit_half2_accumulators: dict[int, int] | None = None) -> None:
         num_inputs = self._size(self.graph.inputs[0])
         num_outputs = self._size(self.graph.outputs[0])
+        learned_tensors = [
+            tensor for _, tensor in sorted(self.graph.tensors.items())
+            if tensor.is_constant and tensor.constant_name is not None and
+            self.graph.constants[tensor.constant_name].learned
+        ]
+        learned_ranges: list[tuple[int, int, int]] = []
+        learned_offset = 0
+        for tensor in learned_tensors:
+            learned_ranges.append((learned_offset, self.weight_offsets[tensor.id], tensor.sample_size))
+            learned_offset += tensor.sample_size
+        parameter_index_lines = []
+        for parameter_begin, storage_begin, size in learned_ranges:
+            parameter_end = parameter_begin + size
+            parameter_index_lines.append(
+                f"    if (index < {parameter_end}) return {storage_begin} + index - {parameter_begin};"
+            )
+        parameter_index_lines.extend([
+            '    Kokkos::abort("GeneratedModel learned parameter index is out of range");',
+            "    return 0;",
+        ])
+        parameter_index_body = "\n".join(parameter_index_lines)
         body: list[str] = []
         team_body: list[str] = []
         dense_nodes = [node for node in self.graph.nodes if node.op in {"Dense", "DenseBiasActivation"}]
@@ -1533,7 +1554,7 @@ static __global__ void {kernel_name}(float const * inputs, float * outputs,
         )
         batch_launch = f"""    InputView const input_view = inputs;
     OutputView const output_view = outputs;
-    WeightView const weights = weights_;
+    ParameterView const parameters = parameters_;
     Kokkos::parallel_for(
         \"GeneratedModel::infer_batch\",
         Kokkos::RangePolicy<execution_space>(0, batch_size),
@@ -1544,14 +1565,14 @@ static __global__ void {kernel_name}(float const * inputs, float * outputs,
           ponni::SArray<Scalar,num_inputs> inputs;
           ponni::SArray<Scalar,num_outputs> outputs;
           for (int i = 0; i < num_inputs; i++) inputs(i) = input_view(i,ibatch);
-          WeightView const weights_ = weights;
+          ParameterView const parameters_ = parameters;
 {batch_workspace_declaration}{batch_body_text}
           for (int i = 0; i < num_outputs; i++) output_view(i,ibatch) = outputs(i);
         }});"""
         def make_half_launch(method_name: str) -> str:
             return f"""    InputView const input_view = inputs;
     OutputView const output_view = outputs;
-    HalfWeightView const half_weights = half_weights_;
+    HalfParameterView const half_weights = half_parameters_;
     int const pair_count = (batch_size + 1) / 2;
     Kokkos::parallel_for(
         \"GeneratedModel::{method_name}\",
@@ -1577,7 +1598,7 @@ static __global__ void {kernel_name}(float const * inputs, float * outputs,
 
         def make_half_method(method_name: str) -> str:
             return f"""  void {method_name}(InputView const & inputs, OutputView const & outputs) const {{
-#ifndef NDEBUG
+#if defined(KOKKOS_ENABLE_DEBUG)
     if (!weights_loaded()) Kokkos::abort(\"GeneratedModel::{method_name} called before load_weights\");
     if (inputs.extent(0) != num_inputs) Kokkos::abort(\"GeneratedModel input feature extent is incorrect\");
     if (outputs.extent(0) != num_outputs) Kokkos::abort(\"GeneratedModel output feature extent is incorrect\");
@@ -1635,8 +1656,8 @@ static __global__ void {kernel_name}(float const * inputs, float * outputs,
                                       tensorcore_scratch_bytes_per_warp;
     Kokkos::Cuda const execution;
     {self.model_name}_tensorcore_kernel<<<block_count,thread_count,scratch_bytes,execution.cuda_stream()>>>(
-        inputs.data(), outputs.data(), weights_.data(), batch_size);
-#ifndef NDEBUG
+        inputs.data(), outputs.data(), parameters_.data(), batch_size);
+#if defined(KOKKOS_ENABLE_DEBUG)
     cudaError_t const launch_error = cudaGetLastError();
     if (launch_error != cudaSuccess) Kokkos::abort(cudaGetErrorString(launch_error));
 #endif
@@ -1675,6 +1696,8 @@ namespace ponni::generated {{
 template <class Scalar = float>
 class {self.model_name} {{
 public:
+  static_assert(std::is_same_v<Scalar,float> || std::is_same_v<Scalar,double>,
+                "GeneratedModel Scalar must be float or double");
   int static constexpr num_inputs = {num_inputs};
   int static constexpr num_outputs = {num_outputs};
   int static constexpr workspace_elements = {self.plan.total_elements};
@@ -1686,17 +1709,26 @@ public:
   int static constexpr maximum_tensorcore_warps_per_block = {maximum_tensorcore_warps};
   int static constexpr tensorcore_scratch_bytes_per_warp = {tensorcore_scratch_bytes};
   bool static constexpr tensorcore_eligible = {str(tensorcore_eligible).lower()};
-  int static constexpr weight_elements = {payload_elements};
+  int static constexpr storage_parameter_elements = {payload_elements};
+  int static constexpr learned_parameter_elements = {learned_offset};
+  int static constexpr stored_scalar_code = {payload_scalar_code};
+  int static constexpr stored_scalar_bytes = {4 if payload_scalar_code == 1 else 8};
   using scalar_type = Scalar;
   using execution_space = Kokkos::DefaultExecutionSpace;
   using InputView = Kokkos::View<Scalar**,Kokkos::LayoutRight,ponni::DeviceSpace>;
   using OutputView = Kokkos::View<Scalar**,Kokkos::LayoutRight,ponni::DeviceSpace>;
-  using WeightView = Kokkos::View<Scalar*,Kokkos::LayoutRight,ponni::DeviceSpace>;
-  using HalfWeightView = Kokkos::View<Kokkos::Experimental::half_t*,Kokkos::LayoutRight,ponni::DeviceSpace>;
+  using ParameterView = Kokkos::View<Scalar*,Kokkos::LayoutRight,ponni::DeviceSpace>;
+  using HalfParameterView =
+      Kokkos::View<Kokkos::Experimental::half_t*,Kokkos::LayoutRight,ponni::DeviceSpace>;
 
 private:
-  WeightView weights_;
-  HalfWeightView half_weights_;
+  ParameterView parameters_;
+  HalfParameterView half_parameters_;
+
+  KOKKOS_INLINE_FUNCTION
+  static int parameter_storage_index(int index) {{
+{parameter_index_body}
+  }}
 
   static int checked_batch_size(InputView const & inputs) {{
     std::size_t const batch_size = inputs.extent(1);
@@ -1773,7 +1805,9 @@ private:
 public:
   {self.model_name}() = default;
 
-  bool weights_loaded() const {{ return weights_.is_allocated() && half_weights_.is_allocated(); }}
+  static constexpr int get_num_parameters() {{ return learned_parameter_elements; }}
+
+  bool weights_loaded() const {{ return parameters_.is_allocated() && half_parameters_.is_allocated(); }}
 
   bool load_weights(std::string const & path, std::string * error = nullptr) {{
     auto fail = [&](std::string const & message) {{
@@ -1806,24 +1840,182 @@ public:
     if (bytes.size() != header_size + payload_bytes) return fail(\"weight-file payload size mismatch\");
     unsigned char const * payload = bytes.data() + header_size;
     if (checksum(payload, payload_bytes) != expected_checksum) return fail(\"weight-file checksum mismatch\");
-    std::size_t constexpr stored_scalar_bytes = {4 if payload_scalar_code == 1 else 8};
-    if (payload_bytes != static_cast<std::uint64_t>(weight_elements) * stored_scalar_bytes) {{
+    if (payload_bytes != static_cast<std::uint64_t>(storage_parameter_elements) * stored_scalar_bytes) {{
       return fail(\"weight-file element count does not match generated model\");
     }}
-    Kokkos::View<Scalar*,Kokkos::LayoutRight,Kokkos::HostSpace> host_weights(\"generated_weights_host\", weight_elements);
+    Kokkos::View<Scalar*,Kokkos::LayoutRight,Kokkos::HostSpace>
+        host_parameters(\"generated_parameters_host\", storage_parameter_elements);
     Kokkos::View<Kokkos::Experimental::half_t*,Kokkos::LayoutRight,Kokkos::HostSpace>
-        host_half_weights(\"generated_half_weights_host\", weight_elements);
-    for (int i = 0; i < weight_elements; i++) {{
+        host_half_parameters(\"generated_half_parameters_host\", storage_parameter_elements);
+    for (int i = 0; i < storage_parameter_elements; i++) {{
       {'float' if payload_scalar_code == 1 else 'double'} stored_value;
       std::memcpy(&stored_value, payload + static_cast<std::size_t>(i) * stored_scalar_bytes, stored_scalar_bytes);
-      host_weights(i) = static_cast<Scalar>(stored_value);
-      host_half_weights(i) = Kokkos::Experimental::cast_to_half(static_cast<float>(stored_value));
+      host_parameters(i) = static_cast<Scalar>(stored_value);
+      host_half_parameters(i) = Kokkos::Experimental::cast_to_half(static_cast<float>(stored_value));
     }}
-    weights_ = WeightView(\"generated_weights\", weight_elements);
-    half_weights_ = HalfWeightView(\"generated_half_weights\", weight_elements);
-    Kokkos::deep_copy(weights_, host_weights);
-    Kokkos::deep_copy(half_weights_, host_half_weights);
+    parameters_ = ParameterView(\"generated_parameters\", storage_parameter_elements);
+    half_parameters_ = HalfParameterView(\"generated_half_parameters\", storage_parameter_elements);
+    Kokkos::deep_copy(parameters_, host_parameters);
+    Kokkos::deep_copy(half_parameters_, host_half_parameters);
     return true;
+  }}
+
+  bool save_parameters(std::string const & path, std::string * error = nullptr) const {{
+    auto fail = [&](std::string const & message) {{
+      if (error != nullptr) *error = message;
+      return false;
+    }};
+    if (!weights_loaded()) return fail("generated model parameters are not loaded");
+    auto const host_parameters = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), parameters_);
+    int constexpr header_size = 32;
+    std::uint64_t const payload_bytes =
+        static_cast<std::uint64_t>(storage_parameter_elements) * stored_scalar_bytes;
+    std::vector<unsigned char> bytes(header_size + static_cast<std::size_t>(payload_bytes));
+    unsigned char const magic[8] = {{'P', 'N', 'N', 'W', 'G', 'T', '1', 0}};
+    std::memcpy(bytes.data(), magic, sizeof(magic));
+    std::uint32_t const version = 1;
+    std::uint32_t const scalar_code = stored_scalar_code;
+    std::memcpy(bytes.data() + 8, &version, sizeof(version));
+    std::memcpy(bytes.data() + 12, &scalar_code, sizeof(scalar_code));
+    std::memcpy(bytes.data() + 16, &payload_bytes, sizeof(payload_bytes));
+    for (int i = 0; i < storage_parameter_elements; i++) {{
+      {'float' if payload_scalar_code == 1 else 'double'} const stored_value =
+          static_cast<{'float' if payload_scalar_code == 1 else 'double'}>(host_parameters(i));
+      std::memcpy(bytes.data() + header_size + static_cast<std::size_t>(i) * stored_scalar_bytes,
+                  &stored_value, stored_scalar_bytes);
+    }}
+    std::uint64_t const payload_checksum = checksum(bytes.data() + header_size, payload_bytes);
+    std::memcpy(bytes.data() + 24, &payload_checksum, sizeof(payload_checksum));
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    if (!stream) return fail("cannot open parameter file for writing: " + path);
+    stream.write(reinterpret_cast<char const *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    if (!stream) return fail("cannot write parameter file: " + path);
+    return true;
+  }}
+
+  template <class ExecutionSpace = execution_space>
+  void refresh_half_parameters(ExecutionSpace const & execution = ExecutionSpace()) {{
+    static_assert(Kokkos::is_execution_space_v<ExecutionSpace>,
+                  "refresh_half_parameters requires a Kokkos execution space");
+    static_assert(Kokkos::SpaceAccessibility<ExecutionSpace,ponni::DeviceSpace>::accessible,
+                  "refresh_half_parameters execution space cannot access the model parameter memory space");
+    if (!parameters_.is_allocated() || !half_parameters_.is_allocated()) {{
+      Kokkos::abort("GeneratedModel::refresh_half_parameters called before load_weights");
+    }}
+    ParameterView const parameters = parameters_;
+    HalfParameterView const half_parameters = half_parameters_;
+    Kokkos::parallel_for(
+        "GeneratedModel::refresh_half_parameters",
+        Kokkos::RangePolicy<ExecutionSpace>(execution, 0, storage_parameter_elements),
+        KOKKOS_LAMBDA(int i) {{
+          half_parameters(i) = Kokkos::Experimental::cast_to_half(static_cast<float>(parameters(i)));
+        }});
+  }}
+
+  template <class ParameterViewType>
+  void get_parameters(ParameterViewType const & destination) const {{
+    static_assert(Kokkos::is_view_v<ParameterViewType>, "get_parameters requires a Kokkos::View");
+    static_assert(ParameterViewType::rank == 1, "get_parameters requires a rank-one Kokkos::View");
+    using ParameterScalar = typename ParameterViewType::non_const_value_type;
+    using MemorySpace = typename ParameterViewType::memory_space;
+    using ExecutionSpace = typename MemorySpace::execution_space;
+    static_assert(std::is_same_v<ParameterScalar,float> || std::is_same_v<ParameterScalar,double>,
+                  "get_parameters destination scalar must be float or double");
+    static_assert(!std::is_const_v<typename ParameterViewType::value_type>,
+                  "get_parameters destination must be writable");
+    static_assert(Kokkos::SpaceAccessibility<ExecutionSpace,MemorySpace>::accessible,
+                  "get_parameters destination execution space cannot access its memory space");
+    if (!weights_loaded()) Kokkos::abort("GeneratedModel::get_parameters called before load_weights");
+    if (destination.extent(0) != static_cast<std::size_t>(get_num_parameters())) {{
+      Kokkos::abort("GeneratedModel::get_parameters destination extent is incorrect");
+    }}
+    Kokkos::View<Scalar*,ponni::DeviceSpace> learned_parameters(
+        "generated_get_parameters_device", learned_parameter_elements);
+    ParameterView const parameters = parameters_;
+    execution_space const model_execution;
+    Kokkos::parallel_for(
+        "GeneratedModel::gather_parameters",
+        Kokkos::RangePolicy<execution_space>(model_execution, 0, learned_parameter_elements),
+        KOKKOS_LAMBDA(int i) {{ learned_parameters(i) = parameters(parameter_storage_index(i)); }});
+    model_execution.fence("GeneratedModel::get_parameters gather");
+    Kokkos::View<Scalar*,MemorySpace> converted_parameters(
+        "generated_get_parameters_converted", learned_parameter_elements);
+    Kokkos::deep_copy(converted_parameters, learned_parameters);
+    ExecutionSpace const destination_execution;
+    Kokkos::parallel_for(
+        "GeneratedModel::get_parameters",
+        Kokkos::RangePolicy<ExecutionSpace>(destination_execution, 0, learned_parameter_elements),
+        KOKKOS_LAMBDA(int i) {{ destination(i) = static_cast<ParameterScalar>(converted_parameters(i)); }});
+    destination_execution.fence("GeneratedModel::get_parameters conversion");
+  }}
+
+  template <class ParameterViewType,
+            class ExecutionSpace = typename ParameterViewType::memory_space::execution_space>
+  void set_parameters(ParameterViewType const & source,
+                      ExecutionSpace const & execution = ExecutionSpace()) {{
+    static_assert(Kokkos::is_view_v<ParameterViewType>, "set_parameters requires a Kokkos::View");
+    static_assert(ParameterViewType::rank == 1, "set_parameters requires a rank-one Kokkos::View");
+    using ParameterScalar = typename ParameterViewType::non_const_value_type;
+    using MemorySpace = typename ParameterViewType::memory_space;
+    static_assert(std::is_same_v<ParameterScalar,float> || std::is_same_v<ParameterScalar,double>,
+                  "set_parameters source scalar must be float or double");
+    static_assert(Kokkos::is_execution_space_v<ExecutionSpace>,
+                  "set_parameters requires a Kokkos execution space");
+    static_assert(Kokkos::SpaceAccessibility<ExecutionSpace,MemorySpace>::accessible,
+                  "set_parameters execution space cannot access the source memory space");
+    if (!weights_loaded()) Kokkos::abort("GeneratedModel::set_parameters called before load_weights");
+    if (source.extent(0) != static_cast<std::size_t>(get_num_parameters())) {{
+      Kokkos::abort("GeneratedModel::set_parameters source extent is incorrect");
+    }}
+    Kokkos::View<Scalar*,MemorySpace> converted_parameters(
+        "generated_set_parameters_converted", learned_parameter_elements);
+    Kokkos::parallel_for(
+        "GeneratedModel::convert_set_parameters",
+        Kokkos::RangePolicy<ExecutionSpace>(execution, 0, learned_parameter_elements),
+        KOKKOS_LAMBDA(int i) {{ converted_parameters(i) = static_cast<Scalar>(source(i)); }});
+    execution.fence("GeneratedModel::set_parameters source conversion");
+    Kokkos::View<Scalar*,ponni::DeviceSpace> learned_parameters(
+        "generated_set_parameters_device", learned_parameter_elements);
+    Kokkos::deep_copy(learned_parameters, converted_parameters);
+    ParameterView const parameters = parameters_;
+    execution_space const model_execution;
+    Kokkos::parallel_for(
+        "GeneratedModel::scatter_parameters",
+        Kokkos::RangePolicy<execution_space>(model_execution, 0, learned_parameter_elements),
+        KOKKOS_LAMBDA(int i) {{ parameters(parameter_storage_index(i)) = learned_parameters(i); }});
+    refresh_half_parameters(model_execution);
+    model_execution.fence("GeneratedModel::set_parameters update");
+#if defined(KOKKOS_ENABLE_DEBUG)
+    if (!parameters_are_finite()) Kokkos::abort("GeneratedModel::set_parameters received non-finite values");
+#endif
+  }}
+
+  bool parameters_are_finite() const {{
+    if (!weights_loaded()) return false;
+    ParameterView const parameters = parameters_;
+    int nonfinite_count = 0;
+    Kokkos::parallel_reduce(
+        "GeneratedModel::parameters_are_finite",
+        Kokkos::RangePolicy<execution_space>(0, learned_parameter_elements),
+        KOKKOS_LAMBDA(int i, int & count) {{
+          if (!Kokkos::isfinite(parameters(parameter_storage_index(i)))) count++;
+        }}, nonfinite_count);
+    return nonfinite_count == 0;
+  }}
+
+  bool parameters_synchronized() const {{
+    if (!weights_loaded()) return false;
+    ParameterView const parameters = parameters_;
+    HalfParameterView const half_parameters = half_parameters_;
+    int mismatch_count = 0;
+    Kokkos::parallel_reduce(
+        "GeneratedModel::parameters_synchronized",
+        Kokkos::RangePolicy<execution_space>(0, storage_parameter_elements),
+        KOKKOS_LAMBDA(int i, int & count) {{
+          auto const expected = Kokkos::Experimental::cast_to_half(static_cast<float>(parameters(i)));
+          if (static_cast<float>(half_parameters(i)) != static_cast<float>(expected)) count++;
+        }}, mismatch_count);
+    return mismatch_count == 0;
   }}
 
   KOKKOS_INLINE_FUNCTION
@@ -1833,7 +2025,7 @@ public:
   }}
 
   void infer_batch(InputView const & inputs, OutputView const & outputs) const {{
-#ifndef NDEBUG
+#if defined(KOKKOS_ENABLE_DEBUG)
     if (!weights_loaded()) Kokkos::abort(\"GeneratedModel::infer_batch called before load_weights\");
     if (inputs.extent(0) != num_inputs) Kokkos::abort(\"GeneratedModel input feature extent is incorrect\");
     if (outputs.extent(0) != num_outputs) Kokkos::abort(\"GeneratedModel output feature extent is incorrect\");
@@ -1847,7 +2039,7 @@ public:
 
   void infer_batch_hierarchical(InputView const & inputs, OutputView const & outputs,
                                 int batch_tile = default_hierarchical_batch_tile) const {{
-#ifndef NDEBUG
+#if defined(KOKKOS_ENABLE_DEBUG)
     if (!weights_loaded()) Kokkos::abort("GeneratedModel::infer_batch_hierarchical called before load_weights");
     if (inputs.extent(0) != num_inputs) Kokkos::abort("GeneratedModel input feature extent is incorrect");
     if (outputs.extent(0) != num_outputs) Kokkos::abort("GeneratedModel output feature extent is incorrect");
@@ -1864,7 +2056,7 @@ public:
     int const scratch_bytes = workspace_elements * batch_tile * static_cast<int>(sizeof(Scalar));
     policy_type policy(league_size, Kokkos::AUTO);
     policy.set_scratch_size(0, Kokkos::PerTeam(scratch_bytes));
-    WeightView const weights = weights_;
+    ParameterView const weights = parameters_;
     Kokkos::parallel_for(
         "GeneratedModel::infer_batch_hierarchical", policy,
         KOKKOS_LAMBDA(member_type const & team) {{
@@ -1882,7 +2074,7 @@ public:
   void infer_batch_tensorcore(
       InputView const & inputs, OutputView const & outputs,
       int warps_per_block = default_tensorcore_warps_per_block) const {{
-#ifndef NDEBUG
+#if defined(KOKKOS_ENABLE_DEBUG)
     if (!weights_loaded()) Kokkos::abort("GeneratedModel::infer_batch_tensorcore called before load_weights");
     if (inputs.extent(0) != num_inputs) Kokkos::abort("GeneratedModel input feature extent is incorrect");
     if (outputs.extent(0) != num_outputs) Kokkos::abort("GeneratedModel output feature extent is incorrect");

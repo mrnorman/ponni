@@ -105,7 +105,7 @@ class FrameworkExportTests(unittest.TestCase):
             report = compile_model(model_path, root / "generated", model_name="KerasBranchModel")
             self.assertIn("Concat", report["optimized_operations"])
             self.assertIn("ResidualAddActivation", report["optimized_operations"])
-            self.assertEqual(report["parameter_count"], 65)
+            self.assertEqual(report["learned_parameter_count"], 65)
             self.assertGreaterEqual(report["dense_chain_schedule"]["decision_counts"]["recompute"], 1)
 
     def test_keras_activation_layers_keep_supported_attributes(self) -> None:

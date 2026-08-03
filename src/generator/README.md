@@ -349,6 +349,30 @@ chosen generated `Scalar`; allocates persistent full-precision and FP16 `ponni::
 them once. Inference does not allocate. The generated object contains only device-safe views and can be copied into a
 Kokkos lambda.
 
+## Learned parameter access
+
+Generated models accept only `float` or `double` as their `Scalar`. `get_num_parameters()`, `get_parameters()`, and
+`set_parameters()` expose a deterministic flat vector containing only learned parameters. Dense weights and biases,
+LayerNormalization scale and bias, and BatchNormalization scale and bias are learned. BatchNormalization running
+statistics, shape and reduction axes, clipping bounds, literal ONNX constants, and constants produced by compiler
+folding are static and are excluded. `weights.json` records the learned/static classification for every stored tensor.
+ONNX has no general `requires_grad` field, so this classification is based on validated operation roles rather than
+framework training state.
+
+`get_parameters()` and `set_parameters()` accept rank-one `Kokkos::View`s whose scalar is `float` or `double`; their
+extent must equal `get_num_parameters()` in every build mode. `set_parameters()` accepts an execution-space instance,
+defaulting to the execution space associated with the source View's memory space, and verifies at compile time that
+the execution space can access that memory. It updates the authoritative `Scalar` parameters and always calls
+`refresh_half_parameters()` so packed-half inference observes the same update. `parameters_are_finite()` and
+`parameters_synchronized()` are explicit, synchronous diagnostics. They are never run implicitly except that
+`set_parameters()` checks finiteness when Kokkos is built with `KOKKOS_ENABLE_DEBUG`.
+
+`save_parameters()` writes the complete learned-plus-static state in the validated `weights.bin` format, so the saved
+file can be passed back to `load_weights()`. Independently constructed model instances allocate independent parameter
+storage and can hold different values. Copying an existing model follows normal `Kokkos::View` shallow-copy semantics:
+the copies share that instance's allocations, so changing parameters through one copy changes the others. Applications
+must coordinate parameter updates with inference; concurrent mutation and inference on shared storage is unsupported.
+
 ## Verification and performance
 
 Compilation compares the unfused IR interpreter to the optimized IR on deterministic random data. Export compares

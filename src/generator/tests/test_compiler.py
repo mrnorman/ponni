@@ -109,12 +109,17 @@ class CompilerTests(unittest.TestCase):
 
             report = compile_model(exported.model_path, root / "generated", model_name="OperatorZooModel")
             generated = (root / "generated" / "OperatorZooModel.hpp").read_text()
+            manifest = json.loads((root / "generated" / "weights.json").read_text())
             self.assertIn("Scalar exponential_sum", generated)
             self.assertIn("Scalar second_moment", generated)
             self.assertIn("ponni::TwoHalf exponential_sum", generated)
             self.assertIn("TeamThreadRange(team, active_batch)", generated)
             self.assertNotIn("preactivation", generated)
             self.assertEqual(report["storage"]["external_workspace_bytes"], 0)
+            self.assertEqual(report["learned_parameter_count"], 32)
+            self.assertEqual(manifest["learned_parameter_count"], 32)
+            learned_names = {entry["name"] for entry in manifest["tensors"] if entry["learned"]}
+            self.assertEqual(learned_names, {"bn_scale", "bn_bias", "ln_scale", "ln_bias"})
 
     def test_activation_attributes_survive_dense_fusion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -176,7 +181,7 @@ class CompilerTests(unittest.TestCase):
                 self.assertEqual(generated.count("void infer_batch_half2_heuristic("), 1)
                 self.assertNotIn("void infer_batch_half2_explicit(", generated)
                 self.assertIn("ponni::TwoHalf::fma", generated)
-                self.assertIn("HalfWeightView", generated)
+                self.assertIn("HalfParameterView", generated)
                 self.assertIn("int const ibatch = 2 * ipair", generated)
                 self.assertIn("Kokkos::TeamThreadRange(team", generated)
                 self.assertIn("team.team_shmem().get_shmem", generated)

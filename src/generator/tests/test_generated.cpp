@@ -7,6 +7,7 @@
 #include "OperatorZooModel.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -43,6 +44,85 @@ ReferenceData load_reference(std::string const & path) {
   }
   if (!stream) throw std::runtime_error("malformed reference file: " + path);
   return data;
+}
+
+template <class Model, class TransferScalar>
+bool check_parameter_api(std::string const & weight_path, std::string const & label,
+                         bool use_explicit_execution_space = false) {
+  Model model;
+  std::string error;
+  if (!model.load_weights(weight_path, &error)) {
+    std::cerr << label << " parameter API weight loading failed: " << error << std::endl;
+    return false;
+  }
+  if (!model.parameters_are_finite() || !model.parameters_synchronized()) {
+    std::cerr << label << " initial parameter diagnostics failed" << std::endl;
+    return false;
+  }
+  using HostView = Kokkos::View<TransferScalar*,Kokkos::HostSpace>;
+  HostView original("parameter_api_original", Model::get_num_parameters());
+  HostView updated("parameter_api_updated", Model::get_num_parameters());
+  HostView result("parameter_api_result", Model::get_num_parameters());
+  model.get_parameters(original);
+  for (int i = 0; i < Model::get_num_parameters(); i++) {
+    updated(i) = original(i) + static_cast<TransferScalar>((i % 7 - 3) * 1.e-4);
+  }
+  if (use_explicit_execution_space) {
+    Kokkos::DefaultHostExecutionSpace const host_execution;
+    model.set_parameters(updated, host_execution);
+  } else {
+    model.set_parameters(updated);
+  }
+  model.get_parameters(result);
+  bool passed = model.parameters_are_finite() && model.parameters_synchronized();
+  for (int i = 0; i < Model::get_num_parameters(); i++) {
+    typename Model::scalar_type const expected = static_cast<typename Model::scalar_type>(updated(i));
+    if (result(i) != static_cast<TransferScalar>(expected)) {
+      std::cerr << label << " parameter conversion mismatch at " << i << std::endl;
+      passed = false;
+      break;
+    }
+  }
+
+  // Independently constructed models own different parameter allocations. Ordinary
+  // C++ copies remain shallow Kokkos::View copies and intentionally share storage.
+  Model independent;
+  if (!independent.load_weights(weight_path, &error)) {
+    std::cerr << label << " independent model loading failed: " << error << std::endl;
+    return false;
+  }
+  HostView independent_parameters("parameter_api_independent", Model::get_num_parameters());
+  independent.get_parameters(independent_parameters);
+  if (Model::get_num_parameters() > 0 && independent_parameters(0) != original(0)) {
+    std::cerr << label << " independent model unexpectedly shared parameter storage" << std::endl;
+    passed = false;
+  }
+
+  std::string const saved_path = weight_path + ".parameter_api_roundtrip";
+  if (!model.save_parameters(saved_path, &error)) {
+    std::cerr << label << " parameter saving failed: " << error << std::endl;
+    return false;
+  }
+  Model restored;
+  if (!restored.load_weights(saved_path, &error)) {
+    std::cerr << label << " saved parameter loading failed: " << error << std::endl;
+    std::remove(saved_path.c_str());
+    return false;
+  }
+  std::remove(saved_path.c_str());
+  HostView restored_parameters("parameter_api_restored", Model::get_num_parameters());
+  restored.get_parameters(restored_parameters);
+  for (int i = 0; i < Model::get_num_parameters(); i++) {
+    TransferScalar const persisted = Model::stored_scalar_code == 1
+                                         ? static_cast<TransferScalar>(static_cast<float>(result(i)))
+                                         : static_cast<TransferScalar>(static_cast<double>(result(i)));
+    if (restored_parameters(i) != persisted) {
+      std::cerr << label << " saved parameter mismatch at " << i << std::endl;
+      passed = false;
+      break;
+    }
+  }
+  return passed;
 }
 
 template <class Model>
@@ -194,6 +274,12 @@ int main(int argc, char ** argv) {
     passed = check_model<DenseNet>(argv[9], argv[10], "DenseNet", maximum_error) && passed;
     passed = check_model<Branching>(argv[11], argv[12], "branching DAG", maximum_error) && passed;
     passed = check_model<OperatorZoo>(argv[13], argv[14], "operator zoo", maximum_error) && passed;
+    passed = check_parameter_api<Mlp,float>(argv[1], "float model/float parameters") && passed;
+    passed = check_parameter_api<Mlp,double>(argv[1], "float model/double parameters", true) && passed;
+    passed = check_parameter_api<ponni::generated::MlpModel<double>,float>(
+                 argv[1], "double model/float parameters") && passed;
+    passed = check_parameter_api<ponni::generated::MlpModel<double>,double>(
+                 argv[1], "double model/double parameters", true) && passed;
   }
   ponni::finalize_device_pool();
   Kokkos::finalize();

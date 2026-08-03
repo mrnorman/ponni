@@ -56,7 +56,9 @@ def _report(original, optimized, pass_report, strategy: str, plan, sample_plan,
             streaming_output_threshold: int = 8) -> dict[str, Any]:
     input_tensor = original.tensors[original.inputs[0]]
     output_tensor = original.tensors[original.outputs[0]]
-    parameter_count = sum(constant.values.size for constant in optimized.constants.values())
+    learned_parameter_count = sum(
+        constant.values.size for constant in optimized.constants.values() if constant.learned
+    )
     canonical_counts = dict(sorted(Counter(node.op for node in optimized.nodes).items()))
     fused_ops = sum(
         count for op, count in canonical_counts.items()
@@ -74,7 +76,7 @@ def _report(original, optimized, pass_report, strategy: str, plan, sample_plan,
         "model_outputs": [{"name": output_tensor.name, "shape": _shape_string(output_tensor.shape),
                             "dtype": output_tensor.dtype.value}],
         "operator_counts": original.metadata.get("operator_counts", {}),
-        "parameter_count": int(parameter_count),
+        "learned_parameter_count": int(learned_parameter_count),
         "original_onnx_node_count": int(original.metadata.get("original_node_count", len(original.nodes))),
         "canonical_node_count": len(original.nodes),
         "fused_node_count": len(optimized.nodes),

@@ -30,6 +30,7 @@ class ConstantTensor:
     dtype: DType
     values: np.ndarray = field(repr=False)
     canonical_layout: str = "onnx"
+    learned: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -37,6 +38,7 @@ class ConstantTensor:
             "shape": list(self.shape),
             "dtype": self.dtype.value,
             "canonical_layout": self.canonical_layout,
+            "learned": self.learned,
         }
 
 

@@ -119,7 +119,7 @@ def constant_fold(graph: Graph) -> bool:
         result = np.asarray(result, dtype=values[0].dtype)
         constant_name = f"__folded_{output_id}_{output.name}"
         graph.constants[constant_name] = ConstantTensor(
-            constant_name, tuple(int(dim) for dim in result.shape), output.dtype, result.copy(), "folded"
+            constant_name, tuple(int(dim) for dim in result.shape), output.dtype, result.copy(), "folded", False
         )
         output.is_constant = True
         output.constant_name = constant_name
@@ -241,7 +241,8 @@ def _add_constant(graph: Graph, name: str, values: np.ndarray, template_tensor_i
     new_id = max(graph.tensors, default=-1) + 1
     template = graph.tensors[template_tensor_id]
     graph.constants[name] = ConstantTensor(
-        name, tuple(int(dim) for dim in values.shape), template.dtype, values.copy(), layout
+        name, tuple(int(dim) for dim in values.shape), template.dtype, values.copy(), layout,
+        graph.constants[template.constant_name].learned if template.constant_name is not None else False,
     )
     from .ir import TensorValue
 

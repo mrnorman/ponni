@@ -49,6 +49,7 @@ def write_weights(graph: Graph, output_dir: Path) -> tuple[dict[int, int], dict[
                 "byte_size": len(payload),
                 "element_offset": element_offset,
                 "canonical_layout": constant.canonical_layout,
+                "learned": constant.learned,
             }
         )
         payload_parts.append(payload)
@@ -68,6 +69,9 @@ def write_weights(graph: Graph, output_dir: Path) -> tuple[dict[int, int], dict[
         "model_num_inputs": graph.tensors[graph.inputs[0]].sample_size,
         "model_num_outputs": graph.tensors[graph.outputs[0]].sample_size,
         "tensor_count": len(entries),
+        "learned_parameter_count": sum(
+            entry["byte_size"] // numpy_dtype.itemsize for entry in entries if entry["learned"]
+        ),
         "tensors": entries,
     }
     (output_dir / "weights.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
