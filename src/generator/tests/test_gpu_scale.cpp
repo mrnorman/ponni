@@ -37,9 +37,6 @@ bool benchmark_model(char const * weight_path, int hidden_width) {
     typename Model::OutputView batch_outputs("gpu_scale_batch_outputs", Model::num_outputs, batch_size);
     typename Model::OutputView sarray_outputs("gpu_scale_sarray_outputs", Model::num_outputs, batch_size);
     typename Model::OutputView tiled_outputs("gpu_scale_tiled_outputs", Model::num_outputs, batch_size);
-#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOS_ARCH_AMPERE)
-    typename Model::OutputView tensorcore_outputs("gpu_scale_tensorcore_outputs", Model::num_outputs, batch_size);
-#endif
     typename Model::OutputView half2_outputs("gpu_scale_half2_outputs", Model::num_outputs, batch_size);
     Kokkos::parallel_for(
         "generator_gpu_initialize_inputs",
@@ -71,14 +68,12 @@ bool benchmark_model(char const * weight_path, int hidden_width) {
     auto const infer_half2 = [&](int variant) {
       if (variant == 0) {
         model.infer_batch_half2(inputs, half2_outputs);
-      } else if (variant == 1) {
-        model.infer_batch_half2_heuristic(inputs, half2_outputs);
       } else {
         model.infer_batch_half2_explicit(inputs, half2_outputs);
       }
     };
-    int constexpr half2_variant_count = 3;
-    char const * const half2_variant_names[half2_variant_count] = {"none", "heuristic", "explicit"};
+    int constexpr half2_variant_count = 2;
+    char const * const half2_variant_names[half2_variant_count] = {"none", "explicit"};
     double half2_seconds[half2_variant_count] = {};
     float half2_errors[half2_variant_count] = {};
     double best_half2_seconds = std::numeric_limits<double>::max();
@@ -116,55 +111,20 @@ bool benchmark_model(char const * weight_path, int hidden_width) {
                 << " max_abs_difference=" << half2_errors[ivariant] << std::endl;
       if (half2_errors[ivariant] > 5.e-2f || !std::isfinite(half2_errors[ivariant])) passed = false;
     }
-    double tensorcore_warp_one_seconds = 0;
-    double best_tensorcore_seconds = std::numeric_limits<double>::max();
-    int best_tensorcore_warps = 0;
-#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOS_ARCH_AMPERE)
-    for (int warps_per_block : {1, 2, 4, 8}) {
-      if (warps_per_block > Model::maximum_tensorcore_warps_per_block) continue;
-      model.infer_batch_tensorcore(inputs, tensorcore_outputs, warps_per_block);
-      Kokkos::fence();
-      double const tensorcore_seconds = time_inference(
-          [&]() { model.infer_batch_tensorcore(inputs, tensorcore_outputs, warps_per_block); }, iterations);
-      if (warps_per_block == 1) tensorcore_warp_one_seconds = tensorcore_seconds;
-      if (tensorcore_seconds < best_tensorcore_seconds) {
-        best_tensorcore_seconds = tensorcore_seconds;
-        best_tensorcore_warps = warps_per_block;
-      }
-      std::cout << "generator_gpu_tensorcore width=" << hidden_width
-                << " batch=" << batch_size
-                << " warps_per_block=" << warps_per_block
-                << " tensorcore_ms=" << tensorcore_seconds * 1.e3 << std::endl;
-    }
-#else
-    best_tensorcore_seconds = 0;
-#endif
     double tile_one_seconds = 0;
     double best_hierarchical_seconds = std::numeric_limits<double>::max();
     int best_hierarchical_tile = 0;
     float worst_error = 0;
     float worst_sarray_error = 0;
-    float tensorcore_error = 0;
-#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOS_ARCH_AMPERE)
-    Kokkos::parallel_reduce(
-        "generator_gpu_tensorcore_error",
-        Kokkos::RangePolicy<typename Model::execution_space>(0, output_elements),
-        KOKKOS_LAMBDA(std::size_t linear, float & error_max) {
-          int const ibatch = static_cast<int>(linear % batch_size);
-          int const ioutput = static_cast<int>(linear / batch_size);
-          float const error_value = Kokkos::abs(
-              batch_outputs(ioutput,ibatch) - tensorcore_outputs(ioutput,ibatch));
-          if (error_value > error_max) error_max = error_value;
-        },
-        Kokkos::Max<float>(tensorcore_error));
-    if (tensorcore_error > 2.e-3f || !std::isfinite(tensorcore_error)) passed = false;
-#endif
+    auto const infer_hierarchical = [&](int batch_tile) {
+      model.infer_batch_hierarchical(inputs, tiled_outputs, batch_tile);
+    };
     for (int batch_tile : {1, 2, 4, 8, 16, 32}) {
       if (batch_tile > Model::maximum_hierarchical_batch_tile) continue;
-      model.infer_batch_hierarchical(inputs, tiled_outputs, batch_tile);
+      infer_hierarchical(batch_tile);
       Kokkos::fence();
       double const tiled_seconds = time_inference(
-          [&]() { model.infer_batch_hierarchical(inputs, tiled_outputs, batch_tile); }, iterations);
+          [&]() { infer_hierarchical(batch_tile); }, iterations);
       if (batch_tile == 1) tile_one_seconds = tiled_seconds;
       if (tiled_seconds < best_hierarchical_seconds) {
         best_hierarchical_seconds = tiled_seconds;
@@ -218,10 +178,6 @@ bool benchmark_model(char const * weight_path, int hidden_width) {
               << " hierarchical_tile1_ms=" << tile_one_seconds * 1.e3
               << " hierarchical_best_ms=" << best_hierarchical_seconds * 1.e3
               << " hierarchical_best_tile=" << best_hierarchical_tile
-              << " tensorcore_warp1_ms=" << tensorcore_warp_one_seconds * 1.e3
-              << " tensorcore_best_ms=" << best_tensorcore_seconds * 1.e3
-              << " tensorcore_best_warps=" << best_tensorcore_warps
-              << " tensorcore_max_abs_difference=" << tensorcore_error
               << " half2_ms=" << half2_seconds[0] * 1.e3
               << " half2_max_abs_difference=" << half2_errors[0]
               << " half2_best_ms=" << best_half2_seconds * 1.e3

@@ -22,8 +22,7 @@ def check_header(path: Path) -> None:
             raise RuntimeError(f"{path.name}: direct View kernel contains forbidden reread/storage {forbidden!r}")
     if "preactivation" in generated:
         raise RuntimeError(f"{path.name}: generated dense preactivation was materialized")
-    for target in ("infer_one", "infer_batch", "infer_batch_half2", "infer_batch_half2_heuristic",
-                   "infer_batch_hierarchical", "infer_batch_tensorcore"):
+    for target in ("infer_one", "infer_batch", "infer_batch_half2", "infer_batch_hierarchical"):
         if f"void {target}(" not in generated:
             raise RuntimeError(f"{path.name}: missing generated target {target}")
 

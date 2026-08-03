@@ -149,11 +149,6 @@ bool check_model(std::string const & weight_path, std::string const & reference_
                                                           test.batch_size);
     typename Model::OutputView inline_outputs("generator_inline_outputs", Model::num_outputs, test.batch_size);
     typename Model::OutputView half2_outputs("generator_half2_outputs", Model::num_outputs, test.batch_size);
-    typename Model::OutputView half2_heuristic_outputs("generator_half2_heuristic_outputs", Model::num_outputs,
-                                                       test.batch_size);
-#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOS_ARCH_AMPERE)
-    typename Model::OutputView tensorcore_outputs("generator_tensorcore_outputs", Model::num_outputs, test.batch_size);
-#endif
     auto inputs_host = Kokkos::create_mirror_view(inputs);
     for (int i = 0; i < Model::num_inputs; i++) {
       for (int ibatch = 0; ibatch < test.batch_size; ibatch++) {
@@ -165,10 +160,6 @@ bool check_model(std::string const & weight_path, std::string const & reference_
     model.infer_batch_hierarchical(inputs, hierarchical_outputs);
     model.infer_batch_hierarchical(inputs, hierarchical_tile1_outputs, 1);
     model.infer_batch_half2(inputs, half2_outputs);
-    model.infer_batch_half2_heuristic(inputs, half2_heuristic_outputs);
-#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOS_ARCH_AMPERE)
-    if constexpr (Model::tensorcore_eligible) model.infer_batch_tensorcore(inputs, tensorcore_outputs);
-#endif
 
     auto const device_model = model;
     Kokkos::parallel_for("GeneratedModel::embedded_infer_one", test.batch_size, KOKKOS_LAMBDA(int ibatch) {
@@ -185,10 +176,6 @@ bool check_model(std::string const & weight_path, std::string const & reference_
         Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), hierarchical_tile1_outputs);
     auto inline_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), inline_outputs);
     auto half2_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), half2_outputs);
-    auto half2_heuristic_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), half2_heuristic_outputs);
-#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOS_ARCH_AMPERE)
-    auto tensorcore_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), tensorcore_outputs);
-#endif
     for (int i = 0; i < Model::num_outputs; i++) {
       for (int ibatch = 0; ibatch < test.batch_size; ibatch++) {
         float const expected = test.outputs[i * test.batch_size + ibatch];
@@ -197,11 +184,9 @@ bool check_model(std::string const & weight_path, std::string const & reference_
         float const hierarchical_tile1_error = std::abs(hierarchical_tile1_host(i,ibatch) - expected);
         float const inline_error = std::abs(inline_host(i,ibatch) - expected);
         float const half2_error = std::abs(half2_host(i,ibatch) - expected);
-        float const half2_heuristic_error = std::abs(half2_heuristic_host(i,ibatch) - expected);
         maximum_error = std::max(maximum_error, std::max(batch_error, std::max(hierarchical_error, inline_error)));
         maximum_error = std::max(maximum_error, hierarchical_tile1_error);
         maximum_error = std::max(maximum_error, half2_error);
-        maximum_error = std::max(maximum_error, half2_heuristic_error);
         if (batch_error > 2.e-5f || hierarchical_error > 2.e-5f || hierarchical_tile1_error > 2.e-5f ||
             inline_error > 2.e-5f) {
           std::cerr << label << " mismatch at batch size " << test.batch_size << ", output " << i
@@ -218,26 +203,6 @@ bool check_model(std::string const & weight_path, std::string const & reference_
                     << ", half2=" << half2_host(i,ibatch) << ", error=" << half2_error << std::endl;
           passed = false;
         }
-        if (half2_heuristic_error > 3.e-2f || !std::isfinite(half2_heuristic_error)) {
-          std::cerr << label << " heuristic half2 mismatch at batch size " << test.batch_size
-                    << ", output " << i << ", sample " << ibatch << ": expected=" << expected
-                    << ", half2=" << half2_heuristic_host(i,ibatch)
-                    << ", error=" << half2_heuristic_error << std::endl;
-          passed = false;
-        }
-#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOS_ARCH_AMPERE)
-        if constexpr (Model::tensorcore_eligible) {
-          float const tensorcore_error = std::abs(tensorcore_host(i,ibatch) - expected);
-          maximum_error = std::max(maximum_error, tensorcore_error);
-          if (tensorcore_error > 2.e-3f || !std::isfinite(tensorcore_error)) {
-            std::cerr << label << " Tensor Core mismatch at batch size " << test.batch_size
-                      << ", output " << i << ", sample " << ibatch
-                      << ": expected=" << expected << ", tensorcore=" << tensorcore_host(i,ibatch)
-                      << ", error=" << tensorcore_error << std::endl;
-            passed = false;
-          }
-        }
-#endif
       }
     }
   }

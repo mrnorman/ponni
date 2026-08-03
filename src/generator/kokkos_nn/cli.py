@@ -30,7 +30,7 @@ def _parser() -> argparse.ArgumentParser:
     compile_command.add_argument("model", type=Path)
     compile_command.add_argument("--output-dir", type=Path, required=True)
     compile_command.add_argument(
-        "--strategy", choices=("auto", "sample-local", "team", "tensorcore", "half2"), default="auto"
+        "--strategy", choices=("auto", "sample-local", "team", "half2"), default="auto"
     )
     compile_command.add_argument("--model-name", default="GeneratedModel")
     compile_command.add_argument("--disable-pass", action="append", default=[], metavar="NAME[,NAME]")

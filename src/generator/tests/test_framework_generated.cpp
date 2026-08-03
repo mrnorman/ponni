@@ -71,7 +71,7 @@ bool check_model(std::string const & weight_path, std::string const & reference_
     Kokkos::deep_copy(inputs, inputs_host);
     model.infer_batch(inputs, batch_outputs);
     model.infer_batch_hierarchical(inputs, team_outputs);
-    model.infer_batch_half2_heuristic(inputs, half2_outputs);
+    model.infer_batch_half2(inputs, half2_outputs);
 
     auto const device_model = model;
     Kokkos::parallel_for("FrameworkModel::embedded_infer_one", test.batch_size, KOKKOS_LAMBDA(int ibatch) {

@@ -103,44 +103,13 @@ def half2_accumulator_plan(graph: Graph, maximum_output_accumulators: int = 8,
     return result
 
 
-def find_tensorcore_dense_chain(graph: Graph) -> tuple[Node, ...] | None:
-    """Return a two- or three-dense linear chain that can be emitted as one CUDA kernel."""
-    if len(graph.nodes) not in (2, 3):
-        return None
-    nodes = tuple(graph.nodes)
-    if nodes[0].inputs[0] != graph.inputs[0] or nodes[-1].outputs[0] != graph.outputs[0]:
-        return None
-    for index, node in enumerate(nodes):
-        required = "DenseBiasActivation" if index + 1 < len(nodes) else None
-        if required is not None and node.op != required:
-            return None
-        if required is None and node.op not in {"Dense", "DenseBiasActivation"}:
-            return None
-        if index > 0 and node.inputs[0] != nodes[index - 1].outputs[0]:
-            return None
-        if index + 1 < len(nodes) and graph.tensors[node.outputs[0]].consumers != [nodes[index + 1].id]:
-            return None
-    return nodes
-
-
-def estimate_tensorcore_scratch_bytes(graph: Graph, chain: tuple[Node, ...] | None) -> int:
-    """Return the generated raw-CUDA dynamic shared-memory requirement per warp."""
-    if chain is None or len(chain) == 2:
-        return 2048
-    input_size = graph.tensors[graph.inputs[0]].sample_size
-    first_size = graph.tensors[chain[0].outputs[0]].sample_size
-    padded_inputs = ((input_size + 7) // 8) * 8
-    padded_first = ((first_size + 7) // 8) * 8
-    return (16 * padded_inputs + 16 * padded_first + 16 * 8 + 16 * 16) * 4
-
-
 class CppEmitter:
     def __init__(self, graph: Graph, plan: StoragePlan, sample_plan: StoragePlan,
                  schedule: DenseChainSchedule, weight_offsets: dict[int, int], model_name: str,
                  strategy: str, default_batch_tile: int, maximum_batch_tile: int) -> None:
-        if strategy not in {"sample-local", "team", "tensorcore", "half2"}:
+        if strategy not in {"sample-local", "team", "half2"}:
             raise CompilerError(
-                f"unknown execution strategy {strategy!r}; choose sample-local, team, tensorcore, half2, or auto"
+                f"unknown execution strategy {strategy!r}; choose sample-local, team, half2, or auto"
             )
         self.graph = graph
         self.plan = plan
@@ -287,42 +256,6 @@ class CppEmitter:
         if function is None:
             raise CompilerError(f"C++ emitter has no unary implementation for {name}")
         return f"{function}({expression})"
-
-    @staticmethod
-    def _cuda_activation(name: str, expression: str, attributes: dict[str, object] | None = None) -> str:
-        attributes = attributes or {}
-        if name == "Relu":
-            return f"({expression} > 0.0f ? {expression} : 0.0f)"
-        if name == "Sigmoid":
-            return f"(1.0f / (1.0f + expf(-{expression})))"
-        if name == "Tanh":
-            return f"tanhf({expression})"
-        if name == "LeakyRelu":
-            alpha = float(attributes.get("alpha", 0.01))
-            return f"({expression} >= 0.0f ? {expression} : {alpha!r}f * {expression})"
-        if name == "Elu":
-            alpha = float(attributes.get("alpha", 1.0))
-            return f"({expression} >= 0.0f ? {expression} : {alpha!r}f * (expf({expression}) - 1.0f))"
-        if name == "Gelu":
-            if str(attributes.get("approximate", "none")) == "tanh":
-                return (
-                    f"(0.5f * {expression} * (1.0f + tanhf(0.7978845608028654f * "
-                    f"({expression} + 0.044715f * {expression} * {expression} * {expression}))))"
-                )
-            return f"(0.5f * {expression} * (1.0f + erff({expression} * 0.7071067811865475f)))"
-        if name == "Silu":
-            return f"({expression} / (1.0f + expf(-{expression})))"
-        if name == "Softplus":
-            return f"(fmaxf({expression}, 0.0f) + log1pf(expf(-fabsf({expression}))))"
-        if name == "HardSigmoid":
-            alpha = float(attributes.get("alpha", 0.2))
-            beta = float(attributes.get("beta", 0.5))
-            return f"fminf(1.0f, fmaxf(0.0f, {alpha!r}f * {expression} + {beta!r}f))"
-        if name == "HardSwish":
-            return f"({expression} * fminf(1.0f, fmaxf(0.0f, {expression} / 6.0f + 0.5f)))"
-        if name == "Mish":
-            return f"({expression} * tanhf(fmaxf({expression}, 0.0f) + log1pf(expf(-fabsf({expression})))))"
-        raise CompilerError(f"CUDA emitter has no activation implementation for {name}")
 
     @staticmethod
     def _binary(op: str, left: str, right: str, half: bool = False) -> str:
@@ -1107,336 +1040,10 @@ class CppEmitter:
             lines.append(f"    {self._half_write(output_id, str(ioutput))} = {value};")
         return lines
 
-    def _emit_tensorcore_dense_pair(self, producer: Node, consumer: Node) -> str:
-        input_size = self._size(producer.inputs[0])
-        hidden_size = self._size(producer.outputs[0])
-        output_size = self._size(consumer.outputs[0])
-        producer_weight = int(producer.attributes["weight"])
-        consumer_weight = int(consumer.attributes["weight"])
-        producer_bias = producer.attributes.get("bias")
-        consumer_bias = consumer.attributes.get("bias")
-        producer_weight_offset = self.weight_offsets[producer_weight]
-        consumer_weight_offset = self.weight_offsets[consumer_weight]
-        producer_bias_value = (
-            "0.0f" if producer_bias is None
-            else f"weights[{self.weight_offsets[int(producer_bias)]} + hidden_neuron]"
-        )
-        consumer_bias_value = (
-            "0.0f" if consumer_bias is None
-            else f"weights[{self.weight_offsets[int(consumer_bias)]} + output_neuron]"
-        )
-        hidden_activation = self._cuda_activation(
-            str(producer.attributes["activation"]), "hidden_value",
-            producer.attributes.get("activation_attributes", {}),
-        )
-        output_value = "output_tile[output_neuron * tensorcore_batch_tile + local_batch]"
-        if consumer.op == "DenseBiasActivation":
-            output_value = self._cuda_activation(
-                str(consumer.attributes["activation"]), output_value,
-                consumer.attributes.get("activation_attributes", {}),
-            )
-        kernel_name = f"{self.model_name}_tensorcore_kernel"
-        return f"""#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOS_ARCH_AMPERE)
-static __global__ void {kernel_name}(float const * inputs, float * outputs,
-                                     float const * weights, int batch_size) {{
-  int constexpr tensorcore_batch_tile = 16;
-  int constexpr input_tile_elements = 8 * tensorcore_batch_tile;
-  int constexpr weight_tile_elements = 16 * 8;
-  int constexpr matrix_tile_elements = 16 * tensorcore_batch_tile;
-  int constexpr scratch_elements_per_warp =
-      input_tile_elements + weight_tile_elements + matrix_tile_elements;
-  int const lane = threadIdx.x & 31;
-  int const warp_in_block = threadIdx.x >> 5;
-  int const warps_per_block = blockDim.x >> 5;
-  int const batch_begin = (blockIdx.x * warps_per_block + warp_in_block) * tensorcore_batch_tile;
-  if (batch_begin >= batch_size) return;
-
-  extern __shared__ __align__(32) unsigned char dynamic_scratch[];
-  float * input_tile = reinterpret_cast<float *>(dynamic_scratch) + warp_in_block * scratch_elements_per_warp;
-  float * weight_tile = input_tile + input_tile_elements;
-  float * matrix_tile = weight_tile + weight_tile_elements;
-
-  for (int linear = lane; linear < input_tile_elements; linear += 32) {{
-    int const input_feature = linear / tensorcore_batch_tile;
-    int const local_batch = linear % tensorcore_batch_tile;
-    int const ibatch = batch_begin + local_batch;
-    float const input_value = input_feature < {input_size} && ibatch < batch_size
-                                ? inputs[input_feature * batch_size + ibatch] : 0.0f;
-    input_tile[linear] = nvcuda::wmma::__float_to_tf32(input_value);
-  }}
-  __syncwarp();
-
-  nvcuda::wmma::fragment<nvcuda::wmma::accumulator,16,16,8,float> output_fragment;
-  nvcuda::wmma::fill_fragment(output_fragment, 0.0f);
-  for (int hidden_begin = 0; hidden_begin < {hidden_size}; hidden_begin += 16) {{
-    for (int linear = lane; linear < weight_tile_elements; linear += 32) {{
-      int const local_hidden = linear / 8;
-      int const input_feature = linear % 8;
-      int const hidden_neuron = hidden_begin + local_hidden;
-      float const weight_value = hidden_neuron < {hidden_size} && input_feature < {input_size}
-                                   ? weights[{producer_weight_offset} + hidden_neuron * {input_size} + input_feature]
-                                   : 0.0f;
-      weight_tile[linear] = nvcuda::wmma::__float_to_tf32(weight_value);
-    }}
-    __syncwarp();
-
-    nvcuda::wmma::fragment<
-        nvcuda::wmma::matrix_a,16,16,8,nvcuda::wmma::precision::tf32,nvcuda::wmma::row_major>
-        input_weight_fragment;
-    nvcuda::wmma::fragment<
-        nvcuda::wmma::matrix_b,16,16,8,nvcuda::wmma::precision::tf32,nvcuda::wmma::row_major>
-        input_fragment;
-    nvcuda::wmma::fragment<nvcuda::wmma::accumulator,16,16,8,float> hidden_fragment;
-    nvcuda::wmma::load_matrix_sync(input_weight_fragment, weight_tile, 8);
-    nvcuda::wmma::load_matrix_sync(input_fragment, input_tile, tensorcore_batch_tile);
-    nvcuda::wmma::fill_fragment(hidden_fragment, 0.0f);
-    nvcuda::wmma::mma_sync(hidden_fragment, input_weight_fragment, input_fragment, hidden_fragment);
-    nvcuda::wmma::store_matrix_sync(
-        matrix_tile, hidden_fragment, tensorcore_batch_tile, nvcuda::wmma::mem_row_major);
-    __syncwarp();
-
-    for (int linear = lane; linear < matrix_tile_elements; linear += 32) {{
-      int const local_hidden = linear / tensorcore_batch_tile;
-      int const hidden_neuron = hidden_begin + local_hidden;
-      float hidden_value = matrix_tile[linear];
-      if (hidden_neuron < {hidden_size}) hidden_value += {producer_bias_value};
-      hidden_value = hidden_neuron < {hidden_size} ? {hidden_activation} : 0.0f;
-      matrix_tile[linear] = nvcuda::wmma::__float_to_tf32(hidden_value);
-    }}
-    __syncwarp();
-
-    for (int hidden_half = 0; hidden_half < 2; hidden_half++) {{
-      for (int linear = lane; linear < weight_tile_elements; linear += 32) {{
-        int const output_neuron = linear / 8;
-        int const local_hidden = hidden_half * 8 + linear % 8;
-        int const hidden_neuron = hidden_begin + local_hidden;
-        float const weight_value = output_neuron < {output_size} && hidden_neuron < {hidden_size}
-                                     ? weights[{consumer_weight_offset} + output_neuron * {hidden_size} + hidden_neuron]
-                                     : 0.0f;
-        weight_tile[linear] = nvcuda::wmma::__float_to_tf32(weight_value);
-      }}
-      __syncwarp();
-
-      nvcuda::wmma::fragment<
-          nvcuda::wmma::matrix_a,16,16,8,nvcuda::wmma::precision::tf32,nvcuda::wmma::row_major>
-          output_weight_fragment;
-      nvcuda::wmma::fragment<
-          nvcuda::wmma::matrix_b,16,16,8,nvcuda::wmma::precision::tf32,nvcuda::wmma::row_major>
-          hidden_input_fragment;
-      nvcuda::wmma::load_matrix_sync(output_weight_fragment, weight_tile, 8);
-      nvcuda::wmma::load_matrix_sync(
-          hidden_input_fragment,
-          matrix_tile + hidden_half * 8 * tensorcore_batch_tile,
-          tensorcore_batch_tile);
-      nvcuda::wmma::mma_sync(
-          output_fragment, output_weight_fragment, hidden_input_fragment, output_fragment);
-      __syncwarp();
-    }}
-  }}
-
-  float * output_tile = matrix_tile;
-  nvcuda::wmma::store_matrix_sync(
-      output_tile, output_fragment, tensorcore_batch_tile, nvcuda::wmma::mem_row_major);
-  __syncwarp();
-  for (int linear = lane; linear < {output_size} * tensorcore_batch_tile; linear += 32) {{
-    int const output_neuron = linear / tensorcore_batch_tile;
-    int const local_batch = linear % tensorcore_batch_tile;
-    int const ibatch = batch_begin + local_batch;
-    if (ibatch < batch_size) {{
-      output_tile[linear] += {consumer_bias_value};
-      outputs[output_neuron * batch_size + ibatch] = {output_value};
-    }}
-  }}
-}}
-#endif"""
-
-    def _emit_tensorcore_dense_triple(self, first: Node, second: Node, consumer: Node) -> str:
-        input_size = self._size(first.inputs[0])
-        first_size = self._size(first.outputs[0])
-        second_size = self._size(second.outputs[0])
-        output_size = self._size(consumer.outputs[0])
-        first_weight = int(first.attributes["weight"])
-        second_weight = int(second.attributes["weight"])
-        consumer_weight = int(consumer.attributes["weight"])
-
-        def bias_value(node: Node, index: str) -> str:
-            bias = node.attributes.get("bias")
-            return "0.0f" if bias is None else f"weights[{self.weight_offsets[int(bias)]} + {index}]"
-
-        first_bias = bias_value(first, "first_neuron")
-        second_bias = bias_value(second, "second_neuron")
-        consumer_bias = bias_value(consumer, "output_neuron")
-        first_activation = self._cuda_activation(
-            str(first.attributes["activation"]), "activation_value", first.attributes.get("activation_attributes", {})
-        )
-        second_activation = self._cuda_activation(
-            str(second.attributes["activation"]), "activation_value", second.attributes.get("activation_attributes", {})
-        )
-        output_value = "matrix_tile[output_neuron * tensorcore_batch_tile + local_batch]"
-        if consumer.op == "DenseBiasActivation":
-            output_value = self._cuda_activation(
-                str(consumer.attributes["activation"]), output_value,
-                consumer.attributes.get("activation_attributes", {}),
-            )
-        kernel_name = f"{self.model_name}_tensorcore_kernel"
-        return f"""#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOS_ARCH_AMPERE)
-static __global__ void {kernel_name}(float const * inputs, float * outputs,
-                                     float const * weights, int batch_size) {{
-  int constexpr tensorcore_batch_tile = 16;
-  int constexpr padded_inputs = {((input_size + 7) // 8) * 8};
-  int constexpr padded_first = {((first_size + 7) // 8) * 8};
-  int constexpr input_tile_elements = padded_inputs * tensorcore_batch_tile;
-  int constexpr first_tile_elements = padded_first * tensorcore_batch_tile;
-  int constexpr weight_tile_elements = 16 * 8;
-  int constexpr matrix_tile_elements = 16 * tensorcore_batch_tile;
-  int constexpr scratch_elements_per_warp =
-      input_tile_elements + first_tile_elements + weight_tile_elements + matrix_tile_elements;
-  int const lane = threadIdx.x & 31;
-  int const warp_in_block = threadIdx.x >> 5;
-  int const warps_per_block = blockDim.x >> 5;
-  int const batch_begin = (blockIdx.x * warps_per_block + warp_in_block) * tensorcore_batch_tile;
-  if (batch_begin >= batch_size) return;
-
-  extern __shared__ __align__(32) unsigned char dynamic_scratch[];
-  float * input_tile = reinterpret_cast<float *>(dynamic_scratch) + warp_in_block * scratch_elements_per_warp;
-  float * first_tile = input_tile + input_tile_elements;
-  float * weight_tile = first_tile + first_tile_elements;
-  float * matrix_tile = weight_tile + weight_tile_elements;
-
-  for (int linear = lane; linear < input_tile_elements; linear += 32) {{
-    int const input_feature = linear / tensorcore_batch_tile;
-    int const local_batch = linear % tensorcore_batch_tile;
-    int const ibatch = batch_begin + local_batch;
-    float const value = input_feature < {input_size} && ibatch < batch_size
-                            ? inputs[input_feature * batch_size + ibatch] : 0.0f;
-    input_tile[linear] = nvcuda::wmma::__float_to_tf32(value);
-  }}
-  __syncwarp();
-
-  for (int first_begin = 0; first_begin < {first_size}; first_begin += 16) {{
-    nvcuda::wmma::fragment<nvcuda::wmma::accumulator,16,16,8,float> first_fragment;
-    nvcuda::wmma::fill_fragment(first_fragment, 0.0f);
-    for (int input_begin = 0; input_begin < padded_inputs; input_begin += 8) {{
-      for (int linear = lane; linear < weight_tile_elements; linear += 32) {{
-        int const first_neuron = first_begin + linear / 8;
-        int const input_feature = input_begin + linear % 8;
-        float const value = first_neuron < {first_size} && input_feature < {input_size}
-                                ? weights[{self.weight_offsets[first_weight]} +
-                                          first_neuron * {input_size} + input_feature] : 0.0f;
-        weight_tile[linear] = nvcuda::wmma::__float_to_tf32(value);
-      }}
-      __syncwarp();
-      nvcuda::wmma::fragment<
-          nvcuda::wmma::matrix_a,16,16,8,nvcuda::wmma::precision::tf32,nvcuda::wmma::row_major>
-          weight_fragment;
-      nvcuda::wmma::fragment<
-          nvcuda::wmma::matrix_b,16,16,8,nvcuda::wmma::precision::tf32,nvcuda::wmma::row_major>
-          input_fragment;
-      nvcuda::wmma::load_matrix_sync(weight_fragment, weight_tile, 8);
-      nvcuda::wmma::load_matrix_sync(
-          input_fragment, input_tile + input_begin * tensorcore_batch_tile, tensorcore_batch_tile);
-      nvcuda::wmma::mma_sync(first_fragment, weight_fragment, input_fragment, first_fragment);
-      __syncwarp();
-    }}
-    nvcuda::wmma::store_matrix_sync(
-        matrix_tile, first_fragment, tensorcore_batch_tile, nvcuda::wmma::mem_row_major);
-    __syncwarp();
-    for (int linear = lane; linear < matrix_tile_elements; linear += 32) {{
-      int const first_neuron = first_begin + linear / tensorcore_batch_tile;
-      float activation_value = matrix_tile[linear];
-      if (first_neuron < {first_size}) activation_value += {first_bias};
-      activation_value = first_neuron < {first_size} ? {first_activation} : 0.0f;
-      if (first_neuron < padded_first) {{
-        first_tile[first_neuron * tensorcore_batch_tile + linear % tensorcore_batch_tile] =
-            nvcuda::wmma::__float_to_tf32(activation_value);
-      }}
-    }}
-    __syncwarp();
-  }}
-
-  nvcuda::wmma::fragment<nvcuda::wmma::accumulator,16,16,8,float> output_fragment;
-  nvcuda::wmma::fill_fragment(output_fragment, 0.0f);
-  for (int second_begin = 0; second_begin < {second_size}; second_begin += 16) {{
-    nvcuda::wmma::fragment<nvcuda::wmma::accumulator,16,16,8,float> second_fragment;
-    nvcuda::wmma::fill_fragment(second_fragment, 0.0f);
-    for (int first_begin = 0; first_begin < padded_first; first_begin += 8) {{
-      for (int linear = lane; linear < weight_tile_elements; linear += 32) {{
-        int const second_neuron = second_begin + linear / 8;
-        int const first_neuron = first_begin + linear % 8;
-        float const value = second_neuron < {second_size} && first_neuron < {first_size}
-                                ? weights[{self.weight_offsets[second_weight]} +
-                                          second_neuron * {first_size} + first_neuron] : 0.0f;
-        weight_tile[linear] = nvcuda::wmma::__float_to_tf32(value);
-      }}
-      __syncwarp();
-      nvcuda::wmma::fragment<
-          nvcuda::wmma::matrix_a,16,16,8,nvcuda::wmma::precision::tf32,nvcuda::wmma::row_major>
-          weight_fragment;
-      nvcuda::wmma::fragment<
-          nvcuda::wmma::matrix_b,16,16,8,nvcuda::wmma::precision::tf32,nvcuda::wmma::row_major>
-          first_fragment;
-      nvcuda::wmma::load_matrix_sync(weight_fragment, weight_tile, 8);
-      nvcuda::wmma::load_matrix_sync(
-          first_fragment, first_tile + first_begin * tensorcore_batch_tile, tensorcore_batch_tile);
-      nvcuda::wmma::mma_sync(second_fragment, weight_fragment, first_fragment, second_fragment);
-      __syncwarp();
-    }}
-    nvcuda::wmma::store_matrix_sync(
-        matrix_tile, second_fragment, tensorcore_batch_tile, nvcuda::wmma::mem_row_major);
-    __syncwarp();
-    for (int linear = lane; linear < matrix_tile_elements; linear += 32) {{
-      int const second_neuron = second_begin + linear / tensorcore_batch_tile;
-      float activation_value = matrix_tile[linear];
-      if (second_neuron < {second_size}) activation_value += {second_bias};
-      activation_value = second_neuron < {second_size} ? {second_activation} : 0.0f;
-      matrix_tile[linear] = nvcuda::wmma::__float_to_tf32(activation_value);
-    }}
-    __syncwarp();
-
-    for (int second_half = 0; second_half < 2; second_half++) {{
-      for (int linear = lane; linear < weight_tile_elements; linear += 32) {{
-        int const output_neuron = linear / 8;
-        int const second_neuron = second_begin + second_half * 8 + linear % 8;
-        float const value = output_neuron < {output_size} && second_neuron < {second_size}
-                                ? weights[{self.weight_offsets[consumer_weight]} +
-                                          output_neuron * {second_size} + second_neuron] : 0.0f;
-        weight_tile[linear] = nvcuda::wmma::__float_to_tf32(value);
-      }}
-      __syncwarp();
-      nvcuda::wmma::fragment<
-          nvcuda::wmma::matrix_a,16,16,8,nvcuda::wmma::precision::tf32,nvcuda::wmma::row_major>
-          weight_fragment;
-      nvcuda::wmma::fragment<
-          nvcuda::wmma::matrix_b,16,16,8,nvcuda::wmma::precision::tf32,nvcuda::wmma::row_major>
-          second_fragment;
-      nvcuda::wmma::load_matrix_sync(weight_fragment, weight_tile, 8);
-      nvcuda::wmma::load_matrix_sync(
-          second_fragment,
-          matrix_tile + second_half * 8 * tensorcore_batch_tile,
-          tensorcore_batch_tile);
-      nvcuda::wmma::mma_sync(output_fragment, weight_fragment, second_fragment, output_fragment);
-      __syncwarp();
-    }}
-  }}
-
-  nvcuda::wmma::store_matrix_sync(
-      matrix_tile, output_fragment, tensorcore_batch_tile, nvcuda::wmma::mem_row_major);
-  __syncwarp();
-  for (int linear = lane; linear < {output_size} * tensorcore_batch_tile; linear += 32) {{
-    int const output_neuron = linear / tensorcore_batch_tile;
-    int const local_batch = linear % tensorcore_batch_tile;
-    int const ibatch = batch_begin + local_batch;
-    if (ibatch < batch_size) {{
-      matrix_tile[linear] += {consumer_bias};
-      outputs[output_neuron * batch_size + ibatch] = {output_value};
-    }}
-  }}
-}}
-#endif"""
-
     def emit(self, output_path: Path, payload_elements: int, payload_scalar_code: int,
              streaming_output_threshold: int,
-             explicit_half2_accumulators: dict[int, int] | None = None) -> None:
+             explicit_half2_accumulators: dict[int, int] | None = None,
+             emit_half2_heuristic: bool = False) -> None:
         num_inputs = self._size(self.graph.inputs[0])
         num_outputs = self._size(self.graph.outputs[0])
         learned_tensors = [
@@ -1464,13 +1071,9 @@ static __global__ void {kernel_name}(float const * inputs, float * outputs,
         team_body: list[str] = []
         dense_nodes = [node for node in self.graph.nodes if node.op in {"Dense", "DenseBiasActivation"}]
         none_accumulators = {node.id: 0 for node in dense_nodes}
-        heuristic_accumulators = half2_accumulator_plan(
-            self.graph, streaming_output_threshold, self.schedule
-        )
-        half_policies = [
-            ("infer_batch_half2", none_accumulators),
-            ("infer_batch_half2_heuristic", heuristic_accumulators),
-        ]
+        half_policies = [("infer_batch_half2", none_accumulators)]
+        if emit_half2_heuristic:
+            half_policies.append(("infer_batch_half2_heuristic", half2_accumulator_plan(self.graph)))
         if explicit_half2_accumulators is not None:
             half_policies.append(("infer_batch_half2_explicit", explicit_half2_accumulators))
 
@@ -1557,7 +1160,7 @@ static __global__ void {kernel_name}(float const * inputs, float * outputs,
     ParameterView const parameters = parameters_;
     Kokkos::parallel_for(
         \"GeneratedModel::infer_batch\",
-        Kokkos::RangePolicy<execution_space>(0, batch_size),
+        Kokkos::RangePolicy<execution_space, Kokkos::LaunchBounds<MaxThreads, MinBlocks>>(0, batch_size),
         KOKKOS_LAMBDA(int linear) {{
           int const ibatch = linear % batch_size;
           int const iwork = linear / batch_size;
@@ -1576,7 +1179,7 @@ static __global__ void {kernel_name}(float const * inputs, float * outputs,
     int const pair_count = (batch_size + 1) / 2;
     Kokkos::parallel_for(
         \"GeneratedModel::{method_name}\",
-        Kokkos::RangePolicy<execution_space>(0, pair_count),
+        Kokkos::RangePolicy<execution_space, Kokkos::LaunchBounds<MaxThreads, MinBlocks>>(0, pair_count),
         KOKKOS_LAMBDA(int ipair) {{
           int const ibatch = 2 * ipair;
           bool const has_high_lane = ibatch + 1 < batch_size;
@@ -1597,7 +1200,8 @@ static __global__ void {kernel_name}(float const * inputs, float * outputs,
         half_launches = {method_name: make_half_launch(method_name) for method_name, _ in half_policies}
 
         def make_half_method(method_name: str) -> str:
-            return f"""  void {method_name}(InputView const & inputs, OutputView const & outputs) const {{
+            return f"""  template <unsigned MaxThreads = 0, unsigned MinBlocks = 0>
+  void {method_name}(InputView const & inputs, OutputView const & outputs) const {{
 #if defined(KOKKOS_ENABLE_DEBUG)
     if (!weights_loaded()) Kokkos::abort(\"GeneratedModel::{method_name} called before load_weights\");
     if (inputs.extent(0) != num_inputs) Kokkos::abort(\"GeneratedModel input feature extent is incorrect\");
@@ -1610,67 +1214,6 @@ static __global__ void {kernel_name}(float const * inputs, float * outputs,
   }}"""
 
         half_methods = "\n\n".join(make_half_method(method_name) for method_name, _ in half_policies)
-        tensorcore_chain = find_tensorcore_dense_chain(self.graph)
-        tensorcore_scratch_bytes = estimate_tensorcore_scratch_bytes(self.graph, tensorcore_chain)
-        tensorcore_eligible = (
-            tensorcore_chain is not None and payload_scalar_code == 1 and num_outputs <= 16 and
-            (len(tensorcore_chain) == 3 or num_inputs <= 8) and tensorcore_scratch_bytes <= 49152
-        )
-        tensorcore_hidden_size = self._size(tensorcore_chain[-2].outputs[0]) if tensorcore_chain is not None else 0
-        if tensorcore_chain is not None and len(tensorcore_chain) == 3:
-            maximum_tensorcore_warps = 1
-            while (maximum_tensorcore_warps * 2 <= 8 and
-                   maximum_tensorcore_warps * 2 * tensorcore_scratch_bytes <= 49152):
-                maximum_tensorcore_warps *= 2
-            if tensorcore_hidden_size <= 4:
-                measured_tensorcore_warps = 4
-            elif tensorcore_hidden_size <= 16:
-                measured_tensorcore_warps = 2
-            elif tensorcore_hidden_size <= 32:
-                measured_tensorcore_warps = 4
-            elif tensorcore_hidden_size <= 64:
-                measured_tensorcore_warps = 2
-            else:
-                measured_tensorcore_warps = 1
-            default_tensorcore_warps = min(maximum_tensorcore_warps, measured_tensorcore_warps)
-        else:
-            maximum_tensorcore_warps = 8
-            default_tensorcore_warps = 4 if tensorcore_hidden_size <= 16 else (2 if tensorcore_hidden_size <= 256 else 1)
-        if not tensorcore_eligible:
-            tensorcore_kernel = ""
-        elif len(tensorcore_chain) == 2:
-            tensorcore_kernel = self._emit_tensorcore_dense_pair(*tensorcore_chain)
-        else:
-            tensorcore_kernel = self._emit_tensorcore_dense_triple(*tensorcore_chain)
-        tensorcore_body = f"""#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOS_ARCH_AMPERE)
-    static_assert(std::is_same_v<Scalar,float>, "Tensor Core inference requires Scalar=float");
-    int const batch_size = checked_batch_size(inputs);
-    if (batch_size == 0) return;
-    if (warps_per_block < 1 || warps_per_block > maximum_tensorcore_warps_per_block) {{
-      Kokkos::abort("GeneratedModel Tensor Core warps_per_block must be between 1 and 8");
-    }}
-    int const batch_tiles = (batch_size + tensorcore_batch_tile - 1) / tensorcore_batch_tile;
-    int const block_count = (batch_tiles + warps_per_block - 1) / warps_per_block;
-    int const thread_count = warps_per_block * 32;
-    std::size_t const scratch_bytes = static_cast<std::size_t>(warps_per_block) *
-                                      tensorcore_scratch_bytes_per_warp;
-    Kokkos::Cuda const execution;
-    {self.model_name}_tensorcore_kernel<<<block_count,thread_count,scratch_bytes,execution.cuda_stream()>>>(
-        inputs.data(), outputs.data(), parameters_.data(), batch_size);
-#if defined(KOKKOS_ENABLE_DEBUG)
-    cudaError_t const launch_error = cudaGetLastError();
-    if (launch_error != cudaSuccess) Kokkos::abort(cudaGetErrorString(launch_error));
-#endif
-#else
-    (void) inputs;
-    (void) outputs;
-    (void) warps_per_block;
-    Kokkos::abort("GeneratedModel Tensor Core inference requires CUDA Ampere or newer");
-#endif""" if tensorcore_eligible else (
-            "    (void) inputs;\n    (void) outputs;\n    (void) warps_per_block;\n"
-            "    Kokkos::abort(\"GeneratedModel graph is not eligible for Tensor Core inference\");"
-        )
-
         text = f"""#pragma once
 // Generated deterministically by PONNI kokkos_nn. Do not edit.
 
@@ -1684,14 +1227,7 @@ static __global__ void {kernel_name}(float const * inputs, float * outputs,
 #include <type_traits>
 #include <vector>
 
-#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOS_ARCH_AMPERE)
-#include <cuda_runtime.h>
-#include <mma.h>
-#endif
-
 namespace ponni::generated {{
-
-{tensorcore_kernel}
 
 template <class Scalar = float>
 class {self.model_name} {{
@@ -1704,11 +1240,6 @@ public:
   int static constexpr sample_local_workspace_elements = {local_workspace_elements};
   int static constexpr default_hierarchical_batch_tile = {self.default_batch_tile};
   int static constexpr maximum_hierarchical_batch_tile = {self.maximum_batch_tile};
-  int static constexpr tensorcore_batch_tile = 16;
-  int static constexpr default_tensorcore_warps_per_block = {default_tensorcore_warps};
-  int static constexpr maximum_tensorcore_warps_per_block = {maximum_tensorcore_warps};
-  int static constexpr tensorcore_scratch_bytes_per_warp = {tensorcore_scratch_bytes};
-  bool static constexpr tensorcore_eligible = {str(tensorcore_eligible).lower()};
   int static constexpr storage_parameter_elements = {payload_elements};
   int static constexpr learned_parameter_elements = {learned_offset};
   int static constexpr stored_scalar_code = {payload_scalar_code};
@@ -2024,6 +1555,7 @@ public:
 {inline_workspace_declaration}{body_text}
   }}
 
+  template <unsigned MaxThreads = 0, unsigned MinBlocks = 0>
   void infer_batch(InputView const & inputs, OutputView const & outputs) const {{
 #if defined(KOKKOS_ENABLE_DEBUG)
     if (!weights_loaded()) Kokkos::abort(\"GeneratedModel::infer_batch called before load_weights\");
@@ -2037,6 +1569,7 @@ public:
 
 {half_methods}
 
+  template <unsigned MaxThreads = 0, unsigned MinBlocks = 0>
   void infer_batch_hierarchical(InputView const & inputs, OutputView const & outputs,
                                 int batch_tile = default_hierarchical_batch_tile) const {{
 #if defined(KOKKOS_ENABLE_DEBUG)
@@ -2050,7 +1583,8 @@ public:
     }}
     int const batch_size = checked_batch_size(inputs);
     if (batch_size == 0) return;
-    using policy_type = Kokkos::TeamPolicy<execution_space>;
+    using policy_type = Kokkos::TeamPolicy<
+        execution_space, Kokkos::LaunchBounds<MaxThreads, MinBlocks>>;
     using member_type = typename policy_type::member_type;
     int const league_size = (batch_size + batch_tile - 1) / batch_tile;
     int const scratch_bytes = workspace_elements * batch_tile * static_cast<int>(sizeof(Scalar));
@@ -2070,18 +1604,6 @@ public:
 {team_body_text}
         }});
   }}
-
-  void infer_batch_tensorcore(
-      InputView const & inputs, OutputView const & outputs,
-      int warps_per_block = default_tensorcore_warps_per_block) const {{
-#if defined(KOKKOS_ENABLE_DEBUG)
-    if (!weights_loaded()) Kokkos::abort("GeneratedModel::infer_batch_tensorcore called before load_weights");
-    if (inputs.extent(0) != num_inputs) Kokkos::abort("GeneratedModel input feature extent is incorrect");
-    if (outputs.extent(0) != num_outputs) Kokkos::abort("GeneratedModel output feature extent is incorrect");
-    if (inputs.extent(1) != outputs.extent(1)) Kokkos::abort("GeneratedModel batch extents differ");
-#endif
-{tensorcore_body}
-  }}
 }};
 
 }}  // namespace ponni::generated
@@ -2093,13 +1615,241 @@ def emit_cpp(graph: Graph, plan: StoragePlan, sample_plan: StoragePlan, schedule
              offsets: dict[int, int], output_dir: Path, model_name: str,
              strategy: str, payload_elements: int, payload_scalar_code: int,
              default_batch_tile: int, maximum_batch_tile: int, streaming_output_threshold: int,
-             explicit_half2_accumulators: dict[int, int] | None = None) -> Path:
+             explicit_half2_accumulators: dict[int, int] | None = None,
+             emit_half2_heuristic: bool = False) -> Path:
     output_path = output_dir / f"{model_name}.hpp"
     CppEmitter(
         graph, plan, sample_plan, schedule, offsets, model_name, strategy,
         default_batch_tile, maximum_batch_tile
     ).emit(
         output_path, payload_elements, payload_scalar_code, streaming_output_threshold,
-        explicit_half2_accumulators
+        explicit_half2_accumulators, emit_half2_heuristic
     )
+    return output_path
+
+
+def emit_autotuner(output_dir: Path, model_name: str, payload_scalar_code: int,
+                   maximum_batch_tile: int, has_explicit_half2: bool) -> Path:
+    """Emit a standalone launch-bounds and hierarchical-tile throughput tuner."""
+    identifier = _identifier(model_name)
+    output_path = output_dir / f"{identifier}_autotune.cpp"
+    scalar = "float" if payload_scalar_code == 1 else "double"
+    launch_bounds = [(0, 0)] + [
+        (maximum_threads, minimum_blocks)
+        for maximum_threads in (64, 128, 256, 512, 1024)
+        for minimum_blocks in (1, 2, 3, 4)
+        if maximum_threads * minimum_blocks <= 1024
+    ]
+    batch_tiles: list[int] = []
+    tile = 1
+    while tile <= maximum_batch_tile:
+        batch_tiles.append(tile)
+        tile *= 2
+
+    wrappers = """
+template <unsigned MaxThreads, unsigned MinBlocks>
+void run_batch(Model const & model, InputView const & inputs, OutputView const & outputs, int) {
+  model.template infer_batch<MaxThreads, MinBlocks>(inputs, outputs);
+}
+
+template <unsigned MaxThreads, unsigned MinBlocks>
+void run_half2(Model const & model, InputView const & inputs, OutputView const & outputs, int) {
+  model.template infer_batch_half2<MaxThreads, MinBlocks>(inputs, outputs);
+}
+
+template <unsigned MaxThreads, unsigned MinBlocks>
+void run_hierarchical(Model const & model, InputView const & inputs, OutputView const & outputs, int batch_tile) {
+  model.template infer_batch_hierarchical<MaxThreads, MinBlocks>(inputs, outputs, batch_tile);
+}
+"""
+    if has_explicit_half2:
+        wrappers += """
+template <unsigned MaxThreads, unsigned MinBlocks>
+void run_half2_explicit(Model const & model, InputView const & inputs, OutputView const & outputs, int) {
+  model.template infer_batch_half2_explicit<MaxThreads, MinBlocks>(inputs, outputs);
+}
+"""
+
+    candidates: list[str] = []
+    for maximum_threads, minimum_blocks in launch_bounds:
+        candidates.append(
+            f'    {{"infer_batch", {maximum_threads}, {minimum_blocks}, 0, '
+            f'&run_batch<{maximum_threads}, {minimum_blocks}>}},'
+        )
+    for maximum_threads, minimum_blocks in launch_bounds:
+        candidates.append(
+            f'    {{"infer_batch_half2", {maximum_threads}, {minimum_blocks}, 0, '
+            f'&run_half2<{maximum_threads}, {minimum_blocks}>}},'
+        )
+    if has_explicit_half2:
+        for maximum_threads, minimum_blocks in launch_bounds:
+            candidates.append(
+                f'    {{"infer_batch_half2_explicit", {maximum_threads}, {minimum_blocks}, 0, '
+                f'&run_half2_explicit<{maximum_threads}, {minimum_blocks}>}},'
+            )
+    for maximum_threads, minimum_blocks in launch_bounds:
+        for batch_tile in batch_tiles:
+            candidates.append(
+                f'    {{"infer_batch_hierarchical", {maximum_threads}, {minimum_blocks}, {batch_tile}, '
+                f'&run_hierarchical<{maximum_threads}, {minimum_blocks}>}},'
+            )
+    candidate_text = "\n".join(candidates)
+
+    text = f"""// Generated deterministically by PONNI kokkos_nn. Edit candidate lists and run counts as desired.
+#include \"{identifier}.hpp\"
+
+#include <algorithm>
+#include <chrono>
+#include <iomanip>
+#include <iostream>
+#include <limits>
+#include <map>
+#include <random>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace {{
+
+using Model = ponni::generated::{identifier}<{scalar}>;
+using InputView = typename Model::InputView;
+using OutputView = typename Model::OutputView;
+using Runner = void (*)(Model const &, InputView const &, OutputView const &, int);
+
+int constexpr default_batch_size = 1000000;
+int constexpr warmup_runs = 3;
+int constexpr timed_runs = 9;
+
+struct Candidate {{
+  char const * family;
+  unsigned max_threads;
+  unsigned min_blocks;
+  int tile;
+  Runner run;
+}};
+
+struct Result {{
+  Candidate const * candidate;
+  double median_ms;
+}};
+
+{wrappers}
+
+std::vector<Candidate> candidates() {{
+  return {{
+{candidate_text}
+  }};
+}}
+
+double time_candidate(Candidate const & candidate, Model const & model,
+                      InputView const & inputs, OutputView const & outputs) {{
+  for (int run = 0; run < warmup_runs; run++) candidate.run(model, inputs, outputs, candidate.tile);
+  Kokkos::fence();
+
+  std::vector<double> samples;
+  samples.reserve(timed_runs);
+  for (int run = 0; run < timed_runs; run++) {{
+    auto const begin = std::chrono::steady_clock::now();
+    candidate.run(model, inputs, outputs, candidate.tile);
+    Kokkos::fence();
+    auto const end = std::chrono::steady_clock::now();
+    samples.push_back(std::chrono::duration<double, std::milli>(end - begin).count());
+  }}
+  std::sort(samples.begin(), samples.end());
+  return samples[samples.size() / 2];
+}}
+
+void print_header() {{
+  std::cout << std::left << std::setw(32) << "family"
+            << std::right << std::setw(14) << "max_threads"
+            << std::setw(13) << "min_blocks"
+            << std::setw(8) << "tile"
+            << std::setw(16) << "median_ms" << '\\n';
+}}
+
+void print_result(Result const & result) {{
+  Candidate const & candidate = *result.candidate;
+  std::cout << std::left << std::setw(32) << candidate.family
+            << std::right << std::setw(14) << candidate.max_threads
+            << std::setw(13) << candidate.min_blocks
+            << std::setw(8) << candidate.tile
+            << std::setw(16) << std::fixed << std::setprecision(6) << result.median_ms << '\\n';
+}}
+
+int parse_batch_size(int argc, char ** argv) {{
+  if (argc < 2) return default_batch_size;
+  long long const requested = std::stoll(argv[1]);
+  if (requested < 1 || requested > std::numeric_limits<int>::max()) {{
+    throw std::runtime_error("batch size must be in [1, INT_MAX]");
+  }}
+  return static_cast<int>(requested);
+}}
+
+}}  // namespace
+
+int main(int argc, char ** argv) {{
+  Kokkos::initialize(argc, argv);
+  int status = 0;
+  bool pool_initialized = false;
+  {{
+    try {{
+      int const batch_size = parse_batch_size(argc, argv);
+      std::string const weight_path = argc >= 3 ? argv[2] : "weights.bin";
+      std::size_t const io_elements =
+          static_cast<std::size_t>(Model::num_inputs + Model::num_outputs) * batch_size;
+      std::size_t const parameter_bytes =
+          static_cast<std::size_t>(Model::storage_parameter_elements) *
+          (sizeof(typename Model::scalar_type) + sizeof(typename Model::HalfParameterView::non_const_value_type));
+      std::size_t constexpr pool_margin_bytes = 1024 * 1024;
+      ponni::init_device_pool(
+          io_elements * sizeof(typename Model::scalar_type) + parameter_bytes + pool_margin_bytes);
+      pool_initialized = true;
+      Model model;
+      std::string error;
+      if (!model.load_weights(weight_path, &error)) {{
+        throw std::runtime_error("failed to load " + weight_path + ": " + error);
+      }}
+
+      InputView inputs("autotune_inputs", Model::num_inputs, batch_size);
+      OutputView outputs("autotune_outputs", Model::num_outputs, batch_size);
+      auto host_inputs = Kokkos::create_mirror_view(inputs);
+      std::mt19937 generator(20260803);
+      std::uniform_real_distribution<{scalar}> distribution(static_cast<{scalar}>(-1), static_cast<{scalar}>(1));
+      for (int i = 0; i < Model::num_inputs; i++) {{
+        for (int ibatch = 0; ibatch < batch_size; ibatch++) host_inputs(i, ibatch) = distribution(generator);
+      }}
+      Kokkos::deep_copy(inputs, host_inputs);
+
+      std::vector<Candidate> const configurations = candidates();
+      std::vector<Result> results;
+      results.reserve(configurations.size());
+      for (Candidate const & candidate : configurations) {{
+        results.push_back(Result{{&candidate, time_candidate(candidate, model, inputs, outputs)}});
+      }}
+
+      std::cout << "All results (batch_size=" << batch_size << ", timed_runs=" << timed_runs << ")\\n";
+      print_header();
+      for (Result const & result : results) print_result(result);
+
+      std::map<std::string, Result const *> best;
+      for (Result const & result : results) {{
+        std::string const family(result.candidate->family);
+        auto const found = best.find(family);
+        if (found == best.end() || result.median_ms < found->second->median_ms) best[family] = &result;
+      }}
+
+      std::cout << "\\nBest result for each family\\n";
+      print_header();
+      for (auto const & entry : best) print_result(*entry.second);
+    }} catch (std::exception const & exception) {{
+      std::cerr << "autotuner: " << exception.what() << '\\n';
+      status = 1;
+    }}
+  }}
+  if (pool_initialized) ponni::finalize_device_pool();
+  Kokkos::finalize();
+  return status;
+}}
+"""
+    output_path.write_text(text)
     return output_path

@@ -7,17 +7,17 @@ Measured 2026-08-02 on `thatchroof` with `machines/thatchroof/thatchroof_gpu_fas
 the first two dense layers. Every region was warmed and fenced. The full benchmark covers `I = 4, 8, 16, 32, 64,
 128`; batches 10,000, 100,000, and 1,000,000; and hierarchical batch tiles 1, 2, 4, 8, 16, and 32.
 
-At batch 1,000,000, the five generated families are shown below; the hierarchical family is reported both at tile 1
+At batch 1,000,000, the four generated families are shown below; the hierarchical family is reported both at tile 1
 and at its best measured tile:
 
 ```text
-width  SArray ms  View batch ms  hierarchical tile 1 ms  hierarchical best ms (tile)  raw CUDA WMMA best ms (warps)  half2 ms
-4       0.04445     0.04558          1.66739                 0.08363 (32)                 0.14275 (4)              0.04526
-8       0.11099     0.11226          1.84401                 0.20709 (32)                 0.15421 (4)              0.08560
-16      0.36973     0.36868          3.72621                 0.70729 (16)                 0.30558 (2)              0.24138
-32      1.36044     1.36904         20.43290                 2.67258 (32)                 1.06182 (4)              0.72283
-64      5.01728     5.03499         75.20280                10.00230 (32)                 3.06994 (2)              2.65347
-128    31.64890    33.24880        287.77700                38.20510 (32)                16.41240 (1)             12.86840
+width  SArray ms  View batch ms  hierarchical tile 1 ms  hierarchical best ms (tile)  half2 ms
+4       0.04445     0.04558          1.66739                 0.08363 (32)              0.04526
+8       0.11099     0.11226          1.84401                 0.20709 (32)              0.08560
+16      0.36973     0.36868          3.72621                 0.70729 (16)              0.24138
+32      1.36044     1.36904         20.43290                 2.67258 (32)              0.72283
+64      5.01728     5.03499         75.20280                10.00230 (32)              2.65347
+128    31.64890    33.24880        287.77700                38.20510 (32)             12.86840
 ```
 
 Tile 32 is the robust hierarchical choice. Tiling substantially reduces team-per-sample overhead, but both
@@ -33,20 +33,11 @@ SArray uses 167 registers and 512 stack bytes per thread, while View-batch uses 
 All comparisons had zero maximum absolute difference between the portable paths. `Kokkos::RandomAccess` remains disabled:
 these small, regular dense traversals provide no measured reason to add it.
 
-The fourth generated API, `infer_batch_tensorcore`, launches a raw CUDA WMMA TF32 kernel with a fixed 16-sample batch
-tile and no Kokkos `TeamPolicy`. It accumulates in FP32, caches the input and first hidden activation in aligned
-dynamic shared memory, and streams second-layer tiles into the final output fragment. Shared memory ranges from 2,560
-bytes per warp at I=4/8 to 17,920 bytes at I=128. Sweeping every legal choice among 1, 2, 4, and 8 warps per block
-selected 4, 2, 2, 4, 2, and 1 warps for I=4 through 128 at one million samples. The emitted defaults use those
-large-batch choices. Tensor Core becomes fastest at I=16 in this run and reaches a 1.94x speedup
-over SArray at I=128. Maximum absolute differences ranged from `1.79e-5` to `1.63e-3`; portable paths matched exactly.
-For these reasons, the Tensor Core target is explicit-only and `auto` never selects its approximate TF32 semantics.
-
-The fifth generated API, `infer_batch_half2`, uses a Kokkos `RangePolicy` over adjacent sample pairs and persistent
+The fourth generated API, `infer_batch_half2`, uses a Kokkos `RangePolicy` over adjacent sample pairs and persistent
 scalar-FP16 weights. CUDA device assembly contains 947 `HFMA2` instructions across the six generated model
 instantiations, confirming that packed arithmetic was emitted rather than scalarized. It is approximately neutral at
-I=4, then beats the FP32 SArray/View paths from I=8 onward; at I=128 it is 2.46x faster than SArray and 1.28x faster
-than the WMMA target in this benchmark. Maximum absolute difference from the FP32 View result grows from `1.19e-4`
+I=4, then beats the FP32 SArray/View paths from I=8 onward; at I=128 it is 2.46x faster than SArray. Maximum absolute
+difference from the FP32 View result grows from `1.19e-4`
 at I=4 to `1.10e-2` at I=128 because products, weights, intermediates, and accumulation are FP16. It is therefore
 explicit-only and `auto` does not select it.
 

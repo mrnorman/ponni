@@ -122,7 +122,7 @@ ONNX Runtime and passes all three through the same importer, fusion, storage-pla
 functionality models
 use batches 1, 2, 3, 7, and 11; the original examples retain batches 1, 2, 7, 32, and 67. Export compares PyTorch and
 ONNX Runtime and writes reproducible references. C++ integration checks SArray, direct View batch, hierarchical tile
-1 and default tile, packed half2, and Tensor Core inference whenever the graph is eligible.
+1 and default tile, and packed half2 inference.
 
 Focused framework tests target exporter representation differences rather than reproducing every PyTorch topology.
 They cover Keras Functional branching, no-bias dense layers, feature concatenation, residual activation, and
@@ -227,40 +227,36 @@ differs from scalar streaming.
 
 ## Generated APIs and scheduling
 
-Every generated class exposes five inference families. The half2 family always includes baseline and heuristic APIs;
-an explicit API is added when `--half2-accumulators` is supplied:
+Every generated class exposes four inference families. The half2 family exposes its baseline API; an explicit API is
+added when `--half2-accumulators` is supplied:
 
 | # | Family | Generated API | Arithmetic and launch | Intended use |
 |---|---|---|---|---|
 | 1 | Inline SArray | `infer_one` | Full-precision `Scalar`; no internal launch | Embed one inference inside an existing Kokkos device kernel |
 | 2 | View batch | `infer_batch` | Full-precision `Scalar`; one `RangePolicy` iteration per sample | Small MLPs and abundant batch parallelism |
 | 3 | Hierarchical | `infer_batch_hierarchical` | Full-precision `Scalar`; `TeamPolicy`, neuron/batch work, planned team scratch | Graphs where neuron parallelism can offset team overhead |
-| 4 | Raw CUDA Tensor Core | `infer_batch_tensorcore` | TF32 WMMA inputs/products with FP32 accumulation; raw CUDA launch | Eligible two-/three-dense chains on NVIDIA Ampere or newer |
-| 5 | Packed two-sample half | `infer_batch_half2*` | FP16 weights/products/partials in two adjacent batch lanes; Kokkos `RangePolicy` | CUDA/HIP throughput when approximate FP16 semantics are acceptable |
+| 4 | Packed two-sample half | `infer_batch_half2*` | FP16 weights/products/partials in two adjacent batch lanes; Kokkos `RangePolicy` | CUDA/HIP throughput when approximate FP16 semantics are acceptable |
 
-The first three are the full-precision portable choices. The Tensor Core and half2 families deliberately change
-floating-point semantics and are never selected by `auto`. All five API families are present in every generated
-class, but an ineligible Tensor Core method aborts with a diagnostic if called. `--strategy` records or enforces the
-recommended batched family; it does not remove the other generated APIs.
+The first three are the full-precision portable choices. The half2 family deliberately changes floating-point
+semantics and is never selected by `auto`. `--strategy` records or enforces the recommended batched family; it does
+not remove the other generated APIs.
 
 ```cpp
 using InputView = Kokkos::View<Scalar**,Kokkos::LayoutRight,ponni::DeviceSpace>;
 using OutputView = Kokkos::View<Scalar**,Kokkos::LayoutRight,ponni::DeviceSpace>;
 
+template <unsigned MaxThreads = 0, unsigned MinBlocks = 0>
 void infer_batch(InputView const & inputs, OutputView const & outputs) const;
 
-void infer_batch_hierarchical(InputView const & inputs,
-                              OutputView const & outputs,
+template <unsigned MaxThreads = 0, unsigned MinBlocks = 0>
+void infer_batch_hierarchical(InputView const & inputs, OutputView const & outputs,
                               int batch_tile = default_hierarchical_batch_tile) const;
 
-void infer_batch_tensorcore(InputView const & inputs,
-                            OutputView const & outputs,
-                            int warps_per_block = default_tensorcore_warps_per_block) const;
-
+template <unsigned MaxThreads = 0, unsigned MinBlocks = 0>
 void infer_batch_half2(InputView const & inputs, OutputView const & outputs) const;
-void infer_batch_half2_heuristic(InputView const & inputs, OutputView const & outputs) const;
 
 // Emitted only when requested at compile time.
+template <unsigned MaxThreads = 0, unsigned MinBlocks = 0>
 void infer_batch_half2_explicit(InputView const & inputs, OutputView const & outputs) const;
 
 KOKKOS_INLINE_FUNCTION
@@ -284,42 +280,33 @@ neuron-by-sample product with `TeamThreadRange`. Its flattened mapping is
 `linear = neuron * active_batch + local_batch`, so batch remains fastest. Compiler-planned live activations use the
 same batch-fastest layout in per-team scratch, with an explicit barrier between dependent graph operations. Each dense
 neuron/sample pair has its own scalar accumulator and serial input reduction, so arithmetic order matches the other
-targets. The optional tile argument permits device-specific measurement without creating another generated target;
-the emitted default is 32 for the measured `I = 4` through `128` suite, capped by
+targets. The runtime tile parameter permits device-specific measurement without producing another kernel
+specialization; the emitted default is 32 for the measured `I = 4` through `128` suite, capped by
 `--max-team-scratch-bytes` (48 KiB by default).
-The kernel captures only views and scalars—never `this` or host-only state.
+Every call checks the tile against the generated maximum before launching. The kernel captures only views and
+scalars—never `this` or host-only state.
 
-The `--strategy` option records the recommended batched target; all five targets are generated. `auto`
+The `MaxThreads` and `MinBlocks` template parameters on every launched API map directly to
+`Kokkos::LaunchBounds`. Their `0, 0` defaults preserve Kokkos's portable default behavior. Hierarchical batch tile
+remains a runtime argument, so changing it does not instantiate another kernel.
+
+The `--strategy` option records the recommended batched target; all four targets are generated. `auto`
 prefers sample-local execution when the dense-chain scheduler selects streaming or bounded recomputation. Otherwise it recommends hierarchical execution
 when an operation has at least `--team-output-threshold` output neurons (64 by default). The emitted weight view does
 not currently use `Kokkos::RandomAccess`: short, regular,
 output-major dense traversal has not demonstrated a benefit that justifies enabling it.
 
-`infer_batch_tensorcore` is an explicitly selected, non-portable CUDA/Ampere target for eligible float32 two- or
-three-dense streaming graphs. It launches a generated raw CUDA kernel on Kokkos's current CUDA stream, with no
-`TeamPolicy` or other Kokkos execution-policy machinery. Each warp handles 16 adjacent batch samples and issues
-`nvcuda::wmma` TF32 matrix-multiply-accumulate instructions. The two-dense form uses 2,048 bytes of aligned dynamic
-shared memory per warp and supports at most eight inputs. The three-dense form caches the input tile and first hidden
-layer in width-dependent shared memory, then streams the second hidden layer directly into the final output fragment;
-it does not allocate a global intermediate. Outputs are limited to sixteen and dimensions are zero-padded to WMMA
-tile boundaries. A three-dense chain is rejected if one warp's generated dynamic shared-memory tile exceeds 48 KiB.
-The optional launch parameter permits measurement of every legal choice from one through eight
-warps per block. For the measured `I -> I -> I -> 3` suite, defaults are four warps at I=4, two at I=8 and 16,
-four at I=32, two at I=64, and one at I=128, subject to the 48 KiB shared-memory limit.
-FP32 accumulation does not restore the mantissa bits discarded by TF32 inputs, so this target has explicit approximate
-semantics and `auto` never selects it. Request it with `--strategy tensorcore`; unsupported graphs fail during
-compilation with an actionable diagnostic.
-
-The half2 family is the fifth, Kokkos-launched target. A `RangePolicy` iteration processes two adjacent batch
+The half2 family is the fourth, Kokkos-launched target. A `RangePolicy` iteration processes two adjacent batch
 samples as the lanes of `ponni::TwoHalf`; CUDA maps this type to `__half2`, HIP maps it to the corresponding
 `__half2`, and other Kokkos backends use a correctness-oriented two-lane fallback. Inputs and outputs retain the
 generated float/double View API. `load_weights()` creates one additional
 persistent scalar-FP16 weight View, and each weight is splatted into both batch lanes in the dense loop—weights are
 not duplicated as half2 values. Dense operations use packed FP16 multiply-add with FP16 accumulation, while
 activations unpack to float for the Kokkos math function and repack afterward. `infer_batch_half2` uses one dependent
-accumulation chain; this policy is reported as accumulator count 0. `infer_batch_half2_heuristic` selects a count
-independently for every dense dot product: 0 below length 2, 2 through length 24, 4 through length 80, and 16 above
-length 80. A nonzero count creates that many independent FP16 FMA chains. Their low and high lanes, plus the bias,
+accumulation chain; this policy is reported as accumulator count 0. The generator retains a power-user heuristic that
+selects a count independently for every dense dot product: 0 below length 2, 2 through length 24, 4 through length
+80, and 16 above length 80, but it no longer emits a public heuristic method. A nonzero count creates that many
+independent FP16 FMA chains. Their low and high lanes, plus the bias,
 are converted to FP32 scalars and summed at the neuron boundary before repacking to FP16. This reduces dependency
 length and usually reduces accumulation error, but does not make the dot product fully FP32. These thresholds come
 from the documented Ampere `I -> I -> I -> 3` measurements and
@@ -331,10 +318,35 @@ its register demand to wider outputs.
 `infer_batch_half2_explicit` with four partials for every canonical dense node.
 A comma-separated list such as `--half2-accumulators 2,16,4` assigns counts in the dense order printed in the
 optimization report. Supported explicit values are 0, 2, 4, 8, 16, and 32. No policy branch occurs during inference;
-each API contains its selected straight-line reductions. `--strategy half2` recommends the heuristic API, while
+each API contains its selected straight-line reductions. `--strategy half2` recommends the baseline API, while
 `auto` does not select approximate half2 semantics. All half2 APIs perform no inference-time allocation and handle
 odd batch sizes. The one-sample `infer_one` contract cannot use two independent batch lanes, so a useful
 SArray packed variant would require a separate two-sample API rather than changing `infer_one`.
+
+## Generated launch autotuner
+
+Compilation also emits `<Model>_autotune.cpp`. This standalone program instantiates a broad set of launch-bound
+combinations for each launched inference family and combines them with every generated power-of-two hierarchical
+batch tile. It fills deterministic random input data, performs three warmup runs, records nine fenced runs per
+configuration, and uses the median. The warmup and timed-run constants are intentionally near the top of the source
+so users can edit them easily.
+
+The first command-line argument selects batch size and defaults to `1000000`; the optional second argument selects the
+weight file and defaults to `weights.bin`:
+
+```bash
+./MlpModel_autotune
+./MlpModel_autotune 250000 /path/to/weights.bin
+```
+
+The program first prints every `(family, max_threads, min_blocks, tile, median_ms)` result, then prints the fastest
+median for each family. A tile of zero denotes a non-hierarchical family. This keeps device-specific choices outside
+the generator and gives users reproducible launch bounds for the inference template arguments and a runtime
+hierarchical tile value.
+
+The generator CTest suite runs the MLP autotuner with batch size 100 as a smoke test, covering pool initialization,
+weight loading, every emitted configuration, result collection, and clean pool finalization without making routine
+test runs pay the default million-sample tuning cost.
 
 ## Weight format and loading
 
@@ -387,11 +399,11 @@ View kernel stages input once, creates no View intermediates, and never material
 
 `generator_benchmark` reports one-time weight loading, warm portable batched targets, and an embedded `infer_one` kernel.
 `generator_gpu_scale` provides the GPU-only, large-batch, single-precision comparison used for scheduling decisions.
-It sweeps `I -> I -> I -> 3` networks for `I = 4, 8, 16, 32, 64, 128`; batch sizes 10,000, 100,000, and 1,000,000; team batch tiles 1 through 32; and
-raw-CUDA Tensor Core launch sizes of 1, 2, 4, and 8 warps per block.
+It sweeps `I -> I -> I -> 3` networks for `I = 4, 8, 16, 32, 64, 128`; batch sizes 10,000, 100,000, and 1,000,000;
+and team batch tiles 1 through 32.
 Summary rows compare embedded SArray, direct View batch, hierarchical tile 1, the best legal hierarchical tile, the
-best raw-CUDA Tensor Core launch, and packed half2, including approximate targets' maximum absolute differences from
-the FP32 View result.
+packed half2 baseline, and optional explicit half2 accumulator policies, including approximate targets' maximum
+absolute differences from the FP32 View result.
 Kokkos fences bracket every timed device region. For CUDA builds, inspect the compiler output from the
 repository's `nvcc_wrapper` flags (for example `--ptxas-options=-v`) for registers and local-memory spills; this is a
 diagnostic build choice, not part of generated portable code.

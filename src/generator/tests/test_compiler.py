@@ -176,10 +176,11 @@ class CompilerTests(unittest.TestCase):
                 self.assertEqual(generated.count("void infer_one("), 1)
                 self.assertEqual(generated.count("void infer_batch("), 1)
                 self.assertEqual(generated.count("void infer_batch_hierarchical("), 1)
-                self.assertEqual(generated.count("void infer_batch_tensorcore("), 1)
                 self.assertEqual(generated.count("void infer_batch_half2("), 1)
-                self.assertEqual(generated.count("void infer_batch_half2_heuristic("), 1)
+                self.assertNotIn("tensorcore", generated.lower())
+                self.assertNotIn("void infer_batch_half2_heuristic(", generated)
                 self.assertNotIn("void infer_batch_half2_explicit(", generated)
+                self.assertGreaterEqual(generated.count("Kokkos::LaunchBounds<MaxThreads, MinBlocks>"), 3)
                 self.assertIn("ponni::TwoHalf::fma", generated)
                 self.assertIn("HalfParameterView", generated)
                 self.assertIn("int const ibatch = 2 * ipair", generated)
@@ -188,7 +189,17 @@ class CompilerTests(unittest.TestCase):
                 self.assertIn("int const local_batch = linear % active_batch", generated)
                 self.assertIn("int const i = linear / active_batch", generated)
                 self.assertIn("int const batch_begin = team.league_rank() * batch_tile", generated)
+                self.assertIn("batch_tile > maximum_hierarchical_batch_tile", generated)
                 self.assertIn("default_hierarchical_batch_tile", generated)
+                autotuner = (output / "GemmModel_autotune.cpp").read_text()
+                self.assertIn("All results", autotuner)
+                self.assertIn("Best result for each family", autotuner)
+                self.assertIn("max_threads", autotuner)
+                self.assertIn("int constexpr default_batch_size = 1000000", autotuner)
+                self.assertIn("ponni::init_device_pool(", autotuner)
+                self.assertIn("ponni::finalize_device_pool();", autotuner)
+                self.assertIn('{"infer_batch", 1024, 1, 0, &run_batch<1024, 1>}', autotuner)
+                self.assertEqual(report["autotuner_source"], "GemmModel_autotune.cpp")
                 self.assertEqual(report["hierarchical_batch_tiling"]["index_order"],
                                  "linear = neuron * active_batch + local_batch")
                 self.assertEqual(report["optimized_operations"], ["DenseBiasActivation"])
@@ -236,22 +247,10 @@ class CompilerTests(unittest.TestCase):
             self.assertIn("inputs(i) = input_view(i,ibatch)", generated)
             direct_batch = generated.split("void infer_batch_hierarchical(", 1)[0].rsplit("void infer_batch(", 1)[1]
             self.assertNotIn("inputs(j,ibatch)", direct_batch)
-            self.assertTrue(report["tensorcore"]["eligible"])
-            self.assertEqual(report["tensorcore"]["launch"], "raw CUDA kernel (no Kokkos execution policy)")
-            self.assertEqual(report["tensorcore"]["shared_memory_bytes_per_warp"], 2048)
-            self.assertIn("bool static constexpr tensorcore_eligible = true", generated)
-            self.assertIn("nvcuda::wmma::mma_sync", generated)
-            self.assertIn("hidden_begin += 16", generated)
-            self.assertIn("static __global__ void StreamModel_tensorcore_kernel", generated)
-            self.assertIn("<<<block_count,thread_count,scratch_bytes,execution.cuda_stream()>>>", generated)
-            self.assertNotIn("TensorCoreFunctor", generated)
-            self.assertIn("void infer_batch_tensorcore(", generated)
-            tensorcore_report = compile_model(
-                model, root / "tensorcore", strategy="tensorcore", model_name="TensorCoreModel"
-            )
-            self.assertEqual(tensorcore_report["recommended_batched_target"], "infer_batch_tensorcore")
+            self.assertNotIn("tensorcore", generated.lower())
+            self.assertNotIn("tensorcore", report)
             half2_report = compile_model(model, root / "half2", strategy="half2", model_name="Half2Model")
-            self.assertEqual(half2_report["recommended_batched_target"], "infer_batch_half2_heuristic")
+            self.assertEqual(half2_report["recommended_batched_target"], "infer_batch_half2")
             self.assertEqual(
                 [entry["accumulators"] for entry in half2_report["half2"]["heuristic"]],
                 [0, 0],
@@ -285,77 +284,6 @@ class CompilerTests(unittest.TestCase):
             with self.assertRaisesRegex(CompilerError, "unsupported half2 accumulator count 3"):
                 compile_model(model, root / "bad_half2_value", half2_accumulators=3)
 
-    def test_three_dense_tensorcore_chain_uses_width_dependent_shared_memory(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            rng = np.random.default_rng(31)
-            width = 16
-            initializers = [
-                numpy_helper.from_array(rng.standard_normal((width, width)).astype(np.float32), "weight0"),
-                numpy_helper.from_array(rng.standard_normal(width).astype(np.float32), "bias0"),
-                numpy_helper.from_array(rng.standard_normal((width, width)).astype(np.float32), "weight1"),
-                numpy_helper.from_array(rng.standard_normal(width).astype(np.float32), "bias1"),
-                numpy_helper.from_array(rng.standard_normal((width, 3)).astype(np.float32), "weight2"),
-                numpy_helper.from_array(rng.standard_normal(3).astype(np.float32), "bias2"),
-            ]
-            nodes = [
-                helper.make_node("Transpose", ["input"], ["x"], perm=[1, 0]),
-                helper.make_node("Gemm", ["x", "weight0", "bias0"], ["dense0"]),
-                helper.make_node("Tanh", ["dense0"], ["hidden0"]),
-                helper.make_node("Gemm", ["hidden0", "weight1", "bias1"], ["dense1"]),
-                helper.make_node("Tanh", ["dense1"], ["hidden1"]),
-                helper.make_node("Gemm", ["hidden1", "weight2", "bias2"], ["dense2"]),
-                helper.make_node("Transpose", ["dense2"], ["output"], perm=[1, 0]),
-            ]
-            model = _save_model(
-                root / "triple.onnx", nodes, initializers,
-                input_shape=(width, "batch"), output_shape=(3, "batch")
-            )
-            report = compile_model(model, root / "out", strategy="tensorcore", model_name="TripleModel")
-            generated = (root / "out" / "TripleModel.hpp").read_text()
-            self.assertTrue(report["tensorcore"]["eligible"])
-            self.assertEqual(report["tensorcore"]["dense_layers"], 3)
-            self.assertEqual(report["tensorcore"]["shared_memory_bytes_per_warp"], 3584)
-            self.assertEqual(report["sample_local_storage"]["workspace_elements"], width)
-            self.assertTrue(report["sample_local_storage"]["streaming_dense_tail"])
-            self.assertIn("float * first_tile", generated)
-            self.assertIn("for (int input_begin = 0; input_begin < padded_inputs; input_begin += 8)", generated)
-            self.assertIn("for (int second_begin = 0; second_begin < 16; second_begin += 16)", generated)
-
-    def test_tensorcore_rejects_three_dense_chain_above_shared_memory_limit(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            width = 384
-            rng = np.random.default_rng(31)
-            initializers = [
-                numpy_helper.from_array(
-                    rng.standard_normal((width, width)).astype(np.float32), "weight0"
-                ),
-                numpy_helper.from_array(np.zeros(width, dtype=np.float32), "bias0"),
-                numpy_helper.from_array(
-                    rng.standard_normal((width, 8)).astype(np.float32), "weight1"
-                ),
-                numpy_helper.from_array(np.zeros(8, dtype=np.float32), "bias1"),
-                numpy_helper.from_array(
-                    rng.standard_normal((8, 3)).astype(np.float32), "weight2"
-                ),
-                numpy_helper.from_array(np.zeros(3, dtype=np.float32), "bias2"),
-            ]
-            nodes = [
-                helper.make_node("Transpose", ["input"], ["x"], perm=[1, 0]),
-                helper.make_node("Gemm", ["x", "weight0", "bias0"], ["dense0"]),
-                helper.make_node("Tanh", ["dense0"], ["hidden0"]),
-                helper.make_node("Gemm", ["hidden0", "weight1", "bias1"], ["dense1"]),
-                helper.make_node("Tanh", ["dense1"], ["hidden1"]),
-                helper.make_node("Gemm", ["hidden1", "weight2", "bias2"], ["dense2"]),
-                helper.make_node("Transpose", ["dense2"], ["output"], perm=[1, 0]),
-            ]
-            model = _save_model(
-                root / "large_tensorcore.onnx", nodes, initializers,
-                input_shape=(width, "batch"), output_shape=(3, "batch"),
-            )
-            with self.assertRaisesRegex(CompilerError, "shared memory per warp"):
-                compile_model(model, root / "out", strategy="tensorcore")
 
     def test_generalized_dense_chain_streaming_uses_weighted_nonoverlapping_pairs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

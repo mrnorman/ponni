@@ -59,34 +59,44 @@ set(PONNI_KERAS_NORMALIZATION_DIR ${PONNI_GENERATOR_BUILD_DIR}/keras_normalizati
 set(PONNI_TENSORFLOW_DIR ${PONNI_GENERATOR_BUILD_DIR}/tensorflow_generated)
 set(PONNI_GENERATED_OUTPUTS
     ${PONNI_MLP_DIR}/MlpModel.hpp
+    ${PONNI_MLP_DIR}/MlpModel_autotune.cpp
     ${PONNI_MLP_DIR}/weights.bin
     ${PONNI_MLP_DIR}/optimization_report.json
     ${PONNI_RESIDUAL_DIR}/ResidualModel.hpp
+    ${PONNI_RESIDUAL_DIR}/ResidualModel_autotune.cpp
     ${PONNI_RESIDUAL_DIR}/weights.bin
     ${PONNI_RESIDUAL_DIR}/optimization_report.json
     ${PONNI_DEEP10_DIR}/Deep10Model.hpp
+    ${PONNI_DEEP10_DIR}/Deep10Model_autotune.cpp
     ${PONNI_DEEP10_DIR}/weights.bin
     ${PONNI_DEEP10_DIR}/optimization_report.json
     ${PONNI_RESNET10_DIR}/ResNet10Model.hpp
+    ${PONNI_RESNET10_DIR}/ResNet10Model_autotune.cpp
     ${PONNI_RESNET10_DIR}/weights.bin
     ${PONNI_RESNET10_DIR}/optimization_report.json
     ${PONNI_DENSENET_DIR}/DenseNetModel.hpp
+    ${PONNI_DENSENET_DIR}/DenseNetModel_autotune.cpp
     ${PONNI_DENSENET_DIR}/weights.bin
     ${PONNI_DENSENET_DIR}/optimization_report.json
     ${PONNI_BRANCHING_DIR}/BranchingModel.hpp
+    ${PONNI_BRANCHING_DIR}/BranchingModel_autotune.cpp
     ${PONNI_BRANCHING_DIR}/weights.bin
     ${PONNI_BRANCHING_DIR}/optimization_report.json)
 list(APPEND PONNI_GENERATED_OUTPUTS
     ${PONNI_OPERATOR_ZOO_DIR}/OperatorZooModel.hpp
+    ${PONNI_OPERATOR_ZOO_DIR}/OperatorZooModel_autotune.cpp
     ${PONNI_OPERATOR_ZOO_DIR}/weights.bin
     ${PONNI_OPERATOR_ZOO_DIR}/optimization_report.json
     ${PONNI_KERAS_DIR}/KerasModel.hpp
+    ${PONNI_KERAS_DIR}/KerasModel_autotune.cpp
     ${PONNI_KERAS_DIR}/weights.bin
     ${PONNI_KERAS_DIR}/optimization_report.json
     ${PONNI_KERAS_NORMALIZATION_DIR}/KerasNormalizationModel.hpp
+    ${PONNI_KERAS_NORMALIZATION_DIR}/KerasNormalizationModel_autotune.cpp
     ${PONNI_KERAS_NORMALIZATION_DIR}/weights.bin
     ${PONNI_KERAS_NORMALIZATION_DIR}/optimization_report.json
     ${PONNI_TENSORFLOW_DIR}/TensorFlowModel.hpp
+    ${PONNI_TENSORFLOW_DIR}/TensorFlowModel_autotune.cpp
     ${PONNI_TENSORFLOW_DIR}/weights.bin
     ${PONNI_TENSORFLOW_DIR}/optimization_report.json)
 
@@ -147,6 +157,12 @@ target_include_directories(generator_integration PRIVATE
 target_link_libraries(generator_integration ponni Kokkos::kokkos ${PONNI_LINK_FLAGS})
 target_compile_options(generator_integration PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${PONNI_CXX_FLAGS}>)
 
+add_executable(generator_autotuner ${PONNI_MLP_DIR}/MlpModel_autotune.cpp)
+add_dependencies(generator_autotuner generator_model_generation)
+target_include_directories(generator_autotuner PRIVATE ${PONNI_MLP_DIR})
+target_link_libraries(generator_autotuner ponni Kokkos::kokkos ${PONNI_LINK_FLAGS})
+target_compile_options(generator_autotuner PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${PONNI_CXX_FLAGS}>)
+
 add_executable(generator_benchmark ${PONNI_GENERATOR_SOURCE_DIR}/tests/benchmark_generated.cpp)
 add_dependencies(generator_benchmark generator_model_generation)
 target_include_directories(generator_benchmark PRIVATE ${PONNI_MLP_DIR})
@@ -167,6 +183,9 @@ add_test(
           ${PONNI_DENSENET_DIR}/weights.bin ${PONNI_GENERATOR_BUILD_DIR}/densenet_reference.txt
           ${PONNI_BRANCHING_DIR}/weights.bin ${PONNI_GENERATOR_BUILD_DIR}/branching_reference.txt
           ${PONNI_OPERATOR_ZOO_DIR}/weights.bin ${PONNI_GENERATOR_BUILD_DIR}/operator_zoo_reference.txt)
+add_test(
+  NAME generator_autotuner_test
+  COMMAND generator_autotuner 100 ${PONNI_MLP_DIR}/weights.bin)
 
 add_executable(generator_framework_integration ${PONNI_GENERATOR_SOURCE_DIR}/tests/test_framework_generated.cpp)
 add_dependencies(generator_framework_integration generator_model_generation)
@@ -201,6 +220,7 @@ if (Kokkos_ENABLE_CUDA OR Kokkos_ENABLE_HIP)
     set(PONNI_WIDTH_DIR ${PONNI_GENERATOR_BUILD_DIR}/width_${PONNI_WIDTH}_generated)
     list(APPEND PONNI_WIDTH_GENERATED_OUTPUTS
          ${PONNI_WIDTH_DIR}/Width${PONNI_WIDTH}Model.hpp
+         ${PONNI_WIDTH_DIR}/Width${PONNI_WIDTH}Model_autotune.cpp
          ${PONNI_WIDTH_DIR}/weights.bin
          ${PONNI_WIDTH_DIR}/optimization_report.json)
     list(APPEND PONNI_WIDTH_INCLUDE_DIRS ${PONNI_WIDTH_DIR})

@@ -19,19 +19,19 @@ target_link_libraries(MyProject ponni)
 
 The experimental [Kokkos neural-network generator](src/generator/README.md) exports fixed-shape PyTorch MLP DAGs to
 ONNX, validates and optimizes a framework-neutral IR, and generates allocation-free Kokkos C++ with batched
-`DeviceSpace`, batch-tiled hierarchical team-neuron/scratch, inline `SArray`, an explicit non-portable raw-CUDA
-WMMA Tensor Core interface, and Kokkos-launched packed `ponni::TwoHalf` interfaces for CUDA/HIP with baseline,
-measured per-dense heuristic, and optional user-specified accumulator policies. ONNX and Python are build-time tools
-only; generated inference does not link an ML runtime.
+`DeviceSpace`, batch-tiled hierarchical team-neuron/scratch, inline `SArray`, and Kokkos-launched packed
+`ponni::TwoHalf` interfaces for CUDA/HIP with baseline and optional user-specified accumulator policies. It also emits
+a standalone launch-bounds and batch-tile autotuner. ONNX and Python are build-time tools only; generated inference
+does not link an ML runtime.
 
 The supported model class is a fixed-feature, inference-only vector DAG: dense MLPs, residual and branched networks,
 feature concatenation, supported activations, feature normalization/probabilities/reductions, and scalar or
 exact-shape elementwise arithmetic. One dynamic batch dimension is allowed. Convolution/pooling, attention,
 recurrent/control-flow models, dynamic hidden or sequence dimensions, multiple inputs/outputs, arbitrary
 broadcasting, training behavior, quantization, and custom ONNX operators are not yet supported. The generator emits
-five families: inline one-sample `SArray`, View batch, hierarchical team-neuron, raw-CUDA TF32 Tensor Core, and
-packed two-sample FP16. See the generator documentation for the exact ONNX operator matrix, Tensor Core eligibility,
-and half2 accumulator choices `0`, `2`, `4`, `8`, `16`, and `32`.
+four families: inline one-sample `SArray`, View batch, hierarchical team-neuron, and packed two-sample FP16. See the
+generator documentation for the exact ONNX operator matrix, launch-bound tuning, and half2 accumulator choices `0`,
+`2`, `4`, `8`, `16`, and `32`.
 
 ## Activation layers
 

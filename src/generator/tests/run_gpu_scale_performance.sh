@@ -37,11 +37,6 @@ $1 == "generator_gpu_summary" {
       value("hierarchical_best_tile"), value("half2_ms"), value("half2_best_ms"),
       value("half2_best_policy"), value("half2_best_error"),
       value("half2_most_accurate_policy"))
-  tensorcore_rows = tensorcore_rows sprintf("| %s | %s | %s | %s (%s) | %s |\n",
-      value("width"), value("batch"), value("tensorcore_warp1_ms"),
-      value("tensorcore_best_ms"), value("tensorcore_best_warps"),
-      value("tensorcore_max_abs_difference"))
-  if (value("tensorcore_best_warps") != "0") have_tensorcore = 1
   next
 }
 
@@ -93,15 +88,6 @@ END {
   print "| Width | Batch | Tile | Generated default | Time ms | Speedup vs View | Max abs difference | SArray max abs difference |"
   print "|---:|---:|---:|---:|---:|---:|---:|---:|"
   printf "%s", tile_rows
-
-  if (have_tensorcore) {
-    print ""
-    print "CUDA Tensor Core policies"
-    print "-------------------------"
-    print "| Width | Batch | One-warp ms | Best ms (warps) | Max abs difference |"
-    print "|---:|---:|---:|---:|---:|"
-    printf "%s", tensorcore_rows
-  }
 
   if (other_output != "") {
     print ""

@@ -9,8 +9,7 @@ import numpy as np
 
 from .emitter import (
     emit_cpp,
-    estimate_tensorcore_scratch_bytes,
-    find_tensorcore_dense_chain,
+    emit_autotuner,
     half2_accumulator_plan,
 )
 from .errors import CompilerError
@@ -106,12 +105,10 @@ def _report(original, optimized, pass_report, strategy: str, plan, sample_plan,
         "recommended_batched_target": {
             "sample-local": "infer_batch",
             "team": "infer_batch_hierarchical",
-            "tensorcore": "infer_batch_tensorcore",
-            "half2": "infer_batch_half2_heuristic",
+            "half2": "infer_batch_half2",
         }.get(strategy, strategy),
         "generated_targets": [
-            "infer_one", "infer_batch", "infer_batch_hierarchical", "infer_batch_tensorcore",
-            "infer_batch_half2", "infer_batch_half2_heuristic"
+            "infer_one", "infer_batch", "infer_batch_hierarchical", "infer_batch_half2"
         ],
         "execution_strategies": {
             "infer_one": "device-inline fixed SArray inference with local planned storage",
@@ -123,17 +120,9 @@ def _report(original, optimized, pass_report, strategy: str, plan, sample_plan,
                 "one TeamPolicy team per batch tile, TeamThreadRange over neuron-by-batch work with batch "
                 "fastest, and batch-strided planned per-team scratch"
             ),
-            "infer_batch_tensorcore": (
-                "explicit raw CUDA Ampere WMMA TF32 kernel over 16-sample batch tiles; available for legal "
-                "float32 two- or three-dense chains and selected only by explicit request"
-            ),
             "infer_batch_half2": (
                 "Kokkos RangePolicy over pairs of adjacent batch samples using native CUDA/HIP half2 packed "
                 "FP16 multiply-accumulate with one dependent accumulation chain per dense dot product"
-            ),
-            "infer_batch_half2_heuristic": (
-                "Kokkos half2 inference with a generated per-dense accumulator count selected from measured "
-                "dot-length thresholds"
             ),
         },
         "hierarchical_batch_tiling": {
@@ -256,23 +245,9 @@ def compile_model(model_path: str | Path, output_dir: str | Path, strategy: str 
             else ("team" if maximum_parallel_neurons >= team_output_threshold else "sample-local")
         )
     scalar_bytes = 4 if optimized.tensors[optimized.inputs[0]].dtype.value == "float32" else 8
-    num_inputs = optimized.tensors[optimized.inputs[0]].sample_size
-    num_outputs = optimized.tensors[optimized.outputs[0]].sample_size
-    tensorcore_chain = find_tensorcore_dense_chain(optimized)
-    tensorcore_scratch_bytes = estimate_tensorcore_scratch_bytes(optimized, tensorcore_chain)
-    tensorcore_eligible = (
-        tensorcore_chain is not None and scalar_bytes == 4 and num_outputs <= 16 and
-        (len(tensorcore_chain) == 3 or num_inputs <= 8) and tensorcore_scratch_bytes <= 49152
-    )
-    if strategy == "tensorcore" and not tensorcore_eligible:
+    if strategy not in {"sample-local", "team", "half2"}:
         raise CompilerError(
-            "tensorcore strategy requires a supported float32 two- or three-dense chain with at most 16 outputs; "
-            "the two-dense form additionally supports at most 8 inputs, and the three-dense form must require no "
-            "more than 49152 bytes of generated shared memory per warp"
-        )
-    if strategy not in {"sample-local", "team", "tensorcore", "half2"}:
-        raise CompilerError(
-            f"unknown execution strategy {strategy!r}; choose auto, sample-local, team, tensorcore, or half2"
+            f"unknown execution strategy {strategy!r}; choose auto, sample-local, team, or half2"
         )
 
     plan = plan_storage(optimized)
@@ -311,19 +286,24 @@ def compile_model(model_path: str | Path, output_dir: str | Path, strategy: str 
         default_batch_tile, maximum_batch_tile, streaming_output_threshold,
         explicit_half2_accumulators
     )
+    autotuner = emit_autotuner(
+        output_path, model_name, scalar_code, maximum_batch_tile,
+        explicit_half2_accumulators is not None
+    )
     report = _report(
         original, optimized, pass_report, strategy, plan, sample_plan, schedule, scalar_bytes,
         default_batch_tile, maximum_batch_tile, streaming_output_threshold
     )
     report["generated_header"] = header.name
+    report["autotuner_source"] = autotuner.name
     report["weights"] = "weights.bin"
     report["manifest"] = "weights.json"
     report["auto_strategy_rule"] = (
         "recommend infer_batch when the deterministic dense-chain scheduler selects streaming or recomputation; "
         "otherwise recommend "
         f"infer_batch_hierarchical when an operation has at least {team_output_threshold} output neurons; "
-        "the Tensor Core and half2 targets require explicit selection because they change floating-point semantics; "
-        "all five inference families are emitted"
+        "half2 requires explicit selection because it changes floating-point semantics; "
+        "all four inference families are emitted"
     )
     report["half2"] = {
         "batch_lanes": "two adjacent samples",
@@ -332,8 +312,8 @@ def compile_model(model_path: str | Path, output_dir: str | Path, strategy: str 
         "multiply_type": "FP16",
         "accumulator_type": "FP16 partial sums with an FP32 merge for multi-accumulator variants",
         "launch": "Kokkos RangePolicy over ceil(batch_size / 2)",
-        "selection": "half2 is explicit-only; infer_batch_half2_heuristic is its default generated target",
-        "default_target": "infer_batch_half2_heuristic",
+        "selection": "half2 is explicit-only",
+        "default_target": "infer_batch_half2",
     }
     dense_nodes = [node for node in optimized.nodes if node.op in {"Dense", "DenseBiasActivation"}]
     heuristic_half2_accumulators = half2_accumulator_plan(
@@ -367,43 +347,6 @@ def compile_model(model_path: str | Path, output_dir: str | Path, strategy: str 
     report["maximum_parallel_neurons"] = maximum_parallel_neurons
     report["streaming_output_threshold"] = streaming_output_threshold
     report["streaming_recompute_threshold"] = streaming_recompute_threshold
-    if tensorcore_chain is not None and len(tensorcore_chain) == 3:
-        maximum_tensorcore_warps = 1
-        while (maximum_tensorcore_warps * 2 <= 8 and
-               maximum_tensorcore_warps * 2 * tensorcore_scratch_bytes <= 49152):
-            maximum_tensorcore_warps *= 2
-        hidden_size = optimized.tensors[tensorcore_chain[-2].outputs[0]].sample_size
-        if hidden_size <= 4:
-            measured_warps = 4
-        elif hidden_size <= 16:
-            measured_warps = 2
-        elif hidden_size <= 32:
-            measured_warps = 4
-        elif hidden_size <= 64:
-            measured_warps = 2
-        else:
-            measured_warps = 1
-        default_tensorcore_warps = min(maximum_tensorcore_warps, measured_warps)
-    else:
-        maximum_tensorcore_warps = 8
-        hidden_size = (optimized.tensors[tensorcore_chain[0].outputs[0]].sample_size
-                       if tensorcore_chain is not None else 0)
-        default_tensorcore_warps = 4 if hidden_size <= 16 else (2 if hidden_size <= 256 else 1)
-    report["tensorcore"] = {
-        "eligible": tensorcore_eligible,
-        "batch_tile": 16,
-        "launch": "raw CUDA kernel (no Kokkos execution policy)",
-        "dense_layers": len(tensorcore_chain) if tensorcore_chain is not None else 0,
-        "shared_memory_bytes_per_warp": tensorcore_scratch_bytes,
-        "default_warps_per_block": default_tensorcore_warps,
-        "maximum_warps_per_block": maximum_tensorcore_warps,
-        "input_mode": "TF32",
-        "accumulator_type": "float32",
-        "selection": "explicit-only",
-        "shape_limits": "at most 16 outputs; two-dense form supports at most 8 inputs; "
-                        "three-dense form is limited to 49152 generated shared-memory bytes per warp",
-    }
-
     # Deterministic compiler self-check catches invalid fusions independently of ONNX Runtime.
     rng = np.random.default_rng(20260802)
     input_size = optimized.tensors[optimized.inputs[0]].sample_size
