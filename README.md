@@ -15,6 +15,24 @@ add_library(MyProject ${MY_SOURCES})  # or add_executable
 target_link_libraries(MyProject ponni)
 ```
 
+## Ahead-of-time PyTorch/ONNX generator
+
+The experimental [Kokkos neural-network generator](src/generator/README.md) exports fixed-shape PyTorch MLP DAGs to
+ONNX, validates and optimizes a framework-neutral IR, and generates allocation-free Kokkos C++ with batched
+`DeviceSpace`, batch-tiled hierarchical team-neuron/scratch, inline `SArray`, an explicit non-portable raw-CUDA
+WMMA Tensor Core interface, and Kokkos-launched packed `ponni::TwoHalf` interfaces for CUDA/HIP with baseline,
+measured per-dense heuristic, and optional user-specified accumulator policies. ONNX and Python are build-time tools
+only; generated inference does not link an ML runtime.
+
+The supported model class is a fixed-feature, inference-only vector DAG: dense MLPs, residual and branched networks,
+feature concatenation, supported activations, feature normalization/probabilities/reductions, and scalar or
+exact-shape elementwise arithmetic. One dynamic batch dimension is allowed. Convolution/pooling, attention,
+recurrent/control-flow models, dynamic hidden or sequence dimensions, multiple inputs/outputs, arbitrary
+broadcasting, training behavior, quantization, and custom ONNX operators are not yet supported. The generator emits
+five families: inline one-sample `SArray`, View batch, hierarchical team-neuron, raw-CUDA TF32 Tensor Core, and
+packed two-sample FP16. See the generator documentation for the exact ONNX operator matrix, Tensor Core eligibility,
+and half2 accumulator choices `0`, `2`, `4`, `8`, `16`, and `32`.
+
 ## Activation layers
 
 PONNI provides the following activation layers:
@@ -63,11 +81,15 @@ During the **make phase** (not configure), unit test dependencies are prepared w
 
 - CMake finds Python 3.x with `find_package(Python3 ...)`.
 - `uv` is resolved and installed locally in the build tree at `unit/build/uv_env` (no install into `~/.local`).
-- The Python virtual environment is created in `unit/build/python_env` and installs CPU packages used by tests:
+- The Python virtual environment is created in `unit/build/python_env` and installs packages used by tests and
+  ahead-of-time model generation:
 	- `torch`
 	- `keras`
 	- `numpy`
 	- `h5py`
+	- `onnx`
+	- `onnxruntime`
+	- `onnxscript`
 - Python scripts generate test HDF5 files in the build tree, and C++ tests consume those generated files.
 
 This unit-test workflow keeps tooling and Python dependencies inside `ponni/unit/build` and does not place files in the user's `~/.local`.

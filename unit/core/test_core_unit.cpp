@@ -715,6 +715,25 @@ int main(int argc, char** argv) {
       x_h = ponni::create_host_copy(x);
       require_true(std::isfinite(x_h(0,0)), "Initializer_Orthogonal produced non-finite value");
     }
+
+    // Exercise both lanes and the packed multiply-add on the active device backend.
+    {
+      Kokkos::View<float*,ponni::DeviceSpace> result("two_half_result", 4);
+      Kokkos::parallel_for(PONNI_AUTO_LABEL(), 1, KOKKOS_LAMBDA(int) {
+        ponni::TwoHalf const left = ponni::TwoHalf::from_floats(2.0f, -3.0f);
+        ponni::TwoHalf const right = ponni::TwoHalf::from_floats(4.0f, 5.0f);
+        ponni::TwoHalf const added = left + right;
+        ponni::TwoHalf const fused = ponni::TwoHalf::fma(left, right, ponni::TwoHalf::from_floats(1.0f, 2.0f));
+        result(0) = added.low();
+        result(1) = added.high();
+        result(2) = fused.low();
+        result(3) = fused.high();
+      });
+      auto result_h = ponni::create_host_copy(result);
+      require_true(nearly_equal(result_h(0), 6.0f) && nearly_equal(result_h(1), 2.0f) &&
+                   nearly_equal(result_h(2), 9.0f) && nearly_equal(result_h(3), -13.0f),
+                   "TwoHalf packed arithmetic produced incorrect lanes");
+    }
   }
 
   ponni::finalize_device_pool();
