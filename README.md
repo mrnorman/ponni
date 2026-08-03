@@ -58,7 +58,7 @@ Run all unit tests:
 ```bash
 git clone git@github.com:mrnorman/ponni.git
 cd ponni
-git submodule update --init --checkout -- unit/build/externals/kokkos
+git submodule update --init --checkout -- unit/externals/kokkos
 cd unit/build
 # Choose or create a machine profile
 source machines/thatchroof/thatchroof_cpu_coverage.env
