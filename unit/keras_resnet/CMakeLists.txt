@@ -6,7 +6,8 @@ target_compile_options(keras_resnet PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${PONNI_CXX
 set(KERAS_RESNET_H5 ${CMAKE_CURRENT_BINARY_DIR}/keras_resnet_generated.h5)
 add_custom_command(
   OUTPUT ${KERAS_RESNET_H5}
-  COMMAND ${PONNI_TEST_PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate_keras_resnet_data.py ${KERAS_RESNET_H5}
+  COMMAND ${PONNI_TEST_PYTHON_COMMAND}
+          ${CMAKE_CURRENT_SOURCE_DIR}/generate_keras_resnet_data.py ${KERAS_RESNET_H5}
   DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/generate_keras_resnet_data.py
   COMMENT "Generating Keras ResNet test data with Python"
   VERBATIM
@@ -22,4 +23,3 @@ if (DEFINED MPI_COMMAND)
 else()
   add_test(NAME keras_resnet_test COMMAND ./keras_resnet ${KERAS_RESNET_H5})
 endif()
-

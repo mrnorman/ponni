@@ -1,6 +1,12 @@
 set(PONNI_GENERATOR_SOURCE_DIR ${CMAKE_SOURCE_DIR}/../src/generator)
 set(PONNI_GENERATOR_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
-set(PONNI_GENERATOR_ENV ${CMAKE_COMMAND} -E env PYTHONPATH=${PONNI_GENERATOR_SOURCE_DIR})
+set(PONNI_GENERATOR_ENV ${CMAKE_COMMAND} -E env
+    PYTHONHOME= PYTHONNOUSERSITE=1 PYTHONPATH=${PONNI_GENERATOR_SOURCE_DIR}
+    "PYTHONWARNINGS=ignore::FutureWarning:copyreg,ignore::FutureWarning:keras.src.export.tf2onnx_lib")
+if (NOT Kokkos_ENABLE_CUDA)
+  list(APPEND PONNI_GENERATOR_ENV
+       CUDA_VISIBLE_DEVICES=-1 JAX_PLATFORMS=cpu TF_CPP_MIN_LOG_LEVEL=3)
+endif()
 
 set(PONNI_GENERATOR_MODELS
     ${PONNI_GENERATOR_BUILD_DIR}/mlp.onnx
@@ -31,8 +37,7 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E make_directory ${PONNI_GENERATOR_BUILD_DIR}
   COMMAND ${PONNI_GENERATOR_ENV} ${PONNI_TEST_PYTHON_EXECUTABLE}
           ${PONNI_GENERATOR_SOURCE_DIR}/examples/export_models.py --output-dir ${PONNI_GENERATOR_BUILD_DIR}
-  COMMAND ${CMAKE_COMMAND} -E env TF_CPP_MIN_LOG_LEVEL=2 CUDA_VISIBLE_DEVICES=-1
-          PYTHONPATH=${PONNI_GENERATOR_SOURCE_DIR} ${PONNI_TEST_PYTHON_EXECUTABLE}
+  COMMAND ${PONNI_GENERATOR_ENV} ${PONNI_TEST_PYTHON_EXECUTABLE}
           ${PONNI_GENERATOR_SOURCE_DIR}/examples/export_framework_models.py
           --output-dir ${PONNI_GENERATOR_BUILD_DIR}
   DEPENDS ${PONNI_GENERATOR_SOURCE_DIR}/examples/export_models.py
@@ -178,13 +183,14 @@ add_test(
           ${PONNI_TENSORFLOW_DIR}/weights.bin ${PONNI_GENERATOR_BUILD_DIR}/tensorflow_residual_reference.txt)
 add_test(
   NAME generator_structure_test
-  COMMAND ${PONNI_TEST_PYTHON_EXECUTABLE} ${PONNI_GENERATOR_SOURCE_DIR}/tests/check_functionality_generation.py
+  COMMAND ${PONNI_GENERATOR_ENV} ${PONNI_TEST_PYTHON_EXECUTABLE}
+          ${PONNI_GENERATOR_SOURCE_DIR}/tests/check_functionality_generation.py
           --deep ${PONNI_DEEP10_DIR} --resnet ${PONNI_RESNET10_DIR}
           --densenet ${PONNI_DENSENET_DIR} --branching ${PONNI_BRANCHING_DIR}
           --operator-zoo ${PONNI_OPERATOR_ZOO_DIR})
 set_tests_properties(generator_structure_test PROPERTIES DEPENDS generator_integration_test)
 
-if (Kokkos_ENABLE_CUDA)
+if (Kokkos_ENABLE_CUDA OR Kokkos_ENABLE_HIP)
   set(PONNI_WIDTHS 4 8 16 32 64 128)
   set(PONNI_WIDTH_MODELS)
   set(PONNI_WIDTH_GENERATED_OUTPUTS)
@@ -237,6 +243,9 @@ if (Kokkos_ENABLE_CUDA)
   target_include_directories(generator_gpu_scale PRIVATE ${PONNI_WIDTH_INCLUDE_DIRS})
   target_link_libraries(generator_gpu_scale ponni Kokkos::kokkos ${PONNI_LINK_FLAGS})
   target_compile_options(generator_gpu_scale PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${PONNI_CXX_FLAGS}>)
-  add_test(NAME generator_gpu_scale_test COMMAND generator_gpu_scale ${PONNI_WIDTH_WEIGHT_ARGUMENTS})
+  add_test(
+    NAME generator_gpu_scale_test
+    COMMAND bash ${PONNI_GENERATOR_SOURCE_DIR}/tests/run_gpu_scale_performance.sh
+            $<TARGET_FILE:generator_gpu_scale> ${PONNI_WIDTH_WEIGHT_ARGUMENTS})
   set_tests_properties(generator_gpu_scale_test PROPERTIES LABELS "gpu;performance")
 endif()

@@ -77,13 +77,13 @@ def _matmul_residual_model(path: Path, multiple_consumers: bool = False) -> Path
 
 
 class CompilerTests(unittest.TestCase):
-    def test_half2_accumulator_heuristic_uses_dot_length_and_streaming_live_budget(self) -> None:
+    def test_half2_accumulator_heuristic_uses_conservative_cross_vendor_policy(self) -> None:
         self.assertEqual(half2_accumulator_heuristic(1), 0)
-        self.assertEqual(half2_accumulator_heuristic(8), 2)
-        self.assertEqual(half2_accumulator_heuristic(32), 4)
-        self.assertEqual(half2_accumulator_heuristic(128, 3), 16)
-        self.assertEqual(half2_accumulator_heuristic(128, 4), 8)
-        self.assertEqual(half2_accumulator_heuristic(128, 8), 4)
+        self.assertEqual(half2_accumulator_heuristic(8), 0)
+        self.assertEqual(half2_accumulator_heuristic(32), 0)
+        self.assertEqual(half2_accumulator_heuristic(128, 3), 0)
+        self.assertEqual(half2_accumulator_heuristic(128, 4), 0)
+        self.assertEqual(half2_accumulator_heuristic(128, 8), 0)
 
     def test_operator_zoo_matches_onnx_runtime_before_and_after_optimization(self) -> None:
         import onnxruntime as ort
@@ -249,7 +249,7 @@ class CompilerTests(unittest.TestCase):
             self.assertEqual(half2_report["recommended_batched_target"], "infer_batch_half2_heuristic")
             self.assertEqual(
                 [entry["accumulators"] for entry in half2_report["half2"]["heuristic"]],
-                [2, 4],
+                [0, 0],
             )
             explicit_report = compile_model(
                 model,

@@ -5,7 +5,8 @@ target_compile_options(projection_skip PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${PONNI_
 set(PROJECTION_SKIP_H5 ${CMAKE_CURRENT_BINARY_DIR}/projection_skip_generated.h5)
 add_custom_command(
   OUTPUT ${PROJECTION_SKIP_H5}
-  COMMAND ${PONNI_TEST_PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate_projection_skip_data.py ${PROJECTION_SKIP_H5}
+  COMMAND ${PONNI_TEST_PYTHON_COMMAND}
+          ${CMAKE_CURRENT_SOURCE_DIR}/generate_projection_skip_data.py ${PROJECTION_SKIP_H5}
   DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/generate_projection_skip_data.py
   COMMENT "Generating projection skip test data with Python"
   VERBATIM

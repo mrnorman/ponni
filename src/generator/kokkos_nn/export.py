@@ -275,7 +275,7 @@ def export_operator_zoo(output_dir: str | Path, batch_sizes: tuple[int, ...] = (
         [numpy_helper.from_array(value, name) for name, value in arrays.items()],
     )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 22)])
-    model.ir_version = 11
+    model.ir_version = 10
     for key, value in {"ponni.orientation": "features_batch", "ponni.batch_symbol": "batch"}.items():
         entry = model.metadata_props.add()
         entry.key = key

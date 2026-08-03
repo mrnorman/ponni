@@ -2,6 +2,8 @@
 #pragma once
 // included by ponni_kokkos_utils.h
 
+#include <iostream>
+
 namespace ponni {
 
 

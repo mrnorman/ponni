@@ -11,37 +11,21 @@ if (WIN32)
 	message(FATAL_ERROR "Python uv test-data workflow is supported only on Linux and macOS")
 endif()
 
-find_package(Python3 3 REQUIRED COMPONENTS Interpreter)
-find_program(UV_EXECUTABLE uv)
+set(PONNI_PYTHON_VERSION "" CACHE STRING "Build-local Python major.minor version (auto-select when empty)")
 
-set(PONNI_UV_PATH_FILE "${CMAKE_BINARY_DIR}/uv_path.txt")
-set(PONNI_UV_ENV_DIR "${CMAKE_BINARY_DIR}/uv_env")
+set(PONNI_UNIT_BUILD_DIR "${CMAKE_SOURCE_DIR}/build")
+set(PONNI_UV_ENV_DIR "${PONNI_UNIT_BUILD_DIR}/uv_env")
+set(PONNI_UV_PATH_FILE "${PONNI_UV_ENV_DIR}/uv_path.txt")
 
 add_custom_command(
 	OUTPUT ${PONNI_UV_PATH_FILE}
-	COMMAND /bin/bash ${CMAKE_SOURCE_DIR}/ensure_uv.sh ${PONNI_UV_PATH_FILE} ${Python3_EXECUTABLE} ${PONNI_UV_ENV_DIR} "${UV_EXECUTABLE}"
+	COMMAND /bin/bash ${CMAKE_SOURCE_DIR}/ensure_uv.sh ${PONNI_UV_PATH_FILE} ${PONNI_UV_ENV_DIR}
 	DEPENDS ${CMAKE_SOURCE_DIR}/ensure_uv.sh
-	COMMENT "Ensuring uv is available (installing in build/uv_env if needed)"
+	COMMENT "Ensuring the PONNI-owned uv installation is available"
 	VERBATIM
 )
 
 add_custom_target(ponni_uv_tool DEPENDS ${PONNI_UV_PATH_FILE})
-
-set(PONNI_TEST_PYTHON_ENV_DIR "${CMAKE_BINARY_DIR}/python_env")
-set(PONNI_TEST_PYTHON_EXECUTABLE "${PONNI_TEST_PYTHON_ENV_DIR}/bin/python")
-
-add_custom_command(
-	OUTPUT ${PONNI_TEST_PYTHON_ENV_DIR}/.ready
-	COMMAND /bin/bash ${CMAKE_SOURCE_DIR}/ensure_python_env.sh ${PONNI_UV_PATH_FILE} ${Python3_EXECUTABLE} ${PONNI_TEST_PYTHON_ENV_DIR}
-	DEPENDS ${PONNI_UV_PATH_FILE}
-	DEPENDS ${CMAKE_SOURCE_DIR}/ensure_python_env.sh
-	COMMAND ${CMAKE_COMMAND} -E touch ${PONNI_TEST_PYTHON_ENV_DIR}/.ready
-	COMMENT "Ensuring Python environment for framework export and unit tests"
-	VERBATIM
-)
-
-add_custom_target(ponni_python_env DEPENDS ${PONNI_TEST_PYTHON_ENV_DIR}/.ready)
-add_dependencies(ponni_python_env ponni_uv_tool)
 
 if (PONNI_ENABLE_COVERAGE)
 	if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -54,6 +38,51 @@ endif()
 
 add_subdirectory($ENV{KOKKOS_HOME} ./kokkos )
 add_subdirectory(..                ./ponni  )
+
+if (Kokkos_ENABLE_CUDA)
+	set(PONNI_TEST_FRAMEWORK_BACKEND CUDA)
+elseif (Kokkos_ENABLE_HIP)
+	set(PONNI_TEST_FRAMEWORK_BACKEND HIP)
+elseif (Kokkos_ENABLE_SYCL)
+	set(PONNI_TEST_FRAMEWORK_BACKEND SYCL)
+else()
+	set(PONNI_TEST_FRAMEWORK_BACKEND CPU)
+endif()
+
+if (PONNI_PYTHON_VERSION STREQUAL "")
+	if (PONNI_TEST_FRAMEWORK_BACKEND STREQUAL "HIP")
+		# AMD's ROCm 6.2 TensorFlow wheel is published for CPython 3.10.
+		set(PONNI_PYTHON_VERSION "3.10")
+	else()
+		set(PONNI_PYTHON_VERSION "3.11")
+	endif()
+endif()
+
+set(PONNI_TEST_PYTHON_INSTALL_DIR "${PONNI_UV_ENV_DIR}/python_install")
+set(PONNI_TEST_PYTHON_ENV_DIR "${PONNI_UNIT_BUILD_DIR}/python_env")
+set(PONNI_TEST_PYTHON_EXECUTABLE "${PONNI_TEST_PYTHON_ENV_DIR}/bin/python")
+
+add_custom_command(
+	OUTPUT ${PONNI_TEST_PYTHON_ENV_DIR}/.ready
+	COMMAND /bin/bash ${CMAKE_SOURCE_DIR}/ensure_python_env.sh ${PONNI_UV_PATH_FILE} ${PONNI_PYTHON_VERSION}
+	        ${PONNI_TEST_PYTHON_INSTALL_DIR} ${PONNI_TEST_PYTHON_ENV_DIR} ${PONNI_TEST_FRAMEWORK_BACKEND}
+	DEPENDS ${PONNI_UV_PATH_FILE}
+	DEPENDS ${CMAKE_SOURCE_DIR}/ensure_python_env.sh
+	COMMENT "Ensuring the PONNI-owned ${PONNI_TEST_FRAMEWORK_BACKEND} Python environment is available"
+	VERBATIM
+)
+
+add_custom_target(ponni_python_env DEPENDS ${PONNI_TEST_PYTHON_ENV_DIR}/.ready)
+add_dependencies(ponni_python_env ponni_uv_tool)
+
+set(PONNI_TEST_PYTHON_COMMAND ${CMAKE_COMMAND} -E env
+    PYTHONHOME= PYTHONNOUSERSITE=1
+    "PYTHONWARNINGS=ignore::FutureWarning:copyreg,ignore::FutureWarning:keras.src.export.tf2onnx_lib")
+if (NOT Kokkos_ENABLE_CUDA)
+	list(APPEND PONNI_TEST_PYTHON_COMMAND
+	     CUDA_VISIBLE_DEVICES=-1 JAX_PLATFORMS=cpu TF_CPP_MIN_LOG_LEVEL=3)
+endif()
+list(APPEND PONNI_TEST_PYTHON_COMMAND ${PONNI_TEST_PYTHON_EXECUTABLE})
 
 include(FindHDF5)
 find_package(HDF5 REQUIRED)
@@ -68,11 +97,6 @@ add_subdirectory(keras_resnet)
 add_subdirectory(projection_skip)
 add_subdirectory(core core_unit_tests)
 add_subdirectory(generator)
-
-add_test(NAME src_gcov_summary_test
-		 COMMAND /bin/bash ${CMAKE_SOURCE_DIR}/report_src_gcov_summary.sh ${CMAKE_BINARY_DIR})
-set_tests_properties(src_gcov_summary_test PROPERTIES
-					 DEPENDS "keras_sequential_test;pytorch_resnet_test;keras_resnet_test;projection_skip_test;core_unit_test;generator_integration_test")
 
 if (PONNI_ENABLE_COVERAGE)
 	find_program(GCOV_EXECUTABLE gcov)

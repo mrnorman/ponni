@@ -68,20 +68,13 @@ def sample_local_workspace_elements(graph: Graph, plan: StoragePlan,
 
 
 def half2_accumulator_heuristic(dot_length: int, simultaneous_outputs: int = 1) -> int:
-    """Select a measured balanced half2 accumulator count for one dense dot product."""
-    if dot_length < 2:
-        return 0
-    if dot_length <= 24:
-        count = 2
-    elif dot_length <= 80:
-        count = 4
-    else:
-        count = 16
-    # The measured width-128 streaming tail kept 16 * 3 packed partials live.
-    # Do not extrapolate beyond that register-pressure point for wider outputs.
-    while count > 2 and count * simultaneous_outputs > 48:
-        count //= 2
-    return count
+    """Select the conservative cross-vendor half2 accumulation policy."""
+    del dot_length, simultaneous_outputs
+    # NVIDIA Ampere benefited from multiple partials at long dot lengths, but
+    # optimized MI250X measurements favored one dependency chain at every
+    # measured width. Keep the lower-resource cross-vendor choice by default;
+    # explicit policies remain available when accuracy or one target warrants it.
+    return 0
 
 
 def half2_accumulator_plan(graph: Graph, maximum_output_accumulators: int = 8,

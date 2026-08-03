@@ -6,7 +6,8 @@ target_compile_options(keras_sequential PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${PONNI
 set(KERAS_SEQUENTIAL_H5 ${CMAKE_CURRENT_BINARY_DIR}/keras_sequential_generated.h5)
 add_custom_command(
   OUTPUT ${KERAS_SEQUENTIAL_H5}
-  COMMAND ${PONNI_TEST_PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate_keras_sequential_data.py ${KERAS_SEQUENTIAL_H5}
+  COMMAND ${PONNI_TEST_PYTHON_COMMAND}
+          ${CMAKE_CURRENT_SOURCE_DIR}/generate_keras_sequential_data.py ${KERAS_SEQUENTIAL_H5}
   DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/generate_keras_sequential_data.py
   COMMENT "Generating Keras sequential test data with Python"
   VERBATIM
@@ -22,4 +23,3 @@ if (DEFINED MPI_COMMAND)
 else()
   add_test(NAME keras_sequential_test COMMAND ./keras_sequential ${KERAS_SEQUENTIAL_H5})
 endif()
-

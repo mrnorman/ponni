@@ -169,14 +169,18 @@ def _power_of_two_at_most(value: int) -> int:
     return result
 
 
-def _hierarchical_batch_tiles(_maximum_parallel_neurons: int, stack_bytes: int,
+def _hierarchical_batch_tiles(maximum_parallel_neurons: int, stack_bytes: int,
                               max_team_scratch_bytes: int) -> tuple[int, int]:
     scratch_limited = 32 if stack_bytes == 0 else max_team_scratch_bytes // stack_bytes
     maximum_tile = _power_of_two_at_most(max(1, min(32, scratch_limited)))
-    # Ampere measurements of I -> I -> I -> 3 networks for I=4--128 and batches
-    # 10^4--10^6 favor 32, except for a small width-32 advantage at 16. Keep the
-    # more robust 32 default; the device scratch limit remains authoritative.
-    measured_tile = 32
+    # Use the smaller robust choice across NVIDIA Ampere and AMD MI250X. Ampere
+    # favored 32 throughout; MI250X favored 16 at width 64 and 8 at width 128.
+    if maximum_parallel_neurons <= 32:
+        measured_tile = 32
+    elif maximum_parallel_neurons <= 64:
+        measured_tile = 16
+    else:
+        measured_tile = 8
     return min(maximum_tile, measured_tile), maximum_tile
 
 

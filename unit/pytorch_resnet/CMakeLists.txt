@@ -6,7 +6,8 @@ target_compile_options(pytorch_resnet PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${PONNI_C
 set(PYTORCH_RESNET_H5 ${CMAKE_CURRENT_BINARY_DIR}/pytorch_resnet_generated.h5)
 add_custom_command(
   OUTPUT ${PYTORCH_RESNET_H5}
-  COMMAND ${PONNI_TEST_PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/generate_pytorch_resnet_data.py ${PYTORCH_RESNET_H5}
+  COMMAND ${PONNI_TEST_PYTHON_COMMAND}
+          ${CMAKE_CURRENT_SOURCE_DIR}/generate_pytorch_resnet_data.py ${PYTORCH_RESNET_H5}
   DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/generate_pytorch_resnet_data.py
   COMMENT "Generating PyTorch ResNet test data with Python"
   VERBATIM
@@ -22,4 +23,3 @@ if (DEFINED MPI_COMMAND)
 else()
   add_test(NAME pytorch_resnet_test COMMAND ./pytorch_resnet ${PYTORCH_RESNET_H5})
 endif()
-

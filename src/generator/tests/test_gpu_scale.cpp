@@ -37,7 +37,9 @@ bool benchmark_model(char const * weight_path, int hidden_width) {
     typename Model::OutputView batch_outputs("gpu_scale_batch_outputs", Model::num_outputs, batch_size);
     typename Model::OutputView sarray_outputs("gpu_scale_sarray_outputs", Model::num_outputs, batch_size);
     typename Model::OutputView tiled_outputs("gpu_scale_tiled_outputs", Model::num_outputs, batch_size);
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOS_ARCH_AMPERE)
     typename Model::OutputView tensorcore_outputs("gpu_scale_tensorcore_outputs", Model::num_outputs, batch_size);
+#endif
     typename Model::OutputView half2_outputs("gpu_scale_half2_outputs", Model::num_outputs, batch_size);
     Kokkos::parallel_for(
         "generator_gpu_initialize_inputs",
@@ -117,6 +119,7 @@ bool benchmark_model(char const * weight_path, int hidden_width) {
     double tensorcore_warp_one_seconds = 0;
     double best_tensorcore_seconds = std::numeric_limits<double>::max();
     int best_tensorcore_warps = 0;
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOS_ARCH_AMPERE)
     for (int warps_per_block : {1, 2, 4, 8}) {
       if (warps_per_block > Model::maximum_tensorcore_warps_per_block) continue;
       model.infer_batch_tensorcore(inputs, tensorcore_outputs, warps_per_block);
@@ -133,12 +136,16 @@ bool benchmark_model(char const * weight_path, int hidden_width) {
                 << " warps_per_block=" << warps_per_block
                 << " tensorcore_ms=" << tensorcore_seconds * 1.e3 << std::endl;
     }
+#else
+    best_tensorcore_seconds = 0;
+#endif
     double tile_one_seconds = 0;
     double best_hierarchical_seconds = std::numeric_limits<double>::max();
     int best_hierarchical_tile = 0;
     float worst_error = 0;
     float worst_sarray_error = 0;
     float tensorcore_error = 0;
+#if defined(KOKKOS_ENABLE_CUDA) && defined(KOKKOS_ARCH_AMPERE)
     Kokkos::parallel_reduce(
         "generator_gpu_tensorcore_error",
         Kokkos::RangePolicy<typename Model::execution_space>(0, output_elements),
@@ -151,6 +158,7 @@ bool benchmark_model(char const * weight_path, int hidden_width) {
         },
         Kokkos::Max<float>(tensorcore_error));
     if (tensorcore_error > 2.e-3f || !std::isfinite(tensorcore_error)) passed = false;
+#endif
     for (int batch_tile : {1, 2, 4, 8, 16, 32}) {
       if (batch_tile > Model::maximum_hierarchical_batch_tile) continue;
       model.infer_batch_hierarchical(inputs, tiled_outputs, batch_tile);

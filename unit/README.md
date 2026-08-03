@@ -91,18 +91,22 @@ The diverse models use batches 1, 2, 3, 7, and 11; the original examples retain 
 structure test rejects generated input rereads, View intermediates, truncated live workspaces, and preactivation arrays,
 and requires the operator-zoo operations to survive into generated code.
 
-When CUDA is enabled, `generator_gpu_scale_test` additionally checks `I -> I -> I -> 3` networks for
+When CUDA or HIP is enabled, `generator_gpu_scale_test` additionally checks `I -> I -> I -> 3` networks for
 `I = 4, 8, 16, 32, 64, 128`; team batch tiles 1, 2, 4, 8, 16, and 32; and single-precision batches 10,000,
 100,000, and 1,000,000 using a 1 GiB device pool. The hierarchical loop orders batch fastest within each neuron and
 uses batch-fastest scratch. Eligible models additionally test a generated raw-CUDA WMMA TF32 kernel without Kokkos
 hierarchical-policy overhead. Use the debug machine file
 for correctness, but use
-`machines/thatchroof/thatchroof_gpu_fast.env` for walltimes used to evaluate scheduling changes. The summary reports
+the target machine's optimized GPU environment for walltimes used to evaluate scheduling changes. The formatted
+summary reports
 SArray, direct View batch, hierarchical tile 1, the best hierarchical tile, Tensor Core TF32, and Kokkos-launched
 packed half2 with baseline, generated-heuristic, and explicit four-accumulator policies. The Tensor Core sweep
 measures all legal choices among 1, 2, 4, and 8 warps per CUDA block; current
 Ampere defaults select 4, 2, 2,
-4, 2, and 1 warps for I=4, 8, 16, 32, 64, and 128, respectively. The hierarchical default is tile 32. Sample-local
+4, 2, and 1 warps for I=4, 8, 16, 32, 64, and 128, respectively. Conservative cross-vendor hierarchical defaults
+use tile 32 through I=32, tile 16 at I=64, and tile 8 for wider models. The half2 heuristic uses the baseline
+single dependency chain; explicit multi-partial policies remain available for target-specific tuning or lower error.
+Sample-local
 emission deterministically selects non-overlapping dense pairs throughout deeper chains, streaming each
 selected activation into scalar output accumulators and retaining or cheaply recomputing branches as reported.
 
