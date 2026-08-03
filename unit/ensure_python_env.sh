@@ -28,7 +28,8 @@ env_is_valid=false
 if [[ -x "${venv_python}" ]]; then
   have_version="$("${venv_python}" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || true)"
   if [[ "${have_version}" == "${want_version}" ]] && \
-     "${venv_python}" -c 'import torch, keras, h5py, numpy, onnx, onnxruntime, onnxscript' >/dev/null 2>&1; then
+     "${venv_python}" -c \
+       'import torch, keras, tensorflow, tf2onnx, h5py, numpy, onnx, onnxruntime, onnxscript' >/dev/null 2>&1; then
     env_is_valid=true
   fi
 fi
@@ -36,7 +37,8 @@ fi
 if [[ "${env_is_valid}" != "true" ]]; then
   rm -rf "${venv_dir}"
   "${uv_bin}" venv --python "${python_exe}" "${venv_dir}"
-  "${uv_bin}" pip install --python "${venv_python}" numpy h5py torch keras onnx onnxruntime onnxscript
+  "${uv_bin}" pip install --python "${venv_python}" \
+    numpy h5py torch keras tensorflow tf2onnx onnx onnxruntime onnxscript
 fi
 
 rm -f "${venv_dir}/.gitignore"

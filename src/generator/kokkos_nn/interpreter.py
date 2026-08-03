@@ -50,6 +50,8 @@ def _unary(name: str, value: np.ndarray, attributes: dict[str, object] | None = 
         return np.log(value)
     if name == "Sqrt":
         return np.sqrt(value)
+    if name == "Reciprocal":
+        return np.reciprocal(value)
     raise CompilerError(f"interpreter has no unary implementation for {name}")
 
 
@@ -93,7 +95,7 @@ def run_sample(graph: Graph, sample: np.ndarray) -> np.ndarray:
         if node.op in {"Add", "Div", "Max", "Min", "Mul", "Pow", "Sub"}:
             result = _binary(node.op, inputs[0], inputs[1], output_size)
         elif node.op in {"Abs", "Elu", "Exp", "Gelu", "HardSigmoid", "HardSwish", "LeakyRelu", "Log", "Mish",
-                          "Neg", "Relu", "Sigmoid", "Silu", "Softplus", "Sqrt", "Tanh"}:
+                          "Neg", "Reciprocal", "Relu", "Sigmoid", "Silu", "Softplus", "Sqrt", "Tanh"}:
             result = _unary(node.op, inputs[0], node.attributes)
         elif node.op == "Clip":
             minimum = inputs[1].item() if len(inputs) > 1 else node.attributes.get("min")

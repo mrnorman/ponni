@@ -15,7 +15,7 @@ ACTIVATIONS = {
     "Softplus", "Tanh",
 }
 ELEMENTWISE = {"Add", "Div", "Max", "Min", "Mul", "Pow", "Sub"}
-UNARY = ACTIVATIONS | {"Abs", "Exp", "Log", "Neg", "Sqrt"}
+UNARY = ACTIVATIONS | {"Abs", "Exp", "Log", "Neg", "Reciprocal", "Sqrt"}
 
 
 def _constant(graph: Graph, tensor_id: int) -> np.ndarray | None:
@@ -429,7 +429,7 @@ def fuse_elementwise_chains(graph: Graph) -> bool:
         final_output = node.outputs[0]
         while len(graph.tensors[final_output].consumers) == 1:
             consumer = graph.node_by_id(graph.tensors[final_output].consumers[0])
-            if consumer.op not in ELEMENTWISE:
+            if consumer.id in remove or consumer.op not in ELEMENTWISE:
                 break
             external = [tensor_id for tensor_id in consumer.inputs if tensor_id != final_output]
             if len(external) != 1:

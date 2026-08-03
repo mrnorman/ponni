@@ -622,6 +622,30 @@ class CompilerTests(unittest.TestCase):
             _, unfused, _ = load_and_optimize(model, {"elementwise-chain-fusion"})
             self.assertEqual([node.op for node in unfused.nodes], ["Mul", "Add"])
 
+    def test_converging_elementwise_branches_are_owned_by_only_one_fused_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            constants = [
+                numpy_helper.from_array(np.array(value, dtype=np.float32), name)
+                for name, value in (("shared_scale", 0.5), ("left_scale", 2.0), ("right_scale", -0.25))
+            ]
+            nodes = [
+                helper.make_node("Mul", ["input", "shared_scale"], ["shared"]),
+                helper.make_node("Mul", ["shared", "left_scale"], ["left"]),
+                helper.make_node("Mul", ["shared", "right_scale"], ["right"]),
+                helper.make_node("Add", ["left", "right"], ["output"]),
+            ]
+            model = _save_model(root / "converging.onnx", nodes, constants, output_shape=(4, "batch"))
+            original, optimized, _ = load_and_optimize(model)
+            self.assertEqual([node.op for node in optimized.nodes].count("ElementwiseChain"), 1)
+            for tensor in optimized.tensors.values():
+                if tensor.is_constant or tensor.is_input:
+                    continue
+                if tensor.consumers or tensor.is_output:
+                    self.assertIsNotNone(tensor.producer, tensor.name)
+            values = np.random.default_rng(71).standard_normal((4, 7)).astype(np.float32)
+            np.testing.assert_allclose(run_graph(optimized, values), run_graph(original, values), rtol=0, atol=0)
+
     def test_dead_node_elimination(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

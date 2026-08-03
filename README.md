@@ -85,6 +85,8 @@ During the **make phase** (not configure), unit test dependencies are prepared w
   ahead-of-time model generation:
 	- `torch`
 	- `keras`
+	- `tensorflow`
+	- `tf2onnx`
 	- `numpy`
 	- `h5py`
 	- `onnx`

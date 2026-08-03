@@ -36,7 +36,7 @@ add_custom_command(
 	DEPENDS ${PONNI_UV_PATH_FILE}
 	DEPENDS ${CMAKE_SOURCE_DIR}/ensure_python_env.sh
 	COMMAND ${CMAKE_COMMAND} -E touch ${PONNI_TEST_PYTHON_ENV_DIR}/.ready
-	COMMENT "Ensuring Python test environment (uv + CPU torch + keras)"
+	COMMENT "Ensuring Python environment for framework export and unit tests"
 	VERBATIM
 )
 

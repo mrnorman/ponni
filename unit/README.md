@@ -52,8 +52,8 @@ Build-time behavior:
 - `uv` is resolved during the **make phase**.
 - If `uv` is missing, it is installed in the build tree at `unit/build/uv_env`.
 - A local venv is created in `unit/build/python_env`.
-- Python dependencies are installed into that venv: `torch`, `keras`, `numpy`, `h5py`, `onnx`, `onnxruntime`, and
-  `onnxscript`.
+- Python dependencies are installed into that venv: `torch`, `keras`, `tensorflow`, `tf2onnx`, `numpy`, `h5py`,
+  `onnx`, `onnxruntime`, and `onnxscript`.
 - Generator scripts produce HDF5 files in each test's build directory.
 
 This workflow keeps uv and Python dependencies inside `ponni/unit/build` and does not install files under `~/.local`.
@@ -62,8 +62,10 @@ No Python package installation is performed during CMake configure.
 
 ## Ahead-of-time generator tests
 
-The build exports deterministic shallow MLP/residual examples plus depth-10, ResNet, DenseNet, branched, and
-operator-zoo functionality models, compiles them into Kokkos headers, and builds
+The build exports deterministic PyTorch shallow MLP/residual examples plus depth-10, ResNet, DenseNet, branched,
+and operator-zoo functionality models. It also exports a Keras MLP and normalization pipeline through
+`Model.export(format="onnx")` and a pure TensorFlow residual module through `tf2onnx`. All are compiled into Kokkos
+headers, and the build creates
 `generator_integration` and `generator_benchmark`. Run the focused tests and benchmark with:
 
 ```bash
@@ -72,7 +74,11 @@ ctest -V -R generator
 ./generator/generator_benchmark generator/generated/mlp_generated/weights.bin
 ```
 
-`generator_python_test` covers importer diagnostics, canonicalization, fusion, generalized dense-chain scheduling,
+`generator_python_test` covers PyTorch, Keras, and TensorFlow ONNX interchange; Keras no-bias dense layers,
+branching, concatenation, residuals, direct activation attributes, decomposed normalization, and the currently
+unsupported Boolean-select ELU spelling; TensorFlow transposed constant weights,
+`bias_add`, reshape, shared branches, and unsupported-op diagnostics; importer diagnostics;
+canonicalization; fusion; generalized dense-chain scheduling;
 bounded branch recomputation, liveness/storage reuse, weight
 validation, unfused-versus-optimized IR numerics, and ONNX Runtime comparisons for expanded activations,
 normalization, softmax/reduction, and math operators. `generator_integration_test` runs generated batched `DeviceSpace`

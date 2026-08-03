@@ -10,6 +10,9 @@ set(PONNI_GENERATOR_MODELS
     ${PONNI_GENERATOR_BUILD_DIR}/densenet.onnx
     ${PONNI_GENERATOR_BUILD_DIR}/branching.onnx
     ${PONNI_GENERATOR_BUILD_DIR}/operator_zoo.onnx
+    ${PONNI_GENERATOR_BUILD_DIR}/keras_mlp.onnx
+    ${PONNI_GENERATOR_BUILD_DIR}/keras_normalization.onnx
+    ${PONNI_GENERATOR_BUILD_DIR}/tensorflow_residual.onnx
     ${PONNI_GENERATOR_BUILD_DIR}/mlp_reference.txt
     ${PONNI_GENERATOR_BUILD_DIR}/residual_reference.txt
     ${PONNI_GENERATOR_BUILD_DIR}/deep10_reference.txt
@@ -17,16 +20,26 @@ set(PONNI_GENERATOR_MODELS
     ${PONNI_GENERATOR_BUILD_DIR}/densenet_reference.txt
     ${PONNI_GENERATOR_BUILD_DIR}/branching_reference.txt
     ${PONNI_GENERATOR_BUILD_DIR}/operator_zoo_reference.txt
-    ${PONNI_GENERATOR_BUILD_DIR}/export_report.json)
+    ${PONNI_GENERATOR_BUILD_DIR}/keras_mlp_reference.txt
+    ${PONNI_GENERATOR_BUILD_DIR}/keras_normalization_reference.txt
+    ${PONNI_GENERATOR_BUILD_DIR}/tensorflow_residual_reference.txt
+    ${PONNI_GENERATOR_BUILD_DIR}/export_report.json
+    ${PONNI_GENERATOR_BUILD_DIR}/framework_export_report.json)
 
 add_custom_command(
   OUTPUT ${PONNI_GENERATOR_MODELS}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${PONNI_GENERATOR_BUILD_DIR}
   COMMAND ${PONNI_GENERATOR_ENV} ${PONNI_TEST_PYTHON_EXECUTABLE}
           ${PONNI_GENERATOR_SOURCE_DIR}/examples/export_models.py --output-dir ${PONNI_GENERATOR_BUILD_DIR}
+  COMMAND ${CMAKE_COMMAND} -E env TF_CPP_MIN_LOG_LEVEL=2 CUDA_VISIBLE_DEVICES=-1
+          PYTHONPATH=${PONNI_GENERATOR_SOURCE_DIR} ${PONNI_TEST_PYTHON_EXECUTABLE}
+          ${PONNI_GENERATOR_SOURCE_DIR}/examples/export_framework_models.py
+          --output-dir ${PONNI_GENERATOR_BUILD_DIR}
   DEPENDS ${PONNI_GENERATOR_SOURCE_DIR}/examples/export_models.py
+          ${PONNI_GENERATOR_SOURCE_DIR}/examples/export_framework_models.py
           ${PONNI_GENERATOR_SOURCE_DIR}/kokkos_nn/export.py
-  COMMENT "Exporting PONNI generator PyTorch examples to ONNX"
+          ${PONNI_GENERATOR_SOURCE_DIR}/kokkos_nn/framework_export.py
+  COMMENT "Exporting PONNI generator PyTorch, Keras, and TensorFlow examples to ONNX"
   VERBATIM)
 
 set(PONNI_MLP_DIR ${PONNI_GENERATOR_BUILD_DIR}/mlp_generated)
@@ -36,6 +49,9 @@ set(PONNI_RESNET10_DIR ${PONNI_GENERATOR_BUILD_DIR}/resnet10_generated)
 set(PONNI_DENSENET_DIR ${PONNI_GENERATOR_BUILD_DIR}/densenet_generated)
 set(PONNI_BRANCHING_DIR ${PONNI_GENERATOR_BUILD_DIR}/branching_generated)
 set(PONNI_OPERATOR_ZOO_DIR ${PONNI_GENERATOR_BUILD_DIR}/operator_zoo_generated)
+set(PONNI_KERAS_DIR ${PONNI_GENERATOR_BUILD_DIR}/keras_generated)
+set(PONNI_KERAS_NORMALIZATION_DIR ${PONNI_GENERATOR_BUILD_DIR}/keras_normalization_generated)
+set(PONNI_TENSORFLOW_DIR ${PONNI_GENERATOR_BUILD_DIR}/tensorflow_generated)
 set(PONNI_GENERATED_OUTPUTS
     ${PONNI_MLP_DIR}/MlpModel.hpp
     ${PONNI_MLP_DIR}/weights.bin
@@ -58,7 +74,16 @@ set(PONNI_GENERATED_OUTPUTS
 list(APPEND PONNI_GENERATED_OUTPUTS
     ${PONNI_OPERATOR_ZOO_DIR}/OperatorZooModel.hpp
     ${PONNI_OPERATOR_ZOO_DIR}/weights.bin
-    ${PONNI_OPERATOR_ZOO_DIR}/optimization_report.json)
+    ${PONNI_OPERATOR_ZOO_DIR}/optimization_report.json
+    ${PONNI_KERAS_DIR}/KerasModel.hpp
+    ${PONNI_KERAS_DIR}/weights.bin
+    ${PONNI_KERAS_DIR}/optimization_report.json
+    ${PONNI_KERAS_NORMALIZATION_DIR}/KerasNormalizationModel.hpp
+    ${PONNI_KERAS_NORMALIZATION_DIR}/weights.bin
+    ${PONNI_KERAS_NORMALIZATION_DIR}/optimization_report.json
+    ${PONNI_TENSORFLOW_DIR}/TensorFlowModel.hpp
+    ${PONNI_TENSORFLOW_DIR}/weights.bin
+    ${PONNI_TENSORFLOW_DIR}/optimization_report.json)
 
 add_custom_command(
   OUTPUT ${PONNI_GENERATED_OUTPUTS}
@@ -83,6 +108,16 @@ add_custom_command(
   COMMAND ${PONNI_GENERATOR_ENV} ${PONNI_TEST_PYTHON_EXECUTABLE} -m kokkos_nn compile
           ${PONNI_GENERATOR_BUILD_DIR}/operator_zoo.onnx --output-dir ${PONNI_OPERATOR_ZOO_DIR}
           --strategy auto --model-name OperatorZooModel
+  COMMAND ${PONNI_GENERATOR_ENV} ${PONNI_TEST_PYTHON_EXECUTABLE} -m kokkos_nn compile
+          ${PONNI_GENERATOR_BUILD_DIR}/keras_mlp.onnx --output-dir ${PONNI_KERAS_DIR}
+          --strategy auto --model-name KerasModel
+  COMMAND ${PONNI_GENERATOR_ENV} ${PONNI_TEST_PYTHON_EXECUTABLE} -m kokkos_nn compile
+          ${PONNI_GENERATOR_BUILD_DIR}/keras_normalization.onnx
+          --output-dir ${PONNI_KERAS_NORMALIZATION_DIR}
+          --strategy auto --model-name KerasNormalizationModel
+  COMMAND ${PONNI_GENERATOR_ENV} ${PONNI_TEST_PYTHON_EXECUTABLE} -m kokkos_nn compile
+          ${PONNI_GENERATOR_BUILD_DIR}/tensorflow_residual.onnx --output-dir ${PONNI_TENSORFLOW_DIR}
+          --strategy auto --model-name TensorFlowModel
   DEPENDS ${PONNI_GENERATOR_MODELS}
           ${PONNI_GENERATOR_SOURCE_DIR}/kokkos_nn/compiler.py
           ${PONNI_GENERATOR_SOURCE_DIR}/kokkos_nn/emitter.py
@@ -127,6 +162,20 @@ add_test(
           ${PONNI_DENSENET_DIR}/weights.bin ${PONNI_GENERATOR_BUILD_DIR}/densenet_reference.txt
           ${PONNI_BRANCHING_DIR}/weights.bin ${PONNI_GENERATOR_BUILD_DIR}/branching_reference.txt
           ${PONNI_OPERATOR_ZOO_DIR}/weights.bin ${PONNI_GENERATOR_BUILD_DIR}/operator_zoo_reference.txt)
+
+add_executable(generator_framework_integration ${PONNI_GENERATOR_SOURCE_DIR}/tests/test_framework_generated.cpp)
+add_dependencies(generator_framework_integration generator_model_generation)
+target_include_directories(generator_framework_integration PRIVATE
+  ${PONNI_KERAS_DIR} ${PONNI_KERAS_NORMALIZATION_DIR} ${PONNI_TENSORFLOW_DIR})
+target_link_libraries(generator_framework_integration ponni Kokkos::kokkos ${PONNI_LINK_FLAGS})
+target_compile_options(generator_framework_integration PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${PONNI_CXX_FLAGS}>)
+add_test(
+  NAME generator_framework_integration_test
+  COMMAND generator_framework_integration
+          ${PONNI_KERAS_DIR}/weights.bin ${PONNI_GENERATOR_BUILD_DIR}/keras_mlp_reference.txt
+          ${PONNI_KERAS_NORMALIZATION_DIR}/weights.bin
+          ${PONNI_GENERATOR_BUILD_DIR}/keras_normalization_reference.txt
+          ${PONNI_TENSORFLOW_DIR}/weights.bin ${PONNI_GENERATOR_BUILD_DIR}/tensorflow_residual_reference.txt)
 add_test(
   NAME generator_structure_test
   COMMAND ${PONNI_TEST_PYTHON_EXECUTABLE} ${PONNI_GENERATOR_SOURCE_DIR}/tests/check_functionality_generation.py

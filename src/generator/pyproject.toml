@@ -7,7 +7,7 @@ name = "ponni-kokkos-nn"
 version = "0.1.0"
 description = "Ahead-of-time ONNX to Kokkos compiler for PONNI"
 requires-python = ">=3.10"
-dependencies = ["numpy", "onnx", "onnxruntime", "onnxscript", "torch"]
+dependencies = ["numpy", "onnx", "onnxruntime", "onnxscript", "torch", "keras", "tensorflow", "tf2onnx"]
 
 [project.scripts]
 kokkos-nn = "kokkos_nn.cli:main"

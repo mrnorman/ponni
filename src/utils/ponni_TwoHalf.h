@@ -133,6 +133,10 @@ public:
     return from_floats(Kokkos::sqrt(value.low()), Kokkos::sqrt(value.high()));
   }
 
+  KOKKOS_INLINE_FUNCTION static TwoHalf reciprocal(TwoHalf value) {
+    return from_floats(1.0f / value.low(), 1.0f / value.high());
+  }
+
   KOKKOS_INLINE_FUNCTION static TwoHalf pow(TwoHalf base, TwoHalf exponent) {
     return from_floats(Kokkos::pow(base.low(), exponent.low()), Kokkos::pow(base.high(), exponent.high()));
   }

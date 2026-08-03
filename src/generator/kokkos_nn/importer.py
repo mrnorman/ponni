@@ -14,12 +14,12 @@ SUPPORTED_OPS = {
     "Abs", "Add", "BatchNormalization", "Clip", "Concat", "Constant", "Div", "Elu", "Exp", "Flatten",
     "Gelu", "Gemm", "HardSigmoid", "HardSwish", "Identity", "LayerNormalization", "LeakyRelu", "Log",
     "LogSoftmax", "MatMul", "Max", "Min", "Mish", "Mul", "Neg", "Pow", "ReduceMean", "ReduceSum",
-    "Relu", "Reshape", "Sigmoid", "Softmax", "Softplus", "Sqrt", "Sub", "Tanh", "Transpose",
+    "Reciprocal", "Relu", "Reshape", "Sigmoid", "Softmax", "Softplus", "Sqrt", "Sub", "Tanh", "Transpose",
 }
 SUPPORTED_DOMAINS = {"", "ai.onnx"}
 UNARY_OPS = {
     "Abs", "Elu", "Exp", "Gelu", "HardSigmoid", "HardSwish", "LeakyRelu", "Log", "Mish", "Neg", "Relu",
-    "Sigmoid", "Softplus", "Sqrt", "Tanh",
+    "Reciprocal", "Sigmoid", "Softplus", "Sqrt", "Tanh",
 }
 BINARY_OPS = {"Add", "Div", "Max", "Min", "Mul", "Pow", "Sub"}
 

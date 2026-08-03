@@ -289,6 +289,8 @@ class CppEmitter:
         function = {"Abs": "Kokkos::abs", "Exp": "Kokkos::exp", "Log": "Kokkos::log", "Sqrt": "Kokkos::sqrt"}.get(name)
         if name == "Neg":
             return f"(-{expression})"
+        if name == "Reciprocal":
+            return f"(static_cast<Scalar>(1) / {expression})"
         if function is None:
             raise CompilerError(f"C++ emitter has no unary implementation for {name}")
         return f"{function}({expression})"
@@ -374,7 +376,8 @@ class CppEmitter:
             return f"ponni::TwoHalf::hard_sigmoid({expression}, {alpha!r}f, {beta!r}f)"
         function = {
             "Abs": "abs", "Exp": "exp", "HardSwish": "hard_swish", "Log": "log", "Mish": "mish",
-            "Relu": "relu", "Sigmoid": "sigmoid", "Silu": "silu", "Softplus": "softplus", "Sqrt": "sqrt",
+            "Reciprocal": "reciprocal", "Relu": "relu", "Sigmoid": "sigmoid", "Silu": "silu",
+            "Softplus": "softplus", "Sqrt": "sqrt",
             "Tanh": "tanh",
         }.get(name)
         if function is None:
@@ -418,7 +421,7 @@ class CppEmitter:
             lines.append("    }")
             return lines
         if node.op in {"Abs", "Elu", "Exp", "Gelu", "HardSigmoid", "HardSwish", "LeakyRelu", "Log", "Mish",
-                        "Neg", "Relu", "Sigmoid", "Silu", "Softplus", "Sqrt", "Tanh"}:
+                        "Neg", "Reciprocal", "Relu", "Sigmoid", "Silu", "Softplus", "Sqrt", "Tanh"}:
             lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
             value = self._unary(node.op, read(node.inputs[0], "i"), node.attributes)
             lines.append(f"      {write(output_id, 'i')} = {value};")
@@ -654,7 +657,7 @@ class CppEmitter:
             )
             lines.append(f"            {self._team_write(output_id, 'i')} = {value};")
         elif node.op in {"Abs", "Elu", "Exp", "Gelu", "HardSigmoid", "HardSwish", "LeakyRelu", "Log", "Mish",
-                            "Neg", "Relu", "Sigmoid", "Silu", "Softplus", "Sqrt", "Tanh"}:
+                            "Neg", "Reciprocal", "Relu", "Sigmoid", "Silu", "Softplus", "Sqrt", "Tanh"}:
             value = self._unary(node.op, self._team_read(node.inputs[0], "i"), node.attributes)
             lines.append(f"            {self._team_write(output_id, 'i')} = {value};")
         elif node.op == "Clip":
@@ -790,7 +793,7 @@ class CppEmitter:
             lines.append("    }")
             return lines
         if node.op in {"Abs", "Elu", "Exp", "Gelu", "HardSigmoid", "HardSwish", "LeakyRelu", "Log", "Mish",
-                        "Neg", "Relu", "Sigmoid", "Silu", "Softplus", "Sqrt", "Tanh"}:
+                        "Neg", "Reciprocal", "Relu", "Sigmoid", "Silu", "Softplus", "Sqrt", "Tanh"}:
             lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
             value = self._half_unary(node.op, self._half_read(node.inputs[0], "i"), node.attributes)
             lines.append(f"      {self._half_write(output_id, 'i')} = {value};")

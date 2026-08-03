@@ -10,8 +10,8 @@ See [PERFORMANCE.md](PERFORMANCE.md) for the current optimized single-precision 
 ## Architecture
 
 ```text
-PyTorch nn.Module
-  -> torch.onnx.export(dynamo=True, optimize=True, verify=True)
+PyTorch nn.Module / Keras Model / TensorFlow Module
+  -> torch.onnx.export / Keras ONNX export / tf2onnx
   -> checked and shape-inferred ONNX
   -> framework-neutral per-sample IR
   -> deterministic canonicalization and fusion passes
@@ -27,11 +27,13 @@ IR. No device-side graph interpreter or virtual dispatch is generated.
 
 ## Capability summary
 
-The compiler targets feature-vector inference DAGs, not arbitrary PyTorch programs. A user supplies an evaluated
-`torch.nn.Module` and its input width to `kokkos_nn.export.export_module()`. The exporter wraps PyTorch's usual
-`(batch,features)` convention with explicit boundary transposes and writes an ONNX model whose public contract is
-`(features,batch)`. ONNX is then validated, converted to a per-sample IR, optimized, statically scheduled, and emitted
-as C++; PyTorch, ONNX, ONNX Runtime, and Python are absent from the inference executable.
+The compiler targets feature-vector inference DAGs, not arbitrary framework programs. PyTorch users supply an
+evaluated `torch.nn.Module` and its input width to `kokkos_nn.export.export_module()`. Keras 3 models can export ONNX
+directly, and TensorFlow modules can use tf2onnx; `kokkos_nn.framework_export` contains tested reference exporters for
+both paths. Each exporter makes the public `(features,batch)` boundary explicit even when framework-native dense
+layers use `(batch,features)`. ONNX is then validated, converted to a per-sample IR, optimized, statically scheduled,
+and emitted as C++; PyTorch, Keras, TensorFlow, ONNX, ONNX Runtime, and Python are absent from the inference
+executable.
 
 Currently useful network families include:
 
@@ -79,6 +81,7 @@ pip install -r requirements.txt
 export PYTHONPATH=$PWD
 
 python examples/export_models.py --output-dir /tmp/ponni_models
+python examples/export_framework_models.py --output-dir /tmp/ponni_models
 python -m kokkos_nn validate /tmp/ponni_models/mlp.onnx
 python -m kokkos_nn compile /tmp/ponni_models/mlp.onnx \
   --output-dir /tmp/ponni_models/mlp_generated \
@@ -111,13 +114,24 @@ The CUDA-only scale test uses `I -> I -> I -> 3` networks for `I = 4, 8, 16, 32,
 100,000, and 1,000,000. It reports all batched strategies, checks their outputs, and uses a 1 GiB PONNI device pool.
 It is not registered when Kokkos CUDA is disabled.
 
-The example exporter creates `Linear -> Tanh -> Linear`, a shallow residual MLP, a varying-width depth-10 MLP, a
+The PyTorch example exporter creates `Linear -> Tanh -> Linear`, a shallow residual MLP, a varying-width depth-10 MLP, a
 ten-dense/five-block ResNet, a concatenative DenseNet, a shared-trunk two-branch DAG that exercises bounded
-recomputation, and an ONNX operator zoo. The compact
+recomputation, and an ONNX operator zoo. The framework exporter additionally creates a Keras dense MLP, a Keras
+BatchNorm/LayerNorm/Softmax pipeline, and a pure TensorFlow residual MLP. It verifies each framework result against
+ONNX Runtime and passes all three through the same importer, fusion, storage-planning, and C++ generation path. The compact
 functionality models
 use batches 1, 2, 3, 7, and 11; the original examples retain batches 1, 2, 7, 32, and 67. Export compares PyTorch and
 ONNX Runtime and writes reproducible references. C++ integration checks SArray, direct View batch, hierarchical tile
 1 and default tile, packed half2, and Tensor Core inference whenever the graph is eligible.
+
+Focused framework tests target exporter representation differences rather than reproducing every PyTorch topology.
+They cover Keras Functional branching, no-bias dense layers, feature concatenation, residual activation, and
+decomposed normalization; TensorFlow `transpose_b` constant weights, `tf.nn.bias_add`, compile-time reshape, shared
+branches, and actionable rejection of an exported unsupported op. Keras LayerNormalization currently exports
+`Sqrt -> Reciprocal` plus reductions and elementwise operations, all of which are compiled directly. Keras 3's ELU
+export currently adds Boolean `Greater/Not/Cast` selection around `Elu`; Boolean tensors and `Where`-style selection
+are outside the present floating-point IR, so that spelling is rejected explicitly even though a direct ONNX `Elu`
+node is supported.
 
 ## Supported ONNX scope
 
@@ -126,7 +140,7 @@ Supported standard-domain operations are:
 - dense/layout: `Gemm`, constant-right-hand-side `MatMul`, static feature-axis `Concat`, `Identity`, order-preserving
   static `Reshape`/`Flatten`, and batch-axis or constant-weight `Transpose`;
 - arithmetic: binary `Add`, `Mul`, `Sub`, `Div`, `Min`, `Max`, and `Pow`; scalar-bound `Clip`; and unary `Abs`,
-  `Neg`, `Exp`, `Log`, and `Sqrt`;
+  `Neg`, `Exp`, `Log`, `Sqrt`, and `Reciprocal`;
 - activations: `Tanh`, `Relu`, `Sigmoid`, `LeakyRelu`, `Elu`, `Gelu`, `Softplus`, `HardSigmoid`, `HardSwish`, and
   `Mish`; `Sigmoid(x) -> Mul(x, ...)` is canonicalized to scalar `Silu`;
 - inference-mode `BatchNormalization`, feature-axis `LayerNormalization`, stable `Softmax` and `LogSoftmax`;
@@ -138,9 +152,9 @@ compile-time constants, and BatchNormalization training mode is rejected. `Gemm`
 Weights are normalized to canonical `(num_outputs, num_inputs)` order before serialization, so inference never
 transposes weights.
 
-The importer accepts the ONNX opset selected by the installed modern PyTorch exporter rather than pinning an obsolete
-opset. It accepts only the standard `ai.onnx` domain. Operators are checked by semantics, not by names assigned by
-PyTorch.
+The importer accepts compatible modern opsets produced by the installed PyTorch, Keras, and tf2onnx exporters rather
+than pinning an obsolete opset. It accepts only nodes in the standard `ai.onnx` domain. Operators are checked by
+semantics, not by framework-assigned names.
 
 Exactly one floating-point input and output are currently supported. Both are logically rank two:
 
@@ -149,10 +163,12 @@ input  = (num_inputs,  batch_size)
 output = (num_outputs, batch_size)
 ```
 
-The exporter uses explicit boundary transposes around PyTorch's batch-major `Linear` convention and attaches ONNX
-metadata describing the feature-major boundary. The batch dimension must be symbolic; every non-batch dimension must
-be positive and static. The canonical IR removes the batch dimension and describes one sample. Moving only the batch
-axis, flattening, and same-element-count reshapes disappear at compile time.
+The tested framework exporters use explicit boundary transposes around batch-major dense conventions and attach ONNX
+metadata describing the feature-major boundary. Because Keras and tf2onnx may invent exporter-specific symbolic
+dimension names, the boundary annotation normalizes only the declared input/output feature count and batch symbol;
+ONNX validation and independent static-shape checks still validate the graph. The batch dimension must be symbolic;
+every non-batch dimension must be positive and static. The canonical IR removes the batch dimension and describes one
+sample. Moving only the batch axis, flattening, and same-element-count reshapes disappear at compile time.
 
 The compiler rejects loops, conditions, sequences, strings, sparse tensors, random/stateful/training operations,
 custom domains, runtime-dependent shapes, nonconstant dense weights, multiple dynamic dimensions, and arbitrary
