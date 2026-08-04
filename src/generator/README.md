@@ -91,7 +91,7 @@ in-place inference is not part of the generated contract.
 
 ## Installation and end-to-end example
 
-The normal repository build prepares these dependencies in `unit/build/python_env`. For a standalone environment:
+The normal repository build prepares these dependencies in `unit/build/python_cpu_env`. For a standalone environment:
 
 ```bash
 cd src/generator

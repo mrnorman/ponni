@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from .errors import CompilerError
+from .onnx_reference import run_onnx_reference
 
 
 @dataclass
@@ -19,11 +20,10 @@ class ExportResult:
 def _dependencies():
     try:
         import onnx
-        import onnxruntime as ort
         import torch
     except ImportError as exc:
-        raise CompilerError("PyTorch export requires torch, onnx, onnxscript, and onnxruntime") from exc
-    return torch, onnx, ort
+        raise CompilerError("PyTorch export requires torch, onnx, onnxscript, and CPU onnxruntime") from exc
+    return torch, onnx
 
 
 def _set_dimension(dimension, value: int | str) -> None:
@@ -57,7 +57,7 @@ def _normalize_feature_batch_boundaries(model, num_inputs: int, exporter: str) -
 
 def export_module(module, num_inputs: int, output_dir: str | Path, name: str,
                   batch_sizes: tuple[int, ...] = (1, 2, 7, 32, 67), seed: int = 8128) -> ExportResult:
-    torch, onnx, ort = _dependencies()
+    torch, onnx = _dependencies()
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     model_path = output_path / f"{name}.onnx"
@@ -104,7 +104,6 @@ def export_module(module, num_inputs: int, output_dir: str | Path, name: str,
     onnx.save(model, model_path)
     onnx.checker.check_model(model)
 
-    session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
     cases: list[tuple[np.ndarray, np.ndarray]] = []
     maximum_absolute = 0.0
     maximum_relative = 0.0
@@ -112,7 +111,7 @@ def export_module(module, num_inputs: int, output_dir: str | Path, name: str,
         values = torch.randn((num_inputs, batch_size), generator=generator, dtype=torch.float32)
         with torch.no_grad():
             torch_output = wrapped(values).cpu().numpy()
-        onnx_output = session.run(["output"], {"input": values.cpu().numpy()})[0]
+        onnx_output = run_onnx_reference(model_path, ["output"], {"input": values.cpu().numpy()})[0]
         absolute = np.abs(torch_output - onnx_output)
         relative = absolute / np.maximum(np.abs(torch_output), 1e-7)
         maximum_absolute = max(maximum_absolute, float(absolute.max(initial=0.0)))
@@ -136,7 +135,7 @@ def export_module(module, num_inputs: int, output_dir: str | Path, name: str,
 
 
 def make_example_models():
-    torch, _, _ = _dependencies()
+    torch, _ = _dependencies()
     torch.manual_seed(20260802)
 
     class MLP(torch.nn.Module):
@@ -163,7 +162,7 @@ def make_example_models():
 
 def make_functionality_models():
     """Return small deterministic DAGs that stress depth, liveness, branching, and activation diversity."""
-    torch, _, _ = _dependencies()
+    torch, _ = _dependencies()
     torch.manual_seed(20260803)
 
     def activate(value, kind: int):
@@ -241,7 +240,7 @@ def make_functionality_models():
 def export_operator_zoo(output_dir: str | Path, batch_sizes: tuple[int, ...] = (1, 2, 3, 7, 11),
                         seed: int = 20260804) -> ExportResult:
     """Create a deterministic ONNX fixture covering the broader scalar/reduction operator families."""
-    _, onnx, ort = _dependencies()
+    _, onnx = _dependencies()
     from onnx import TensorProto, helper, numpy_helper
 
     output_path = Path(output_dir)
@@ -397,11 +396,10 @@ def export_operator_zoo(output_dir: str | Path, batch_sizes: tuple[int, ...] = (
     onnx.checker.check_model(model)
     onnx.save(model, model_path)
 
-    session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
     cases: list[tuple[np.ndarray, np.ndarray]] = []
     for batch_size in batch_sizes:
         inputs = rng.standard_normal((width, batch_size)).astype(np.float32)
-        outputs = session.run(["output"], {"input": inputs})[0]
+        outputs = run_onnx_reference(model_path, ["output"], {"input": inputs})[0]
         cases.append((inputs, outputs))
     with reference_path.open("w") as stream:
         stream.write(f"{len(cases)} {width} {width}\n")

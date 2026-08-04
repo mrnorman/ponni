@@ -9,7 +9,6 @@ os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
 import onnx
-import onnxruntime as ort
 import numpy as np
 import keras
 import tensorflow as tf
@@ -24,13 +23,16 @@ from kokkos_nn.framework_export import (
     export_tensorflow_model,
 )
 from kokkos_nn.importer import import_onnx
+from kokkos_nn.onnx_reference import run_onnx_reference
 
 
 class FrameworkExportTests(unittest.TestCase):
     def _assert_onnx_matches(self, model_path: Path, inputs: np.ndarray, expected: np.ndarray) -> None:
-        session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
-        actual = session.run(
-            [session.get_outputs()[0].name], {session.get_inputs()[0].name: inputs.astype(np.float32)}
+        model = onnx.load(model_path)
+        input_name = model.graph.input[0].name
+        output_name = model.graph.output[0].name
+        actual = run_onnx_reference(
+            model_path, [output_name], {input_name: inputs.astype(np.float32)}
         )[0]
         np.testing.assert_allclose(actual, expected, rtol=2.e-5, atol=2.e-6)
 

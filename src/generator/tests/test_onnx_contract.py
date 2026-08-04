@@ -13,6 +13,7 @@ from kokkos_nn.errors import CompilerError
 from kokkos_nn.export import _normalize_feature_batch_boundaries
 from kokkos_nn.importer import import_onnx
 from kokkos_nn.interpreter import run_graph
+from kokkos_nn.onnx_reference import run_onnx_reference
 
 
 def _metadata(model) -> None:
@@ -85,8 +86,6 @@ class OnnxContractTests(unittest.TestCase):
                     import_onnx(path)
 
     def test_clip_optional_input_hole_preserves_maximum_semantics(self) -> None:
-        import onnxruntime as ort
-
         with tempfile.TemporaryDirectory() as directory:
             maximum = numpy_helper.from_array(np.array(0.25, dtype=np.float32), "maximum")
             path = _save(
@@ -99,9 +98,7 @@ class OnnxContractTests(unittest.TestCase):
             self.assertNotIn("min", graph.nodes[0].attributes)
             self.assertEqual(graph.nodes[0].attributes["max"], 0.25)
             values = np.array([[-1.0, 1.0], [0.5, -0.5], [2.0, 0.1], [-3.0, 3.0]], dtype=np.float32)
-            expected = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"]).run(
-                ["output"], {"input": values}
-            )[0]
+            expected = run_onnx_reference(path, ["output"], {"input": values})[0]
             np.testing.assert_array_equal(run_graph(graph, values), expected)
 
     def test_reduction_axes_normalize_across_schema_versions(self) -> None:

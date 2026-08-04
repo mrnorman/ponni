@@ -14,6 +14,7 @@ from kokkos_nn.emitter import half2_accumulator_heuristic
 from kokkos_nn.errors import CompilerError
 from kokkos_nn.export import export_operator_zoo
 from kokkos_nn.interpreter import run_graph
+from kokkos_nn.onnx_reference import run_onnx_reference
 from kokkos_nn.planner import plan_storage
 from kokkos_nn.scheduler import schedule_dense_chains
 from kokkos_nn.weights import validate_weight_blob
@@ -86,8 +87,6 @@ class CompilerTests(unittest.TestCase):
         self.assertEqual(half2_accumulator_heuristic(128, 8), 0)
 
     def test_operator_zoo_matches_onnx_runtime_before_and_after_optimization(self) -> None:
-        import onnxruntime as ort
-
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             exported = export_operator_zoo(root)
@@ -108,9 +107,7 @@ class CompilerTests(unittest.TestCase):
             self.assertTrue(original_only <= set(original.metadata["operator_counts"]))
             self.assertNotIn("Sigmoid", operations)
             values = np.random.default_rng(44).standard_normal((8, 13)).astype(np.float32)
-            reference = ort.InferenceSession(
-                str(exported.model_path), providers=["CPUExecutionProvider"]
-            ).run(["output"], {"input": values})[0]
+            reference = run_onnx_reference(exported.model_path, ["output"], {"input": values})[0]
             np.testing.assert_allclose(run_graph(original, values), reference, rtol=2e-6, atol=2e-6)
             np.testing.assert_allclose(run_graph(optimized, values), reference, rtol=2e-6, atol=2e-6)
 

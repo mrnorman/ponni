@@ -39,27 +39,18 @@ endif()
 add_subdirectory($ENV{KOKKOS_HOME} ./kokkos )
 add_subdirectory(..                ./ponni  )
 
-if (Kokkos_ENABLE_CUDA)
-	set(PONNI_TEST_FRAMEWORK_BACKEND CUDA)
-elseif (Kokkos_ENABLE_HIP)
-	set(PONNI_TEST_FRAMEWORK_BACKEND HIP)
-elseif (Kokkos_ENABLE_SYCL)
-	set(PONNI_TEST_FRAMEWORK_BACKEND SYCL)
-else()
-	set(PONNI_TEST_FRAMEWORK_BACKEND CPU)
-endif()
+# Frameworks only export and validate backend-neutral ONNX. Generated C++ is
+# tested with the configured Kokkos backend independently.
+set(PONNI_TEST_FRAMEWORK_BACKEND CPU)
 
 if (PONNI_PYTHON_VERSION STREQUAL "")
-	if (PONNI_TEST_FRAMEWORK_BACKEND STREQUAL "HIP")
-		# AMD's ROCm 6.2 TensorFlow wheel is published for CPython 3.10.
-		set(PONNI_PYTHON_VERSION "3.10")
-	else()
-		set(PONNI_PYTHON_VERSION "3.11")
-	endif()
+	set(PONNI_PYTHON_VERSION "3.11")
+elseif (PONNI_PYTHON_VERSION VERSION_LESS "3.11")
+	message(FATAL_ERROR "PONNI generator tests require Python 3.11 or newer for current CPU ONNX Runtime")
 endif()
 
 set(PONNI_TEST_PYTHON_INSTALL_DIR "${PONNI_UV_ENV_DIR}/python_install")
-set(PONNI_TEST_PYTHON_ENV_DIR "${PONNI_UNIT_BUILD_DIR}/python_env")
+set(PONNI_TEST_PYTHON_ENV_DIR "${PONNI_UNIT_BUILD_DIR}/python_cpu_env")
 set(PONNI_TEST_PYTHON_EXECUTABLE "${PONNI_TEST_PYTHON_ENV_DIR}/bin/python")
 
 add_custom_command(

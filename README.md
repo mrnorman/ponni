@@ -83,7 +83,7 @@ During the **make phase** (not configure), unit test dependencies are prepared w
 
 - CMake finds Python 3.x with `find_package(Python3 ...)`.
 - `uv` is resolved and installed locally in the build tree at `unit/build/uv_env` (no install into `~/.local`).
-- The Python virtual environment is created in `unit/build/python_env` and installs packages used by tests and
+- The CPU-only Python virtual environment is created in `unit/build/python_cpu_env` and installs packages used by tests and
   ahead-of-time model generation:
 	- `torch`
 	- `keras`

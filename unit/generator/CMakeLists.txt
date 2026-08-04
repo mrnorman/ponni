@@ -44,6 +44,7 @@ add_custom_command(
           ${PONNI_GENERATOR_SOURCE_DIR}/examples/export_framework_models.py
           ${PONNI_GENERATOR_SOURCE_DIR}/kokkos_nn/export.py
           ${PONNI_GENERATOR_SOURCE_DIR}/kokkos_nn/framework_export.py
+          ${PONNI_GENERATOR_SOURCE_DIR}/kokkos_nn/onnx_reference.py
   COMMENT "Exporting PONNI generator PyTorch, Keras, and TensorFlow examples to ONNX"
   VERBATIM)
 

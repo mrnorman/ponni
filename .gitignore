@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 
 /unit/build/python_env/
+/unit/build/python_cpu_env/
 /unit/build/uv_env/
 /unit/build/uv_path.txt
 

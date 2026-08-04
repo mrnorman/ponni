@@ -51,11 +51,13 @@ Build-time behavior:
 - Python 3.x is discovered via `find_package(Python3 ...)`.
 - `uv` is resolved during the **make phase**.
 - If `uv` is missing, it is installed in the build tree at `unit/build/uv_env`.
-- A local venv is created in `unit/build/python_env`.
+- A unified CPU-only venv is created in `unit/build/python_cpu_env`, independently of the configured Kokkos backend.
 - Python dependencies are installed into that venv: `torch`, `keras`, `tensorflow`, `tf2onnx`, `numpy`, `h5py`,
   `onnx`, `onnxruntime`, and `onnxscript`.
 - Generator scripts produce HDF5 files in each test's build directory.
 
+The environment uses Python 3.11 or newer, CPU PyTorch and TensorFlow, and `onnxruntime>=1.25,<2`. Frameworks only
+export and validate backend-neutral ONNX; CUDA/HIP correctness is exercised separately by the generated Kokkos C++.
 This workflow keeps uv and Python dependencies inside `ponni/unit/build` and does not install files under `~/.local`.
 
 No Python package installation is performed during CMake configure.

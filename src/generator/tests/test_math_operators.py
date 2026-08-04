@@ -6,11 +6,11 @@ import unittest
 
 import numpy as np
 import onnx
-import onnxruntime as ort
 from onnx import TensorProto, helper
 
 from kokkos_nn.importer import import_onnx
 from kokkos_nn.interpreter import run_graph
+from kokkos_nn.onnx_reference import run_onnx_reference
 
 
 def _unary_model(path: Path, operation: str) -> Path:
@@ -38,9 +38,7 @@ class MathOperatorTests(unittest.TestCase):
             root = Path(directory)
             for operation in ("Round", "Sign"):
                 model_path = _unary_model(root / f"{operation.lower()}.onnx", operation)
-                expected = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"]).run(
-                    ["output"], {"input": values}
-                )[0]
+                expected = run_onnx_reference(model_path, ["output"], {"input": values})[0]
                 actual = run_graph(import_onnx(model_path), values)
                 np.testing.assert_equal(actual, expected)
                 np.testing.assert_array_equal(np.signbit(actual), np.signbit(expected))

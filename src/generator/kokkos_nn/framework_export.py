@@ -6,20 +6,20 @@ import numpy as np
 
 from .errors import CompilerError
 from .export import ExportResult
+from .onnx_reference import run_onnx_reference
 
 
 def _dependencies():
     try:
         import keras
         import onnx
-        import onnxruntime as ort
         import tensorflow as tf
         import tf2onnx
     except ImportError as exc:
         raise CompilerError(
-            "Keras/TensorFlow export requires keras, tensorflow, tf2onnx, onnx, and onnxruntime"
+            "Keras/TensorFlow export requires keras, tensorflow, tf2onnx, onnx, and CPU onnxruntime"
         ) from exc
-    return keras, tf, tf2onnx, onnx, ort
+    return keras, tf, tf2onnx, onnx
 
 
 def _set_dimension(dimension, value: int | str) -> None:
@@ -32,7 +32,7 @@ def _set_dimension(dimension, value: int | str) -> None:
 
 
 def _annotate_feature_batch_model(model_path: Path, num_inputs: int, num_outputs: int, exporter: str) -> None:
-    _, _, _, onnx, _ = _dependencies()
+    _, _, _, onnx = _dependencies()
     model = onnx.load(model_path)
     if len(model.graph.input) != 1 or len(model.graph.output) != 1:
         raise CompilerError(
@@ -76,10 +76,10 @@ def _write_reference(reference_path: Path, cases: list[tuple[np.ndarray, np.ndar
 
 def _verify_and_write(model_path: Path, reference_path: Path, framework, num_inputs: int,
                       batch_sizes: tuple[int, ...], seed: int) -> ExportResult:
-    _, _, _, _, ort = _dependencies()
-    session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
-    input_name = session.get_inputs()[0].name
-    output_name = session.get_outputs()[0].name
+    _, _, _, onnx = _dependencies()
+    model = onnx.load(model_path)
+    input_name = model.graph.input[0].name
+    output_name = model.graph.output[0].name
     rng = np.random.default_rng(seed)
     cases: list[tuple[np.ndarray, np.ndarray]] = []
     maximum_absolute = 0.0
@@ -87,7 +87,7 @@ def _verify_and_write(model_path: Path, reference_path: Path, framework, num_inp
     for batch_size in batch_sizes:
         inputs = rng.standard_normal((num_inputs, batch_size)).astype(np.float32)
         expected = np.asarray(framework(inputs), dtype=np.float32)
-        actual = session.run([output_name], {input_name: inputs})[0]
+        actual = run_onnx_reference(model_path, [output_name], {input_name: inputs})[0]
         absolute = np.abs(expected - actual)
         relative = absolute / np.maximum(np.abs(expected), 1.e-7)
         maximum_absolute = max(maximum_absolute, float(absolute.max(initial=0.0)))
@@ -105,7 +105,7 @@ def _verify_and_write(model_path: Path, reference_path: Path, framework, num_inp
 
 def export_keras_model(output_dir: str | Path, name: str = "keras_mlp",
                        batch_sizes: tuple[int, ...] = (1, 2, 7, 11), seed: int = 9131) -> ExportResult:
-    keras, _, _, _, _ = _dependencies()
+    keras, _, _, _ = _dependencies()
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     model_path = output_path / f"{name}.onnx"
@@ -138,7 +138,7 @@ def export_keras_model(output_dir: str | Path, name: str = "keras_mlp",
 
 def export_tensorflow_model(output_dir: str | Path, name: str = "tensorflow_residual",
                             batch_sizes: tuple[int, ...] = (1, 2, 7, 11), seed: int = 9173) -> ExportResult:
-    _, tf, tf2onnx, _, _ = _dependencies()
+    _, tf, tf2onnx, _ = _dependencies()
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     model_path = output_path / f"{name}.onnx"
@@ -177,7 +177,7 @@ def export_tensorflow_model(output_dir: str | Path, name: str = "tensorflow_resi
 def export_keras_normalization_model(output_dir: str | Path, name: str = "keras_normalization",
                                      batch_sizes: tuple[int, ...] = (1, 2, 7, 11),
                                      seed: int = 9199) -> ExportResult:
-    keras, _, _, _, _ = _dependencies()
+    keras, _, _, _ = _dependencies()
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     model_path = output_path / f"{name}.onnx"
