@@ -7,7 +7,7 @@ Measured 2026-08-02 on `thatchroof` with `machines/thatchroof/thatchroof_gpu_fas
 the first two dense layers. Every region was warmed and fenced. The full benchmark covers `I = 4, 8, 16, 32, 64,
 128`; batches 10,000, 100,000, and 1,000,000; and hierarchical batch tiles 1, 2, 4, 8, 16, and 32.
 
-At batch 1,000,000, the four generated families are shown below; the hierarchical family is reported both at tile 1
+At batch 1,000,000, the four families available at the time of this baseline are shown below; the hierarchical family is reported both at tile 1
 and at its best measured tile:
 
 ```text
@@ -56,6 +56,48 @@ source machines/thatchroof/thatchroof_gpu_fast.env
 ./cmakescript.sh
 make -j4 generator_gpu_scale
 ctest -V -R generator_gpu_scale_test
+```
+
+## NVIDIA batch-team architecture study
+
+Measured 2026-08-04 on the same RTX 3090 fast environment with batch size 1,000,000. This study separates simple
+sequential chains from short residual blocks, one long-lived skip, and four independent branches. Each row compares
+`infer_batch` with the fastest of the 64/128/256/512/1024 fixed batch-team candidates:
+
+```text
+model             batch ms  best batch-team ms (team)  speedup  best scratch B/sample
+SeqW16D2             0.367          0.390 (128)           0.942          64
+SeqW32D2             1.372          1.364 ( 64)           1.006           0
+SeqW64D2             5.168          5.152 (128)           1.003           0
+SeqW128D2           33.310         50.198 (128)           0.664           0
+SeqW32D8             5.774          6.034 ( 64)           0.957           0
+SeqW64D8            25.700         25.328 (128)           1.015           0
+ResidualW32D4        2.722          2.794 ( 64)           0.974           0
+ResidualW64D4       16.022         15.432 (128)           1.038           0
+ResidualW32D8        7.859          7.064 (128)           1.113           0
+ResidualW64D8       43.476         30.037 (128)           1.447           0
+ResidualW128D8     193.792        187.815 (128)           1.032           0
+LongSkipW32D8        5.896          6.437 (128)           0.916           0
+LongSkipW64D8       41.772         29.569 (128)           1.413           0
+Branch4W32D2         5.487          6.436 (256)           0.853           0
+Branch4W64D2        30.630         32.406 (512)           0.945           0
+```
+
+The important result is that this did not demonstrate a shared-memory benefit. The occupancy-constrained planner
+placed workspace in scratch only for the width-16 sequential model; it filled 64 bytes per sample (4--32 KiB per
+team), and its best candidate was 5.8% slower than direct batch. Every speedup in the table used zero scratch. Those
+gains instead arise from the fixed team launch and its resulting compiler/resource behavior. Depth-eight width-64
+residual and long-skip graphs are the clearest candidates on Ampere, both favoring team size 128 and gaining about
+41--45%. Sequential graphs are essentially neutral through width 64 and lose substantially at width 128; four-branch
+graphs also lose. Team sizes 64 or 128 are normally safest, while 256 and above are architecture-specific and often
+reduce occupancy sharply.
+
+The portable CUDA/HIP CTest prints every candidate with its local bytes, scratch placement, scratch budget, timing,
+speedup, and correctness result. This is the preferred test for collecting the corresponding Frontier data:
+
+```bash
+make -j generator_batch_team_architecture_experiment
+ctest -V -R '^generator_batch_team_architecture_test$'
 ```
 
 ## Frontier MI250X ROCm baseline
@@ -112,6 +154,10 @@ Additional partials improve error but lose performance on MI250X, most sharply a
 there, so the generated cross-vendor heuristic now conservatively retains the baseline single dependency chain.
 Target-specific multi-partial policies remain available explicitly when their accuracy or performance tradeoff is
 preferred.
+
+The newer fixed batch-team family is intentionally absent from these historical tables. Its 64/128/256/512/1024
+team-size candidates and generator-planned scratch placements are included in each newly generated autotuner and need
+fresh measurements on both architectures before a default can be selected.
 
 Reproduce the Frontier run with:
 

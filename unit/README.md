@@ -84,33 +84,43 @@ validation, unfused-versus-optimized IR numerics, and ONNX Runtime comparisons f
 shape/layout glue, normalization, feature reductions, math, comparison, finite-value checks, logical selection, and
 mask-cast operators.
 `generator_integration_test` runs generated batched `DeviceSpace`
-batch-only, hierarchical tile 1/default, packed half2, embedded `SArray`, and eligible CUDA Tensor Core inference.
-Together these cover the five inference families: inline SArray, View batch, hierarchical team-neuron, raw-CUDA
-TF32 WMMA, and packed two-sample FP16. Half2 tests include the baseline single dependency chain, the generated
-per-dense heuristic, and an explicit four-partial policy; the compiler unit tests cover every accepted explicit count
+batch-only, fixed 64-thread batch-team, hierarchical tile 1/default, packed half2, and embedded `SArray` inference.
+Together these cover the five inference families: inline SArray, View batch, hierarchical team-neuron, fixed
+batch-team, and packed two-sample FP16. The GPU scale test includes baseline and explicit four-partial half2 policies;
+the compiler unit tests cover every accepted explicit count
 (`0`, `2`, `4`, `8`, `16`, and `32`) and reject other values.
 The diverse models use batches 1, 2, 3, 7, and 11; the original examples retain 1, 2, 7, 32, and 67. A separate
 structure test rejects generated input rereads, View intermediates, truncated live workspaces, and preactivation arrays,
 and requires the operator-zoo operations to survive into generated code.
 
 When CUDA or HIP is enabled, `generator_gpu_scale_test` additionally checks `I -> I -> I -> 3` networks for
-`I = 4, 8, 16, 32, 64, 128`; team batch tiles 1, 2, 4, 8, 16, and 32; and single-precision batches 10,000,
-100,000, and 1,000,000 using a 1 GiB device pool. The hierarchical loop orders batch fastest within each neuron and
-uses batch-fastest scratch. Eligible models additionally test a generated raw-CUDA WMMA TF32 kernel without Kokkos
-hierarchical-policy overhead. Use the debug machine file
+`I = 4, 8, 16, 32, 64, 128`; fixed batch-team sizes 64, 128, 256, 512, and 1024; and single-precision batches 10,000,
+100,000, and 1,000,000 using a 1 GiB device pool. Each team thread evaluates one sample serially, and live workspace
+uses the generator-selected mixture of thread-local arrays and batch-strided team scratch. Use the debug machine file
 for correctness, but use
 the target machine's optimized GPU environment for walltimes used to evaluate scheduling changes. The formatted
 summary reports
-SArray, direct View batch, hierarchical tile 1, the best hierarchical tile, Tensor Core TF32, and Kokkos-launched
-packed half2 with baseline, generated-heuristic, and explicit four-accumulator policies. The Tensor Core sweep
-measures all legal choices among 1, 2, 4, and 8 warps per CUDA block; current
-Ampere defaults select 4, 2, 2,
-4, 2, and 1 warps for I=4, 8, 16, 32, 64, and 128, respectively. Conservative cross-vendor hierarchical defaults
-use tile 32 through I=32, tile 16 at I=64, and tile 8 for wider models. The half2 heuristic uses the baseline
-single dependency chain; explicit multi-partial policies remain available for target-specific tuning or lower error.
+SArray, direct View batch, the 64-thread batch-team baseline, the best batch-team size, and Kokkos-launched
+packed half2 with baseline and explicit four-accumulator policies. Explicit multi-partial policies remain available
+for target-specific tuning or lower error.
 Sample-local
 emission deterministically selects non-overlapping dense pairs throughout deeper chains, streaming each
 selected activation into scalar output accumulators and retaining or cheaply recomputing branches as reported.
+
+`generator_batch_team_architecture_test` is the larger, portable CUDA/HIP performance experiment. At batch size
+1,000,000 it compares direct batch inference with all five fixed batch-team sizes across shallow and depth-eight
+sequential MLPs, short residual blocks, depth-eight long skips, and four-branch DAGs at widths 16 through 128. Its
+formatted output joins timing and correctness with the generated local/scratch placement and scratch budget. On a
+GPU machine, build and run only this experiment with:
+
+```bash
+make -j generator_batch_team_architecture_experiment
+ctest -V -R '^generator_batch_team_architecture_test$'
+```
+
+The models and generated reports are under
+`unit/build/generator/generated/batch_team_architectures`, allowing the same test to be configured with a CUDA
+machine file on `thatchroof` or a HIP machine file on Frontier.
 
 ## gcov coverage workflow
 

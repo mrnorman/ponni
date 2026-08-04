@@ -149,6 +149,8 @@ bool check_model(std::string const & weight_path, std::string const & reference_
                                                           test.batch_size);
     typename Model::OutputView inline_outputs("generator_inline_outputs", Model::num_outputs, test.batch_size);
     typename Model::OutputView half2_outputs("generator_half2_outputs", Model::num_outputs, test.batch_size);
+    typename Model::OutputView batch_team_outputs("generator_batch_team_outputs", Model::num_outputs,
+                                                  test.batch_size);
     auto inputs_host = Kokkos::create_mirror_view(inputs);
     for (int i = 0; i < Model::num_inputs; i++) {
       for (int ibatch = 0; ibatch < test.batch_size; ibatch++) {
@@ -160,6 +162,7 @@ bool check_model(std::string const & weight_path, std::string const & reference_
     model.infer_batch_hierarchical(inputs, hierarchical_outputs);
     model.infer_batch_hierarchical(inputs, hierarchical_tile1_outputs, 1);
     model.infer_batch_half2(inputs, half2_outputs);
+    model.infer_batch_team_64(inputs, batch_team_outputs);
 
     auto const device_model = model;
     Kokkos::parallel_for("GeneratedModel::embedded_infer_one", test.batch_size, KOKKOS_LAMBDA(int ibatch) {
@@ -176,6 +179,7 @@ bool check_model(std::string const & weight_path, std::string const & reference_
         Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), hierarchical_tile1_outputs);
     auto inline_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), inline_outputs);
     auto half2_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), half2_outputs);
+    auto batch_team_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), batch_team_outputs);
     for (int i = 0; i < Model::num_outputs; i++) {
       for (int ibatch = 0; ibatch < test.batch_size; ibatch++) {
         float const expected = test.outputs[i * test.batch_size + ibatch];
@@ -184,16 +188,19 @@ bool check_model(std::string const & weight_path, std::string const & reference_
         float const hierarchical_tile1_error = std::abs(hierarchical_tile1_host(i,ibatch) - expected);
         float const inline_error = std::abs(inline_host(i,ibatch) - expected);
         float const half2_error = std::abs(half2_host(i,ibatch) - expected);
+        float const batch_team_error = std::abs(batch_team_host(i,ibatch) - expected);
         maximum_error = std::max(maximum_error, std::max(batch_error, std::max(hierarchical_error, inline_error)));
         maximum_error = std::max(maximum_error, hierarchical_tile1_error);
         maximum_error = std::max(maximum_error, half2_error);
+        maximum_error = std::max(maximum_error, batch_team_error);
         if (batch_error > 2.e-5f || hierarchical_error > 2.e-5f || hierarchical_tile1_error > 2.e-5f ||
-            inline_error > 2.e-5f) {
+            inline_error > 2.e-5f || batch_team_error > 2.e-5f) {
           std::cerr << label << " mismatch at batch size " << test.batch_size << ", output " << i
                     << ", sample " << ibatch << ": expected=" << expected
                     << ", batch=" << batch_host(i,ibatch)
                     << ", hierarchical=" << hierarchical_host(i,ibatch)
                     << ", hierarchical_tile1=" << hierarchical_tile1_host(i,ibatch)
+                    << ", batch_team=" << batch_team_host(i,ibatch)
                     << ", inline=" << inline_host(i,ibatch) << std::endl;
           passed = false;
         }

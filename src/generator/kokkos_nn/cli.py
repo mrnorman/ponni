@@ -30,13 +30,17 @@ def _parser() -> argparse.ArgumentParser:
     compile_command.add_argument("model", type=Path)
     compile_command.add_argument("--output-dir", type=Path, required=True)
     compile_command.add_argument(
-        "--strategy", choices=("auto", "sample-local", "team", "half2"), default="auto"
+        "--strategy", choices=("auto", "sample-local", "team", "batch-team", "half2"), default="auto"
     )
     compile_command.add_argument("--model-name", default="GeneratedModel")
     compile_command.add_argument("--disable-pass", action="append", default=[], metavar="NAME[,NAME]")
     compile_command.add_argument("--max-stack-bytes", type=int, default=65536)
     compile_command.add_argument("--max-team-scratch-bytes", type=int, default=49152)
     compile_command.add_argument("--team-output-threshold", type=int, default=64)
+    compile_command.add_argument("--batch-team-shared-bytes-per-cu", type=int, default=65536)
+    compile_command.add_argument("--batch-team-max-threads-per-cu", type=int, default=2048)
+    compile_command.add_argument("--batch-team-max-blocks-per-cu", type=int, default=32)
+    compile_command.add_argument("--batch-team-target-occupancy", type=float, default=0.5)
     compile_command.add_argument("--streaming-output-threshold", type=int, default=8)
     compile_command.add_argument(
         "--streaming-recompute-threshold",
@@ -91,6 +95,10 @@ def main(argv: list[str] | None = None) -> None:
                 args.streaming_output_threshold,
                 args.half2_accumulators,
                 args.streaming_recompute_threshold,
+                args.batch_team_shared_bytes_per_cu,
+                args.batch_team_max_threads_per_cu,
+                args.batch_team_max_blocks_per_cu,
+                args.batch_team_target_occupancy,
             )
         print(json.dumps(report, indent=2, sort_keys=True))
     except CompilerError as exc:

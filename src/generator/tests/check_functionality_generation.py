@@ -25,6 +25,11 @@ def check_header(path: Path) -> None:
     for target in ("infer_one", "infer_batch", "infer_batch_half2", "infer_batch_hierarchical"):
         if f"void {target}(" not in generated:
             raise RuntimeError(f"{path.name}: missing generated target {target}")
+    for team_size in (64, 128, 256, 512, 1024):
+        if f"void infer_batch_team_{team_size}(" not in generated:
+            raise RuntimeError(f"{path.name}: missing fixed batch-team target {team_size}")
+        if f"Kokkos::LaunchBounds<{team_size}, 0>" not in generated:
+            raise RuntimeError(f"{path.name}: batch-team launch bound does not match team size {team_size}")
 
 
 def main() -> None:

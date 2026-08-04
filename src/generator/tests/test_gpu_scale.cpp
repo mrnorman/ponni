@@ -22,6 +22,19 @@ double time_inference(Function const & function, int iterations) {
 }
 
 template <class Model>
+bool infer_batch_team(Model const & model, typename Model::InputView const & inputs,
+                      typename Model::OutputView const & outputs, int team_size) {
+  switch (team_size) {
+    case 64: return model.try_infer_batch_team_64(inputs, outputs);
+    case 128: return model.try_infer_batch_team_128(inputs, outputs);
+    case 256: return model.try_infer_batch_team_256(inputs, outputs);
+    case 512: return model.try_infer_batch_team_512(inputs, outputs);
+    case 1024: return model.try_infer_batch_team_1024(inputs, outputs);
+    default: return false;
+  }
+}
+
+template <class Model>
 bool benchmark_model(char const * weight_path, int hidden_width) {
   Model model;
   std::string error;
@@ -36,7 +49,7 @@ bool benchmark_model(char const * weight_path, int hidden_width) {
     typename Model::InputView inputs("gpu_scale_inputs", Model::num_inputs, batch_size);
     typename Model::OutputView batch_outputs("gpu_scale_batch_outputs", Model::num_outputs, batch_size);
     typename Model::OutputView sarray_outputs("gpu_scale_sarray_outputs", Model::num_outputs, batch_size);
-    typename Model::OutputView tiled_outputs("gpu_scale_tiled_outputs", Model::num_outputs, batch_size);
+    typename Model::OutputView batch_team_outputs("gpu_scale_batch_team_outputs", Model::num_outputs, batch_size);
     typename Model::OutputView half2_outputs("gpu_scale_half2_outputs", Model::num_outputs, batch_size);
     Kokkos::parallel_for(
         "generator_gpu_initialize_inputs",
@@ -111,73 +124,72 @@ bool benchmark_model(char const * weight_path, int hidden_width) {
                 << " max_abs_difference=" << half2_errors[ivariant] << std::endl;
       if (half2_errors[ivariant] > 5.e-2f || !std::isfinite(half2_errors[ivariant])) passed = false;
     }
-    double tile_one_seconds = 0;
-    double best_hierarchical_seconds = std::numeric_limits<double>::max();
-    int best_hierarchical_tile = 0;
+    double team_64_seconds = 0;
+    double best_batch_team_seconds = std::numeric_limits<double>::max();
+    int best_batch_team_size = 0;
     float worst_error = 0;
     float worst_sarray_error = 0;
-    auto const infer_hierarchical = [&](int batch_tile) {
-      model.infer_batch_hierarchical(inputs, tiled_outputs, batch_tile);
-    };
-    for (int batch_tile : {1, 2, 4, 8, 16, 32}) {
-      if (batch_tile > Model::maximum_hierarchical_batch_tile) continue;
-      infer_hierarchical(batch_tile);
+    Kokkos::parallel_reduce(
+        "generator_gpu_sarray_error",
+        Kokkos::RangePolicy<typename Model::execution_space>(0, output_elements),
+        KOKKOS_LAMBDA(std::size_t linear, float & error_max) {
+          int const ibatch = static_cast<int>(linear % batch_size);
+          int const ioutput = static_cast<int>(linear / batch_size);
+          float const error_value = Kokkos::abs(
+              batch_outputs(ioutput,ibatch) - sarray_outputs(ioutput,ibatch));
+          if (error_value > error_max) error_max = error_value;
+        },
+        Kokkos::Max<float>(worst_sarray_error));
+    for (int team_size : {64, 128, 256, 512, 1024}) {
+      if (!infer_batch_team(model, inputs, batch_team_outputs, team_size)) {
+        std::cout << "generator_gpu_batch_team_unsupported width=" << hidden_width
+                  << " batch=" << batch_size
+                  << " team_size=" << team_size << std::endl;
+        continue;
+      }
       Kokkos::fence();
-      double const tiled_seconds = time_inference(
-          [&]() { infer_hierarchical(batch_tile); }, iterations);
-      if (batch_tile == 1) tile_one_seconds = tiled_seconds;
-      if (tiled_seconds < best_hierarchical_seconds) {
-        best_hierarchical_seconds = tiled_seconds;
-        best_hierarchical_tile = batch_tile;
+      double const batch_team_seconds = time_inference(
+          [&]() { (void) infer_batch_team(model, inputs, batch_team_outputs, team_size); }, iterations);
+      if (team_size == 64) team_64_seconds = batch_team_seconds;
+      if (batch_team_seconds < best_batch_team_seconds) {
+        best_batch_team_seconds = batch_team_seconds;
+        best_batch_team_size = team_size;
       }
 
       float maximum_error = 0;
-      float maximum_sarray_error = 0;
       Kokkos::parallel_reduce(
-          "generator_gpu_scale_error",
+          "generator_gpu_batch_team_error",
           Kokkos::RangePolicy<typename Model::execution_space>(0, output_elements),
           KOKKOS_LAMBDA(std::size_t linear, float & error_max) {
             int const ibatch = static_cast<int>(linear % batch_size);
             int const ioutput = static_cast<int>(linear / batch_size);
             float const error_value = Kokkos::abs(
-                batch_outputs(ioutput,ibatch) - tiled_outputs(ioutput,ibatch));
+                batch_outputs(ioutput,ibatch) - batch_team_outputs(ioutput,ibatch));
             if (error_value > error_max) error_max = error_value;
           },
           Kokkos::Max<float>(maximum_error));
-      Kokkos::parallel_reduce(
-          "generator_gpu_sarray_error",
-          Kokkos::RangePolicy<typename Model::execution_space>(0, output_elements),
-          KOKKOS_LAMBDA(std::size_t linear, float & error_max) {
-            int const ibatch = static_cast<int>(linear % batch_size);
-            int const ioutput = static_cast<int>(linear / batch_size);
-            float const error_value = Kokkos::abs(
-                batch_outputs(ioutput,ibatch) - sarray_outputs(ioutput,ibatch));
-            if (error_value > error_max) error_max = error_value;
-          },
-          Kokkos::Max<float>(maximum_sarray_error));
       if (maximum_error > worst_error) worst_error = maximum_error;
-      if (maximum_sarray_error > worst_sarray_error) worst_sarray_error = maximum_sarray_error;
 
-      std::cout << "generator_gpu_tile width=" << hidden_width
+      std::cout << "generator_gpu_batch_team width=" << hidden_width
                 << " batch=" << batch_size
-                << " tile=" << batch_tile
-                << " default_tile=" << Model::default_hierarchical_batch_tile
+                << " team_size=" << team_size
                 << " batch_only_ms=" << batch_seconds * 1.e3
                 << " sarray_ms=" << sarray_seconds * 1.e3
-                << " tiled_ms=" << tiled_seconds * 1.e3
-                << " speedup=" << batch_seconds / tiled_seconds
+                << " batch_team_ms=" << batch_team_seconds * 1.e3
+                << " speedup=" << batch_seconds / batch_team_seconds
                 << " max_abs_difference=" << maximum_error
-                << " sarray_max_abs_difference=" << maximum_sarray_error << std::endl;
-      if (maximum_error > 2.e-6f || maximum_sarray_error > 2.e-6f ||
-          !std::isfinite(maximum_error) || !std::isfinite(maximum_sarray_error)) passed = false;
+                << " sarray_max_abs_difference=" << worst_sarray_error << std::endl;
+      if (maximum_error > 2.e-6f || !std::isfinite(maximum_error)) passed = false;
     }
+    if (best_batch_team_size == 0 || team_64_seconds == 0) passed = false;
+    if (worst_sarray_error > 2.e-6f || !std::isfinite(worst_sarray_error)) passed = false;
     std::cout << "generator_gpu_summary width=" << hidden_width
               << " batch=" << batch_size
               << " sarray_ms=" << sarray_seconds * 1.e3
               << " view_batch_ms=" << batch_seconds * 1.e3
-              << " hierarchical_tile1_ms=" << tile_one_seconds * 1.e3
-              << " hierarchical_best_ms=" << best_hierarchical_seconds * 1.e3
-              << " hierarchical_best_tile=" << best_hierarchical_tile
+              << " batch_team_64_ms=" << team_64_seconds * 1.e3
+              << " batch_team_best_ms=" << best_batch_team_seconds * 1.e3
+              << " batch_team_best_size=" << best_batch_team_size
               << " half2_ms=" << half2_seconds[0] * 1.e3
               << " half2_max_abs_difference=" << half2_errors[0]
               << " half2_best_ms=" << best_half2_seconds * 1.e3

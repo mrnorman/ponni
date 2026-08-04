@@ -246,6 +246,10 @@ class CompilerTests(unittest.TestCase):
                 self.assertEqual(generated.count("void infer_batch("), 1)
                 self.assertEqual(generated.count("void infer_batch_hierarchical("), 1)
                 self.assertEqual(generated.count("void infer_batch_half2("), 1)
+                for team_size in (64, 128, 256, 512, 1024):
+                    self.assertEqual(generated.count(f"void infer_batch_team_{team_size}("), 1)
+                    self.assertEqual(generated.count(f"bool try_infer_batch_team_{team_size}("), 1)
+                    self.assertIn(f"Kokkos::LaunchBounds<{team_size}, 0>", generated)
                 self.assertNotIn("tensorcore", generated.lower())
                 self.assertNotIn("void infer_batch_half2_heuristic(", generated)
                 self.assertNotIn("void infer_batch_half2_explicit(", generated)
@@ -267,11 +271,27 @@ class CompilerTests(unittest.TestCase):
                 self.assertIn("int constexpr default_batch_size = 1000000", autotuner)
                 self.assertIn("ponni::init_device_pool(", autotuner)
                 self.assertIn("ponni::finalize_device_pool();", autotuner)
-                self.assertIn('{"infer_batch", 1024, 1, 0, &run_batch<1024, 1>}', autotuner)
+                self.assertIn('{"infer_batch", 1024, 1, 0, 0, &run_batch<1024, 1>}', autotuner)
+                self.assertIn('{"infer_batch_team", 64, 0, 1, ', autotuner)
+                self.assertIn("Skipping unsupported candidate", autotuner)
                 self.assertEqual(report["autotuner_source"], "GemmModel_autotune.cpp")
                 self.assertEqual(report["hierarchical_batch_tiling"]["index_order"],
                                  "linear = neuron * active_batch + local_batch")
                 self.assertEqual(report["optimized_operations"], ["DenseBiasActivation"])
+                self.assertEqual(
+                    [candidate["team_size"] for candidate in report["batch_team"]["candidates"]],
+                    [64, 128, 256, 512, 1024],
+                )
+                self.assertEqual(
+                    [candidate["scratch_budget_bytes_per_team"]
+                     for candidate in report["batch_team"]["candidates"]],
+                    [4096, 8192, 16384, 32768, 49152],
+                )
+                for candidate in report["batch_team"]["candidates"]:
+                    self.assertLessEqual(
+                        candidate["scratch_bytes_per_team"],
+                        candidate["scratch_budget_bytes_per_team"],
+                    )
                 validate_weight_blob(output / "weights.bin", json.loads((output / "weights.json").read_text()))
 
     def test_matmul_bias_residual_and_storage_plan(self) -> None:
@@ -284,6 +304,17 @@ class CompilerTests(unittest.TestCase):
             self.assertGreaterEqual(plan.total_elements, 4)
             values = np.random.default_rng(8).standard_normal((4, 32)).astype(np.float32)
             np.testing.assert_allclose(run_graph(original, values), run_graph(optimized, values), rtol=2e-6, atol=2e-6)
+            report = compile_model(
+                model, Path(directory) / "generated", strategy="batch-team", model_name="ResidualModel",
+            )
+            candidate64 = report["batch_team"]["candidates"][0]
+            self.assertGreater(candidate64["scratch_bytes_per_team"], 0)
+            self.assertEqual(report["recommended_batched_target"], "infer_batch_team_256")
+            generated = (Path(directory) / "generated" / "ResidualModel.hpp").read_text()
+            self.assertIn("scratch_workspace[(0 + i) * 64 + team_rank]", generated)
+            self.assertNotIn("TeamThreadRange", generated.split("try_infer_batch_team_64", 1)[1].split(
+                "try_infer_batch_team_128", 1
+            )[0])
 
     def test_two_dense_layers_stream_without_hidden_stack_array(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -577,6 +608,8 @@ class CompilerTests(unittest.TestCase):
                 compile_model(
                     root / "unused.onnx", root / "out", streaming_recompute_threshold=-1
                 )
+            with self.assertRaisesRegex(CompilerError, "--batch-team-target-occupancy"):
+                compile_model(root / "unused.onnx", root / "out", batch_team_target_occupancy=1.1)
 
     def test_static_feature_concat_imports_and_emits_for_all_portable_paths(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

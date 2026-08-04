@@ -19,7 +19,7 @@ target_link_libraries(MyProject ponni)
 
 The experimental [Kokkos neural-network generator](src/generator/README.md) exports fixed-shape PyTorch MLP DAGs to
 ONNX, validates and optimizes a framework-neutral IR, and generates allocation-free Kokkos C++ with batched
-`DeviceSpace`, batch-tiled hierarchical team-neuron/scratch, inline `SArray`, and Kokkos-launched packed
+`DeviceSpace`, batch-tiled hierarchical team-neuron/scratch, fixed batch-team kernels, inline `SArray`, and Kokkos-launched packed
 `ponni::TwoHalf` interfaces for CUDA/HIP with baseline and optional user-specified accumulator policies. It also emits
 a standalone launch-bounds and batch-tile autotuner. ONNX and Python are build-time tools only; generated inference
 does not link an ML runtime.
@@ -30,7 +30,8 @@ elementwise arithmetic, and typed Boolean comparisons, logical masks, and select
 allowed. Convolution/pooling, attention,
 recurrent/control-flow models, dynamic hidden or sequence dimensions, multiple inputs/outputs, arbitrary
 broadcasting, training behavior, quantization, and custom ONNX operators are not yet supported. The generator emits
-four families: inline one-sample `SArray`, View batch, hierarchical team-neuron, and packed two-sample FP16. See the
+five families: inline one-sample `SArray`, View batch, hierarchical team-neuron, fixed batch-team, and packed
+two-sample FP16. See the
 generator documentation for the exact ONNX operator matrix, launch-bound tuning, and half2 accumulator choices `0`,
 `2`, `4`, `8`, `16`, and `32`.
 

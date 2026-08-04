@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from .ir import DType, Graph
+
+if TYPE_CHECKING:
+    from .scheduler import DenseChainSchedule
 
 
 @dataclass
@@ -32,6 +36,46 @@ class StoragePlan:
                                  "last_use": slot.last_use}
                 for tensor_id, slot in sorted(self.slots.items())
             },
+        }
+
+
+@dataclass
+class BatchTeamStoragePlan:
+    team_size: int
+    required_resident_teams: int
+    scratch_budget_bytes: int
+    local_plan: StoragePlan
+    local_mask_plan: StoragePlan
+    scratch_plan: StoragePlan
+    scratch_mask_plan: StoragePlan
+    scalar_bytes: int
+
+    @property
+    def local_bytes_per_sample(self) -> int:
+        return self.local_plan.total_elements * self.scalar_bytes + self.local_mask_plan.total_elements
+
+    @property
+    def scratch_bytes_per_sample(self) -> int:
+        return self.scratch_plan.total_elements * self.scalar_bytes + self.scratch_mask_plan.total_elements
+
+    @property
+    def scratch_bytes_per_team(self) -> int:
+        return self.scratch_bytes_per_sample * self.team_size
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "team_size": self.team_size,
+            "vector_length": 1,
+            "launch_bounds": {"max_threads": self.team_size, "min_blocks": 0},
+            "required_resident_teams_for_scratch_target": self.required_resident_teams,
+            "scratch_budget_bytes_per_team": self.scratch_budget_bytes,
+            "scratch_bytes_per_sample": self.scratch_bytes_per_sample,
+            "scratch_bytes_per_team": self.scratch_bytes_per_team,
+            "local_bytes_per_sample": self.local_bytes_per_sample,
+            "local_plan": self.local_plan.to_dict(self.scalar_bytes),
+            "local_mask_plan": self.local_mask_plan.to_dict(1),
+            "scratch_plan": self.scratch_plan.to_dict(self.scalar_bytes),
+            "scratch_mask_plan": self.scratch_mask_plan.to_dict(1),
         }
 
 
@@ -113,3 +157,88 @@ def plan_storage(graph: Graph, excluded_tensors: set[int] | None = None,
         active.append(slot)
 
     return StoragePlan(slots, high_water, reused)
+
+
+def plan_batch_team_storage(graph: Graph, schedule: DenseChainSchedule, scalar_bytes: int,
+                            team_size: int, scratch_budget_bytes: int,
+                            required_resident_teams: int, beam_width: int = 16) -> BatchTeamStoragePlan:
+    """Choose a deterministic mixed local/team-scratch activation plan.
+
+    Each tensor is assigned wholly to one arena. The bounded beam search keeps
+    storage planning inexpensive while considering combinations that a simple
+    one-tensor-at-a-time greedy allocator can miss due to arena fragmentation.
+    """
+    floating = {DType.FLOAT32, DType.FLOAT64}
+    liveness_extensions = schedule.recompute_liveness_extensions(graph)
+    base_float = plan_storage(
+        graph, schedule.eliminated_tensors, liveness_extensions, floating,
+    )
+    base_mask = plan_storage(graph, dtypes={DType.BOOL})
+    items = tuple(
+        [(tensor_id, False) for tensor_id in sorted(base_float.slots)] +
+        [(tensor_id, True) for tensor_id in sorted(base_mask.slots)]
+    )
+    all_float = set(base_float.slots)
+    all_mask = set(base_mask.slots)
+    cache: dict[frozenset[tuple[int, bool]], BatchTeamStoragePlan] = {}
+
+    def evaluate(selected: frozenset[tuple[int, bool]]) -> BatchTeamStoragePlan:
+        if selected in cache:
+            return cache[selected]
+        scratch_float = {tensor_id for tensor_id, is_mask in selected if not is_mask}
+        scratch_mask = {tensor_id for tensor_id, is_mask in selected if is_mask}
+        local_plan = plan_storage(
+            graph,
+            schedule.eliminated_tensors | scratch_float,
+            liveness_extensions,
+            floating,
+        )
+        local_mask_plan = plan_storage(graph, scratch_mask, dtypes={DType.BOOL})
+        scratch_plan = plan_storage(
+            graph,
+            schedule.eliminated_tensors | (all_float - scratch_float),
+            liveness_extensions,
+            floating,
+        )
+        scratch_mask_plan = plan_storage(graph, all_mask - scratch_mask, dtypes={DType.BOOL})
+        plan = BatchTeamStoragePlan(
+            team_size, required_resident_teams, scratch_budget_bytes,
+            local_plan, local_mask_plan, scratch_plan, scratch_mask_plan, scalar_bytes,
+        )
+        cache[selected] = plan
+        return plan
+
+    states = {frozenset()}
+    best = evaluate(frozenset())
+    for _ in range(len(items)):
+        expanded = set(states)
+        for selected in states:
+            for item in items:
+                if item not in selected:
+                    expanded.add(selected | {item})
+        feasible = [selected for selected in expanded if evaluate(selected).scratch_bytes_per_team <= scratch_budget_bytes]
+        if not feasible:
+            break
+        feasible.sort(key=lambda selected: (
+            evaluate(selected).local_bytes_per_sample,
+            evaluate(selected).scratch_bytes_per_team,
+            len(selected),
+            tuple(sorted(selected)),
+        ))
+        candidate = evaluate(feasible[0])
+        if (
+            candidate.local_bytes_per_sample,
+            candidate.scratch_bytes_per_team,
+        ) < (
+            best.local_bytes_per_sample,
+            best.scratch_bytes_per_team,
+        ):
+            best = candidate
+
+        # Keep intermediate combinations even when they have not reduced the
+        # local high-water mark yet: two such moves can free an overlapping
+        # arena that neither move frees independently.
+        states = set(feasible[:beam_width])
+        if not states:
+            break
+    return best

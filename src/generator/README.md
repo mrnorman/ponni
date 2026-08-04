@@ -21,7 +21,7 @@ PyTorch nn.Module / Keras Model / TensorFlow Module
 
 The components are deliberately separate: `importer.py` owns ONNX semantics, `ir.py` defines the serializable IR,
 `passes.py` owns transformations, `scheduler.py` chooses dense-chain materialization/streaming/recomputation,
-`planner.py` performs liveness/storage planning, `emitter.py` writes C++, and
+`planner.py` performs liveness and mixed local/team-scratch storage planning, `emitter.py` writes C++, and
 `weights.py` owns the external format. `interpreter.py` provides an independent numerical check of unfused and fused
 IR. No device-side graph interpreter or virtual dispatch is generated.
 
@@ -130,9 +130,22 @@ make -j generator_gpu_scale generator_benchmark
 ctest -V -R generator_gpu_scale_test
 ```
 
-The CUDA-only scale test uses `I -> I -> I -> 3` networks for `I = 4, 8, 16, 32, 64, 128` and batches 10,000,
-100,000, and 1,000,000. It reports all batched strategies, checks their outputs, and uses a 1 GiB PONNI device pool.
-It is not registered when Kokkos CUDA is disabled.
+The GPU scale test uses `I -> I -> I -> 3` networks for `I = 4, 8, 16, 32, 64, 128` and batches 10,000,
+100,000, and 1,000,000. It sweeps fixed batch-team sizes 64, 128, 256, 512, and 1024, checks every supported
+configuration against the View result, and uses a 1 GiB PONNI device pool. It is registered only for CUDA or HIP.
+
+For the batch-team architecture experiment, build and run:
+
+```bash
+make -j generator_batch_team_architecture_experiment
+ctest -V -R '^generator_batch_team_architecture_test$'
+```
+
+This CUDA/HIP test holds the batch at 1,000,000 and sweeps team sizes 64, 128, 256, 512, and 1024 over sequential,
+short-residual, long-skip, and four-branch networks with widths 16 through 128 and depths 2 through 8. It checks every
+result against `infer_batch` and reports the generator's local bytes, team-scratch bytes, and occupancy-constrained
+scratch budget beside each timing. Its deterministic ONNX inputs and generated reports live under
+`unit/build/generator/generated/batch_team_architectures`.
 
 The PyTorch example exporter creates `Linear -> Tanh -> Linear`, a shallow residual MLP, a varying-width depth-10 MLP, a
 ten-dense/five-block ResNet, a concatenative DenseNet, a shared-trunk two-branch DAG that exercises bounded
@@ -274,13 +287,12 @@ that threshold to zero disables the optimization. This deliberately prevents rec
 The sample-local storage plan excludes streamed values, accounts for delayed source uses introduced by recomputation,
 and reports every activation decision and its reason in `dense_chain_schedule`. `infer_batch` stages every input
 feature once in a fixed `SArray` before executing the same sample-local arithmetic body, avoiding repeated global View
-loads. The report separates input staging, compact sample-local workspace, and the unchanged hierarchical scratch
-plan. Hierarchical emission currently materializes the full graph because its neuron-parallel synchronization model
-differs from scalar streaming.
+loads. The report separates input staging, compact sample-local workspace, the original neuron-parallel hierarchical
+scratch plan, and each fixed batch-team plan.
 
 ## Generated APIs and scheduling
 
-Every generated class exposes four inference families. The half2 family exposes its baseline API; an explicit API is
+Every generated class exposes five inference families. The half2 family exposes its baseline API; an explicit API is
 added when `--half2-accumulators` is supplied:
 
 | # | Family | Generated API | Arithmetic and launch | Intended use |
@@ -288,9 +300,10 @@ added when `--half2-accumulators` is supplied:
 | 1 | Inline SArray | `infer_one` | Full-precision `Scalar`; no internal launch | Embed one inference inside an existing Kokkos device kernel |
 | 2 | View batch | `infer_batch` | Full-precision `Scalar`; one `RangePolicy` iteration per sample | Small MLPs and abundant batch parallelism |
 | 3 | Hierarchical | `infer_batch_hierarchical` | Full-precision `Scalar`; `TeamPolicy`, neuron/batch work, planned team scratch | Graphs where neuron parallelism can offset team overhead |
-| 4 | Packed two-sample half | `infer_batch_half2*` | FP16 weights/products/partials in two adjacent batch lanes; Kokkos `RangePolicy` | CUDA/HIP throughput when approximate FP16 semantics are acceptable |
+| 4 | Fixed batch-team | `infer_batch_team_{64,128,256,512,1024}` | Full-precision `Scalar`; one serial sample per team thread, vector length 1, mixed local/team scratch | Predictable GPU batch parallelism with generator-controlled register-pressure relief |
+| 5 | Packed two-sample half | `infer_batch_half2*` | FP16 weights/products/partials in two adjacent batch lanes; Kokkos `RangePolicy` | CUDA/HIP throughput when approximate FP16 semantics are acceptable |
 
-The first three are the full-precision portable choices. The half2 family deliberately changes floating-point
+The first four are the full-precision portable choices. The half2 family deliberately changes floating-point
 semantics and is never selected by `auto`. `--strategy` records or enforces the recommended batched family; it does
 not remove the other generated APIs.
 
@@ -307,6 +320,10 @@ void infer_batch_hierarchical(InputView const & inputs, OutputView const & outpu
 
 template <unsigned MaxThreads = 0, unsigned MinBlocks = 0>
 void infer_batch_half2(InputView const & inputs, OutputView const & outputs) const;
+
+// Fixed methods are emitted for 64, 128, 256, 512, and 1024.
+bool try_infer_batch_team_256(InputView const & inputs, OutputView const & outputs) const;
+void infer_batch_team_256(InputView const & inputs, OutputView const & outputs) const;
 
 // Emitted only when requested at compile time.
 template <unsigned MaxThreads = 0, unsigned MinBlocks = 0>
@@ -339,17 +356,34 @@ specialization; the emitted default is 32 for the measured `I = 4` through `128`
 Every call checks the tile against the generated maximum before launching. The kernel captures only views and
 scalars—never `this` or host-only state.
 
+The fixed batch-team family does not parallelize over neurons. A team covers one contiguous batch chunk and thread
+`team_rank` evaluates sample `league_rank * team_size + team_rank` serially, with no `TeamThreadRange`, barriers, or
+team collectives in the network body. Each method uses vector length 1 and a matching
+`Kokkos::LaunchBounds<team_size,0>`. The generator assigns each live activation wholly to either a per-thread fixed
+local array or a batch-strided level-0 team-scratch arena. It searches deterministic storage-placement orders to
+minimize local high-water storage without exceeding the candidate's scratch budget.
+
+Scratch budgets model a target occupancy, not a guarantee of achieved occupancy. By default the model assumes
+64 KiB shared memory, 2048 threads, and 32 blocks per CU/SM and limits scratch so it alone permits at least 50%
+thread occupancy; `--max-team-scratch-bytes` remains an absolute per-team cap. The assumptions are configurable with
+`--batch-team-shared-bytes-per-cu`, `--batch-team-max-threads-per-cu`, `--batch-team-max-blocks-per-cu`, and
+`--batch-team-target-occupancy`. Registers, backend allocation granularity, other hardware limits, and compiler
+decisions may reduce real occupancy, so the generated candidates should still be measured on the target GPU. No
+scratch is borrowed from a caller: these are self-contained host-launched kernels whose dynamic scratch lifetime ends
+with the launch. The non-`try` methods fall back to `infer_batch` when a backend cannot launch the fixed team or
+provide its planned scratch; the `try_` methods return `false` instead, allowing the autotuner to skip that candidate.
+
 The `MaxThreads` and `MinBlocks` template parameters on every launched API map directly to
 `Kokkos::LaunchBounds`. Their `0, 0` defaults preserve Kokkos's portable default behavior. Hierarchical batch tile
 remains a runtime argument, so changing it does not instantiate another kernel.
 
-The `--strategy` option records the recommended batched target; all four targets are generated. `auto`
+The `--strategy` option records the recommended batched target; all five targets are generated. `auto`
 prefers sample-local execution when the dense-chain scheduler selects streaming or bounded recomputation. Otherwise it recommends hierarchical execution
 when an operation has at least `--team-output-threshold` output neurons (64 by default). The emitted weight view does
 not currently use `Kokkos::RandomAccess`: short, regular,
 output-major dense traversal has not demonstrated a benefit that justifies enabling it.
 
-The half2 family is the fourth, Kokkos-launched target. A `RangePolicy` iteration processes two adjacent batch
+The half2 family is the fifth inference family. A `RangePolicy` iteration processes two adjacent batch
 samples as the lanes of `ponni::TwoHalf`; CUDA maps this type to `__half2`, HIP maps it to the corresponding
 `__half2`, and other Kokkos backends use a correctness-oriented two-lane fallback. Inputs and outputs retain the
 generated float/double View API. `load_weights()` creates one additional
@@ -385,10 +419,11 @@ SArray packed variant would require a separate two-sample API rather than changi
 ## Generated launch autotuner
 
 Compilation also emits `<Model>_autotune.cpp`. This standalone program instantiates a broad set of launch-bound
-combinations for each launched inference family and combines them with every generated power-of-two hierarchical
-batch tile. It fills deterministic random input data, performs three warmup runs, records nine fenced runs per
-configuration, and uses the median. The warmup and timed-run constants are intentionally near the top of the source
-so users can edit them easily.
+combinations for the portable and half2 families, combines those with every generated power-of-two hierarchical
+batch tile, and adds the five fixed batch-team candidates without tensoring them over unrelated launch parameters.
+It fills deterministic random input data, performs three warmup runs, records nine fenced runs per configuration,
+and uses the median. Unsupported fixed team sizes are reported and skipped. The warmup and timed-run constants are
+intentionally near the top of the source so users can edit them easily.
 
 The first command-line argument selects batch size and defaults to `1000000`; the optional second argument selects the
 weight file and defaults to `weights.bin`:
@@ -398,7 +433,7 @@ weight file and defaults to `weights.bin`:
 ./MlpModel_autotune 250000 /path/to/weights.bin
 ```
 
-The program first prints every `(family, max_threads, min_blocks, tile, median_ms)` result, then prints the fastest
+The program first prints every `(family, max_threads, min_blocks, tile, scratch_bytes, median_ms)` result, then prints the fastest
 median for each family. A tile of zero denotes a non-hierarchical family. This keeps device-specific choices outside
 the generator and gives users reproducible launch bounds for the inference template arguments and a runtime
 hierarchical tile value.
@@ -459,10 +494,9 @@ View kernel stages input once, creates no View intermediates, and never material
 `generator_benchmark` reports one-time weight loading, warm portable batched targets, and an embedded `infer_one` kernel.
 `generator_gpu_scale` provides the GPU-only, large-batch, single-precision comparison used for scheduling decisions.
 It sweeps `I -> I -> I -> 3` networks for `I = 4, 8, 16, 32, 64, 128`; batch sizes 10,000, 100,000, and 1,000,000;
-and team batch tiles 1 through 32.
-Summary rows compare embedded SArray, direct View batch, hierarchical tile 1, the best legal hierarchical tile, the
-packed half2 baseline, and optional explicit half2 accumulator policies, including approximate targets' maximum
-absolute differences from the FP32 View result.
+and fixed batch-team sizes 64, 128, 256, 512, and 1024. Summary rows compare embedded SArray, direct View batch, the
+64-thread batch-team baseline, the best supported batch-team size, the packed half2 baseline, and optional explicit
+half2 accumulator policies, including approximate targets' maximum absolute differences from the FP32 View result.
 Kokkos fences bracket every timed device region. For CUDA builds, inspect the compiler output from the
 repository's `nvcc_wrapper` flags (for example `--ptxas-options=-v`) for registers and local-memory spills; this is a
 diagnostic build choice, not part of generated portable code.

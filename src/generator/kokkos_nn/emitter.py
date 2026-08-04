@@ -5,7 +5,7 @@ import re
 
 from .errors import CompilerError
 from .ir import DType, Graph, Node
-from .planner import StoragePlan
+from .planner import BatchTeamStoragePlan, StoragePlan
 from .scheduler import DenseChainSchedule
 
 
@@ -107,10 +107,11 @@ class CppEmitter:
     def __init__(self, graph: Graph, plan: StoragePlan, sample_plan: StoragePlan,
                  mask_plan: StoragePlan, sample_mask_plan: StoragePlan,
                  schedule: DenseChainSchedule, weight_offsets: dict[int, int], model_name: str,
-                 strategy: str, default_batch_tile: int, maximum_batch_tile: int) -> None:
-        if strategy not in {"sample-local", "team", "half2"}:
+                 strategy: str, default_batch_tile: int, maximum_batch_tile: int,
+                 batch_team_plans: list[BatchTeamStoragePlan]) -> None:
+        if strategy not in {"sample-local", "team", "batch-team", "half2"}:
             raise CompilerError(
-                f"unknown execution strategy {strategy!r}; choose sample-local, team, half2, or auto"
+                f"unknown execution strategy {strategy!r}; choose sample-local, team, batch-team, half2, or auto"
             )
         self.graph = graph
         self.plan = plan
@@ -122,6 +123,7 @@ class CppEmitter:
         self.model_name = _identifier(model_name)
         self.default_batch_tile = default_batch_tile
         self.maximum_batch_tile = maximum_batch_tile
+        self.batch_team_plans = batch_team_plans
 
     def _size(self, tensor_id: int) -> int:
         return self.graph.tensors[tensor_id].sample_size
@@ -183,6 +185,65 @@ class CppEmitter:
                 f"no batch-local activation storage assigned to output tensor {self.graph.tensors[tensor_id].name!r}"
             )
         return f"workspace[{self.sample_plan.slots[tensor_id].offset} + {index}]"
+
+    def _batch_team_read(self, storage: BatchTeamStoragePlan, tensor_id: int, index: str) -> str:
+        tensor = self.graph.tensors[tensor_id]
+        if tensor.dtype == DType.BOOL:
+            return self._batch_team_mask_read(storage, tensor_id, index)
+        use_index = "0" if tensor.sample_size == 1 else index
+        if tensor.is_constant:
+            if tensor_id not in self.weight_offsets:
+                raise CompilerError(f"no emitted weight offset for constant tensor {tensor.name!r}")
+            return f"weights({self.weight_offsets[tensor_id]} + {use_index})"
+        if tensor_id == self.graph.inputs[0]:
+            return f"input_view({use_index},ibatch)"
+        if tensor_id == self.graph.outputs[0]:
+            return f"output_view({use_index},ibatch)"
+        if tensor_id in storage.scratch_plan.slots:
+            offset = storage.scratch_plan.slots[tensor_id].offset
+            return f"scratch_workspace[({offset} + {use_index}) * {storage.team_size} + team_rank]"
+        if tensor_id in storage.local_plan.slots:
+            offset = storage.local_plan.slots[tensor_id].offset
+            return f"local_workspace[{offset} + {use_index}]"
+        raise CompilerError(f"no batch-team activation storage assigned to tensor {tensor.name!r}")
+
+    def _batch_team_write(self, storage: BatchTeamStoragePlan, tensor_id: int, index: str) -> str:
+        tensor = self.graph.tensors[tensor_id]
+        if tensor.dtype == DType.BOOL:
+            return self._batch_team_mask_write(storage, tensor_id, index)
+        if tensor_id == self.graph.outputs[0]:
+            return f"output_view({index},ibatch)"
+        if tensor_id in storage.scratch_plan.slots:
+            offset = storage.scratch_plan.slots[tensor_id].offset
+            return f"scratch_workspace[({offset} + {index}) * {storage.team_size} + team_rank]"
+        if tensor_id in storage.local_plan.slots:
+            offset = storage.local_plan.slots[tensor_id].offset
+            return f"local_workspace[{offset} + {index}]"
+        raise CompilerError(f"no batch-team activation storage assigned to output tensor {tensor.name!r}")
+
+    def _batch_team_mask_read(self, storage: BatchTeamStoragePlan, tensor_id: int, index: str) -> str:
+        tensor = self.graph.tensors[tensor_id]
+        use_index = "0" if tensor.sample_size == 1 else index
+        if tensor.is_constant:
+            return f"(weights({self.weight_offsets[tensor_id]} + {use_index}) != static_cast<Scalar>(0))"
+        if tensor_id in storage.scratch_mask_plan.slots:
+            offset = storage.scratch_mask_plan.slots[tensor_id].offset
+            return f"(scratch_masks[({offset} + {use_index}) * {storage.team_size} + team_rank] != 0)"
+        if tensor_id in storage.local_mask_plan.slots:
+            offset = storage.local_mask_plan.slots[tensor_id].offset
+            return f"(local_masks[{offset} + {use_index}] != 0)"
+        raise CompilerError(f"no batch-team mask storage assigned to tensor {tensor.name!r}")
+
+    def _batch_team_mask_write(self, storage: BatchTeamStoragePlan, tensor_id: int, index: str) -> str:
+        if tensor_id in storage.scratch_mask_plan.slots:
+            offset = storage.scratch_mask_plan.slots[tensor_id].offset
+            return f"scratch_masks[({offset} + {index}) * {storage.team_size} + team_rank]"
+        if tensor_id in storage.local_mask_plan.slots:
+            offset = storage.local_mask_plan.slots[tensor_id].offset
+            return f"local_masks[{offset} + {index}]"
+        raise CompilerError(
+            f"no batch-team mask storage assigned to output tensor {self.graph.tensors[tensor_id].name!r}"
+        )
 
     def _team_read(self, tensor_id: int, index: str) -> str:
         tensor = self.graph.tensors[tensor_id]
@@ -560,11 +621,14 @@ class CppEmitter:
         lines.append(f"    {self._half_write(node.outputs[0], '0')} = reduction;")
         return lines
 
-    def _emit_node(self, node: Node, batch: bool = False) -> list[str]:
+    def _emit_node(self, node: Node, batch: bool = False, access=None) -> list[str]:
         output_id = node.outputs[0]
         output_size = self._size(output_id)
-        read = self._batch_read if batch else self._read
-        write = self._batch_write if batch else self._write
+        if access is None:
+            read = self._batch_read if batch else self._read
+            write = self._batch_write if batch else self._write
+        else:
+            read, write = access
         lines: list[str] = []
         if node.op in {"Dense", "DenseBiasActivation"}:
             input_id = node.inputs[0]
@@ -1380,9 +1444,13 @@ class CppEmitter:
             return lines
         raise CompilerError(f"half2 C++ emitter has no implementation for canonical operation {node.op}")
 
-    def _emit_streaming_dense_pair(self, producer: Node, consumer: Node, batch: bool) -> list[str]:
-        read = self._batch_read if batch else self._read
-        write = self._batch_write if batch else self._write
+    def _emit_streaming_dense_pair(self, producer: Node, consumer: Node, batch: bool,
+                                   access=None, cache_batch_inputs: bool | None = None) -> list[str]:
+        if access is None:
+            read = self._batch_read if batch else self._read
+            write = self._batch_write if batch else self._write
+        else:
+            read, write = access
         input_id = producer.inputs[0]
         hidden_id = producer.outputs[0]
         output_id = consumer.outputs[0]
@@ -1394,7 +1462,8 @@ class CppEmitter:
         producer_bias = producer.attributes.get("bias")
         consumer_bias = consumer.attributes.get("bias")
         lines: list[str] = []
-        cache_batch_inputs = batch and input_size <= 16
+        if cache_batch_inputs is None:
+            cache_batch_inputs = batch and input_size <= 16
         if cache_batch_inputs:
             for iinput in range(input_size):
                 lines.append(f"    Scalar const input_{iinput} = {read(input_id, str(iinput))};")
@@ -1625,6 +1694,29 @@ class CppEmitter:
                     half_body.extend(self._scope(self._emit_half_node(half_node, count)))
             return half_body
 
+        def build_batch_team_body(storage: BatchTeamStoragePlan) -> list[str]:
+            batch_team_body: list[str] = []
+            access = (
+                lambda tensor_id, index: self._batch_team_read(storage, tensor_id, index),
+                lambda tensor_id, index: self._batch_team_write(storage, tensor_id, index),
+            )
+            if source_output:
+                batch_team_body.extend(self._scope(source_copy(*access)))
+            for batch_team_node in self.graph.nodes:
+                if batch_team_node.id in self.schedule.skipped_producers:
+                    continue
+                producer_id = self.schedule.pair_by_consumer.get(batch_team_node.id)
+                if producer_id is not None:
+                    producer = self.graph.node_by_id(producer_id)
+                    batch_team_body.extend(self._scope(self._emit_streaming_dense_pair(
+                        producer, batch_team_node, batch=True, access=access, cache_batch_inputs=False,
+                    )))
+                else:
+                    batch_team_body.extend(self._scope(self._emit_node(
+                        batch_team_node, batch=True, access=access,
+                    )))
+            return batch_team_body
+
         if source_output:
             body.extend(self._scope(source_copy(self._read, self._write)))
             team_body.extend([
@@ -1739,6 +1831,80 @@ class CppEmitter:
   }}"""
 
         half_methods = "\n\n".join(make_half_method(method_name) for method_name, _ in half_policies)
+
+        def make_batch_team_method(storage: BatchTeamStoragePlan) -> str:
+            team_size = storage.team_size
+            scalar_scratch_bytes = storage.scratch_plan.total_elements * team_size
+            mask_scratch_bytes = storage.scratch_mask_plan.total_elements * team_size
+            scratch_declarations = ""
+            if storage.scratch_bytes_per_team > 0:
+                scratch_declarations = f"""          unsigned char * scratch = reinterpret_cast<unsigned char *>(
+              team.team_shmem().get_shmem(scratch_bytes));
+"""
+                if storage.scratch_plan.total_elements > 0:
+                    scratch_declarations += (
+                        "          Scalar * scratch_workspace = reinterpret_cast<Scalar *>(scratch);\n"
+                    )
+                if storage.scratch_mask_plan.total_elements > 0:
+                    scratch_declarations += (
+                        "          std::uint8_t * scratch_masks = scratch + scalar_scratch_bytes;\n"
+                    )
+            local_declarations = ""
+            if storage.local_plan.total_elements > 0:
+                local_declarations += (
+                    f"          Scalar local_workspace[{storage.local_plan.total_elements}];\n"
+                )
+            if storage.local_mask_plan.total_elements > 0:
+                local_declarations += (
+                    f"          std::uint8_t local_masks[{storage.local_mask_plan.total_elements}];\n"
+                )
+            batch_team_body = "\n".join(
+                f"          {line}" for line in build_batch_team_body(storage)
+            )
+            return f"""  bool try_infer_batch_team_{team_size}(InputView const & inputs,
+                                     OutputView const & outputs) const {{
+#if defined(KOKKOS_ENABLE_DEBUG)
+    if (!weights_loaded()) Kokkos::abort("GeneratedModel::infer_batch_team_{team_size} called before load_weights");
+    if (inputs.extent(0) != num_inputs) Kokkos::abort("GeneratedModel input feature extent is incorrect");
+    if (outputs.extent(0) != num_outputs) Kokkos::abort("GeneratedModel output feature extent is incorrect");
+    if (inputs.extent(1) != outputs.extent(1)) Kokkos::abort("GeneratedModel batch extents differ");
+#endif
+    int const batch_size = checked_batch_size(inputs);
+    if (batch_size == 0) return true;
+    using policy_type = Kokkos::TeamPolicy<
+        execution_space, Kokkos::LaunchBounds<{team_size}, 0>>;
+    using member_type = typename policy_type::member_type;
+    int constexpr team_size = {team_size};
+    int constexpr scalar_scratch_bytes = {scalar_scratch_bytes} * static_cast<int>(sizeof(Scalar));
+    int constexpr mask_scratch_bytes = {mask_scratch_bytes};
+    int constexpr scratch_bytes = scalar_scratch_bytes + mask_scratch_bytes;
+    int const league_size = (batch_size + team_size - 1) / team_size;
+    InputView const input_view = inputs;
+    OutputView const output_view = outputs;
+    ParameterView const weights = parameters_;
+    auto const kernel = KOKKOS_LAMBDA(member_type const & team) {{
+{scratch_declarations}          int const team_rank = team.team_rank();
+          int const ibatch = team.league_rank() * team_size + team_rank;
+          if (ibatch >= batch_size) return;
+{local_declarations}{batch_team_body}
+        }};
+    if (scratch_bytes > policy_type::scratch_size_max(0)) return false;
+    policy_type probe(league_size, Kokkos::AUTO, 1);
+    probe.set_scratch_size(0, Kokkos::PerTeam(scratch_bytes));
+    if (team_size > probe.team_size_max(kernel, Kokkos::ParallelForTag{{}})) return false;
+    policy_type policy(league_size, team_size, 1);
+    policy.set_scratch_size(0, Kokkos::PerTeam(scratch_bytes));
+    Kokkos::parallel_for("GeneratedModel::infer_batch_team_{team_size}", policy, kernel);
+    return true;
+  }}
+
+  void infer_batch_team_{team_size}(InputView const & inputs, OutputView const & outputs) const {{
+    if (!try_infer_batch_team_{team_size}(inputs, outputs)) infer_batch(inputs, outputs);
+  }}"""
+
+        batch_team_methods = "\n\n".join(
+            make_batch_team_method(storage) for storage in self.batch_team_plans
+        )
         text = f"""#pragma once
 // Generated deterministically by PONNI kokkos_nn. Do not edit.
 
@@ -2112,6 +2278,8 @@ public:
 
 {half_methods}
 
+{batch_team_methods}
+
   template <unsigned MaxThreads = 0, unsigned MinBlocks = 0>
   void infer_batch_hierarchical(InputView const & inputs, OutputView const & outputs,
                                 int batch_tile = default_hierarchical_batch_tile) const {{
@@ -2165,11 +2333,12 @@ def emit_cpp(graph: Graph, plan: StoragePlan, sample_plan: StoragePlan,
              strategy: str, payload_elements: int, payload_scalar_code: int,
              default_batch_tile: int, maximum_batch_tile: int, streaming_output_threshold: int,
              explicit_half2_accumulators: dict[int, int] | None = None,
+             batch_team_plans: list[BatchTeamStoragePlan] | None = None,
              emit_half2_heuristic: bool = False) -> Path:
     output_path = output_dir / f"{model_name}.hpp"
     CppEmitter(
         graph, plan, sample_plan, mask_plan, sample_mask_plan, schedule, offsets, model_name, strategy,
-        default_batch_tile, maximum_batch_tile
+        default_batch_tile, maximum_batch_tile, batch_team_plans or []
     ).emit(
         output_path, payload_elements, payload_scalar_code, streaming_output_threshold,
         explicit_half2_accumulators, emit_half2_heuristic
@@ -2178,7 +2347,8 @@ def emit_cpp(graph: Graph, plan: StoragePlan, sample_plan: StoragePlan,
 
 
 def emit_autotuner(output_dir: Path, model_name: str, payload_scalar_code: int,
-                   maximum_batch_tile: int, has_explicit_half2: bool) -> Path:
+                   maximum_batch_tile: int, has_explicit_half2: bool,
+                   batch_team_plans: list[BatchTeamStoragePlan] | None = None) -> Path:
     """Emit a standalone launch-bounds and hierarchical-tile throughput tuner."""
     identifier = _identifier(model_name)
     output_path = output_dir / f"{identifier}_autotune.cpp"
@@ -2194,54 +2364,71 @@ def emit_autotuner(output_dir: Path, model_name: str, payload_scalar_code: int,
     while tile <= maximum_batch_tile:
         batch_tiles.append(tile)
         tile *= 2
+    batch_team_plans = batch_team_plans or []
 
     wrappers = """
 template <unsigned MaxThreads, unsigned MinBlocks>
-void run_batch(Model const & model, InputView const & inputs, OutputView const & outputs, int) {
+bool run_batch(Model const & model, InputView const & inputs, OutputView const & outputs, int) {
   model.template infer_batch<MaxThreads, MinBlocks>(inputs, outputs);
+  return true;
 }
 
 template <unsigned MaxThreads, unsigned MinBlocks>
-void run_half2(Model const & model, InputView const & inputs, OutputView const & outputs, int) {
+bool run_half2(Model const & model, InputView const & inputs, OutputView const & outputs, int) {
   model.template infer_batch_half2<MaxThreads, MinBlocks>(inputs, outputs);
+  return true;
 }
 
 template <unsigned MaxThreads, unsigned MinBlocks>
-void run_hierarchical(Model const & model, InputView const & inputs, OutputView const & outputs, int batch_tile) {
+bool run_hierarchical(Model const & model, InputView const & inputs, OutputView const & outputs, int batch_tile) {
   model.template infer_batch_hierarchical<MaxThreads, MinBlocks>(inputs, outputs, batch_tile);
+  return true;
 }
+"""
+    for storage in batch_team_plans:
+        wrappers += f"""
+bool run_batch_team_{storage.team_size}(Model const & model, InputView const & inputs,
+                           OutputView const & outputs, int) {{
+  return model.try_infer_batch_team_{storage.team_size}(inputs, outputs);
+}}
 """
     if has_explicit_half2:
         wrappers += """
 template <unsigned MaxThreads, unsigned MinBlocks>
-void run_half2_explicit(Model const & model, InputView const & inputs, OutputView const & outputs, int) {
+bool run_half2_explicit(Model const & model, InputView const & inputs, OutputView const & outputs, int) {
   model.template infer_batch_half2_explicit<MaxThreads, MinBlocks>(inputs, outputs);
+  return true;
 }
 """
 
     candidates: list[str] = []
     for maximum_threads, minimum_blocks in launch_bounds:
         candidates.append(
-            f'    {{"infer_batch", {maximum_threads}, {minimum_blocks}, 0, '
+            f'    {{"infer_batch", {maximum_threads}, {minimum_blocks}, 0, 0, '
             f'&run_batch<{maximum_threads}, {minimum_blocks}>}},'
         )
     for maximum_threads, minimum_blocks in launch_bounds:
         candidates.append(
-            f'    {{"infer_batch_half2", {maximum_threads}, {minimum_blocks}, 0, '
+            f'    {{"infer_batch_half2", {maximum_threads}, {minimum_blocks}, 0, 0, '
             f'&run_half2<{maximum_threads}, {minimum_blocks}>}},'
         )
     if has_explicit_half2:
         for maximum_threads, minimum_blocks in launch_bounds:
             candidates.append(
-                f'    {{"infer_batch_half2_explicit", {maximum_threads}, {minimum_blocks}, 0, '
+                f'    {{"infer_batch_half2_explicit", {maximum_threads}, {minimum_blocks}, 0, 0, '
                 f'&run_half2_explicit<{maximum_threads}, {minimum_blocks}>}},'
             )
     for maximum_threads, minimum_blocks in launch_bounds:
         for batch_tile in batch_tiles:
             candidates.append(
-                f'    {{"infer_batch_hierarchical", {maximum_threads}, {minimum_blocks}, {batch_tile}, '
+                f'    {{"infer_batch_hierarchical", {maximum_threads}, {minimum_blocks}, {batch_tile}, 0, '
                 f'&run_hierarchical<{maximum_threads}, {minimum_blocks}>}},'
             )
+    for storage in batch_team_plans:
+        candidates.append(
+            f'    {{"infer_batch_team", {storage.team_size}, 0, 1, '
+            f'{storage.scratch_bytes_per_team}, &run_batch_team_{storage.team_size}}},'
+        )
     candidate_text = "\n".join(candidates)
 
     text = f"""// Generated deterministically by PONNI kokkos_nn. Edit candidate lists and run counts as desired.
@@ -2263,7 +2450,7 @@ namespace {{
 using Model = ponni::generated::{identifier}<{scalar}>;
 using InputView = typename Model::InputView;
 using OutputView = typename Model::OutputView;
-using Runner = void (*)(Model const &, InputView const &, OutputView const &, int);
+using Runner = bool (*)(Model const &, InputView const &, OutputView const &, int);
 
 int constexpr default_batch_size = 1000000;
 int constexpr warmup_runs = 3;
@@ -2274,6 +2461,7 @@ struct Candidate {{
   unsigned max_threads;
   unsigned min_blocks;
   int tile;
+  int scratch_bytes;
   Runner run;
 }};
 
@@ -2290,22 +2478,25 @@ std::vector<Candidate> candidates() {{
   }};
 }}
 
-double time_candidate(Candidate const & candidate, Model const & model,
-                      InputView const & inputs, OutputView const & outputs) {{
-  for (int run = 0; run < warmup_runs; run++) candidate.run(model, inputs, outputs, candidate.tile);
+bool time_candidate(Candidate const & candidate, Model const & model,
+                    InputView const & inputs, OutputView const & outputs, double & median_ms) {{
+  for (int run = 0; run < warmup_runs; run++) {{
+    if (!candidate.run(model, inputs, outputs, candidate.tile)) return false;
+  }}
   Kokkos::fence();
 
   std::vector<double> samples;
   samples.reserve(timed_runs);
   for (int run = 0; run < timed_runs; run++) {{
     auto const begin = std::chrono::steady_clock::now();
-    candidate.run(model, inputs, outputs, candidate.tile);
+    if (!candidate.run(model, inputs, outputs, candidate.tile)) return false;
     Kokkos::fence();
     auto const end = std::chrono::steady_clock::now();
     samples.push_back(std::chrono::duration<double, std::milli>(end - begin).count());
   }}
   std::sort(samples.begin(), samples.end());
-  return samples[samples.size() / 2];
+  median_ms = samples[samples.size() / 2];
+  return true;
 }}
 
 void print_header() {{
@@ -2313,6 +2504,7 @@ void print_header() {{
             << std::right << std::setw(14) << "max_threads"
             << std::setw(13) << "min_blocks"
             << std::setw(8) << "tile"
+            << std::setw(16) << "scratch_bytes"
             << std::setw(16) << "median_ms" << '\\n';
 }}
 
@@ -2322,6 +2514,7 @@ void print_result(Result const & result) {{
             << std::right << std::setw(14) << candidate.max_threads
             << std::setw(13) << candidate.min_blocks
             << std::setw(8) << candidate.tile
+            << std::setw(16) << candidate.scratch_bytes
             << std::setw(16) << std::fixed << std::setprecision(6) << result.median_ms << '\\n';
 }}
 
@@ -2373,7 +2566,14 @@ int main(int argc, char ** argv) {{
       std::vector<Result> results;
       results.reserve(configurations.size());
       for (Candidate const & candidate : configurations) {{
-        results.push_back(Result{{&candidate, time_candidate(candidate, model, inputs, outputs)}});
+        double median_ms = 0;
+        if (time_candidate(candidate, model, inputs, outputs, median_ms)) {{
+          results.push_back(Result{{&candidate, median_ms}});
+        }} else {{
+          std::cout << "Skipping unsupported candidate " << candidate.family
+                    << " (team_size=" << candidate.max_threads
+                    << ", scratch_bytes=" << candidate.scratch_bytes << ")\\n";
+        }}
       }}
 
       std::cout << "All results (batch_size=" << batch_size << ", timed_runs=" << timed_runs << ")\\n";

@@ -252,6 +252,7 @@ if (Kokkos_ENABLE_CUDA OR Kokkos_ENABLE_HIP)
     DEPENDS ${PONNI_WIDTH_MODELS}
             ${PONNI_GENERATOR_SOURCE_DIR}/kokkos_nn/compiler.py
             ${PONNI_GENERATOR_SOURCE_DIR}/kokkos_nn/emitter.py
+            ${PONNI_GENERATOR_SOURCE_DIR}/kokkos_nn/planner.py
             ${PONNI_GENERATOR_SOURCE_DIR}/kokkos_nn/scheduler.py
     COMMENT "Compiling width benchmark models to generated Kokkos C++"
     VERBATIM)
@@ -268,4 +269,82 @@ if (Kokkos_ENABLE_CUDA OR Kokkos_ENABLE_HIP)
     COMMAND bash ${PONNI_GENERATOR_SOURCE_DIR}/tests/run_gpu_scale_performance.sh
             $<TARGET_FILE:generator_gpu_scale> ${PONNI_WIDTH_WEIGHT_ARGUMENTS})
   set_tests_properties(generator_gpu_scale_test PROPERTIES LABELS "gpu;performance")
+
+  set(PONNI_ARCHITECTURE_NAMES
+      SeqW16D2 SeqW32D2 SeqW64D2 SeqW128D2 SeqW32D8 SeqW64D8
+      ResidualW32D4 ResidualW64D4 ResidualW32D8 ResidualW64D8 ResidualW128D8
+      LongSkipW32D8 LongSkipW64D8 Branch4W32D2 Branch4W64D2)
+  set(PONNI_ARCHITECTURE_ROOT ${PONNI_GENERATOR_BUILD_DIR}/batch_team_architectures)
+  set(PONNI_ARCHITECTURE_MODEL_DIR ${PONNI_ARCHITECTURE_ROOT}/models)
+  set(PONNI_ARCHITECTURE_MODELS)
+  set(PONNI_ARCHITECTURE_GENERATED_OUTPUTS)
+  set(PONNI_ARCHITECTURE_INCLUDE_DIRS)
+  set(PONNI_ARCHITECTURE_COMPILE_COMMANDS)
+  foreach(PONNI_ARCHITECTURE_NAME IN LISTS PONNI_ARCHITECTURE_NAMES)
+    set(PONNI_ARCHITECTURE_MODEL
+        ${PONNI_ARCHITECTURE_MODEL_DIR}/${PONNI_ARCHITECTURE_NAME}.onnx)
+    set(PONNI_ARCHITECTURE_DIR
+        ${PONNI_ARCHITECTURE_ROOT}/generated/${PONNI_ARCHITECTURE_NAME})
+    list(APPEND PONNI_ARCHITECTURE_MODELS ${PONNI_ARCHITECTURE_MODEL})
+    list(APPEND PONNI_ARCHITECTURE_GENERATED_OUTPUTS
+         ${PONNI_ARCHITECTURE_DIR}/${PONNI_ARCHITECTURE_NAME}.hpp
+         ${PONNI_ARCHITECTURE_DIR}/weights.bin
+         ${PONNI_ARCHITECTURE_DIR}/optimization_report.json)
+    list(APPEND PONNI_ARCHITECTURE_INCLUDE_DIRS ${PONNI_ARCHITECTURE_DIR})
+    list(APPEND PONNI_ARCHITECTURE_COMPILE_COMMANDS
+      COMMAND ${PONNI_GENERATOR_ENV} ${PONNI_TEST_PYTHON_EXECUTABLE} -m kokkos_nn compile
+              ${PONNI_ARCHITECTURE_MODEL} --output-dir ${PONNI_ARCHITECTURE_DIR}
+              --strategy batch-team --model-name ${PONNI_ARCHITECTURE_NAME}
+              --streaming-recompute-threshold 0)
+  endforeach()
+
+  add_custom_command(
+    OUTPUT ${PONNI_ARCHITECTURE_MODELS}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${PONNI_ARCHITECTURE_MODEL_DIR}
+    COMMAND ${PONNI_GENERATOR_ENV} ${PONNI_TEST_PYTHON_EXECUTABLE}
+            ${PONNI_GENERATOR_SOURCE_DIR}/examples/create_batch_team_architecture_benchmarks.py
+            --output-dir ${PONNI_ARCHITECTURE_MODEL_DIR}
+    DEPENDS ${PONNI_GENERATOR_SOURCE_DIR}/examples/create_batch_team_architecture_benchmarks.py
+    COMMENT "Creating deterministic ONNX batch-team architecture models"
+    VERBATIM)
+
+  add_custom_command(
+    OUTPUT ${PONNI_ARCHITECTURE_GENERATED_OUTPUTS}
+    ${PONNI_ARCHITECTURE_COMPILE_COMMANDS}
+    DEPENDS ${PONNI_ARCHITECTURE_MODELS}
+            ${PONNI_GENERATOR_SOURCE_DIR}/kokkos_nn/compiler.py
+            ${PONNI_GENERATOR_SOURCE_DIR}/kokkos_nn/emitter.py
+            ${PONNI_GENERATOR_SOURCE_DIR}/kokkos_nn/importer.py
+            ${PONNI_GENERATOR_SOURCE_DIR}/kokkos_nn/ir.py
+            ${PONNI_GENERATOR_SOURCE_DIR}/kokkos_nn/passes.py
+            ${PONNI_GENERATOR_SOURCE_DIR}/kokkos_nn/planner.py
+            ${PONNI_GENERATOR_SOURCE_DIR}/kokkos_nn/scheduler.py
+            ${PONNI_GENERATOR_SOURCE_DIR}/kokkos_nn/weights.py
+    COMMENT "Compiling batch-team architecture models to generated Kokkos C++"
+    VERBATIM)
+  add_custom_target(generator_batch_team_architecture_generation
+                    DEPENDS ${PONNI_ARCHITECTURE_GENERATED_OUTPUTS})
+  add_dependencies(generator_batch_team_architecture_generation ponni_python_env)
+
+  add_executable(
+    generator_batch_team_architecture_experiment
+    ${PONNI_GENERATOR_SOURCE_DIR}/tests/benchmark_batch_team_architectures.cpp)
+  add_dependencies(
+    generator_batch_team_architecture_experiment
+    generator_batch_team_architecture_generation)
+  target_include_directories(
+    generator_batch_team_architecture_experiment PRIVATE ${PONNI_ARCHITECTURE_INCLUDE_DIRS})
+  target_link_libraries(
+    generator_batch_team_architecture_experiment ponni Kokkos::kokkos ${PONNI_LINK_FLAGS})
+  target_compile_options(
+    generator_batch_team_architecture_experiment
+    PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${PONNI_CXX_FLAGS}>)
+  add_test(
+    NAME generator_batch_team_architecture_test
+    COMMAND ${PONNI_GENERATOR_ENV} ${PONNI_TEST_PYTHON_EXECUTABLE}
+            ${PONNI_GENERATOR_SOURCE_DIR}/tests/run_batch_team_architecture_experiment.py
+            --executable $<TARGET_FILE:generator_batch_team_architecture_experiment>
+            --root ${PONNI_ARCHITECTURE_ROOT})
+  set_tests_properties(
+    generator_batch_team_architecture_test PROPERTIES LABELS "gpu;performance")
 endif()

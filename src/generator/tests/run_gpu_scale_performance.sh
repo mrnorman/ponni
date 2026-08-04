@@ -33,8 +33,8 @@ $1 == "generator_gpu_summary" {
   summary_count++
   summary_rows = summary_rows sprintf("| %s | %s | %s | %s | %s | %s (%s) | %s | %s (%s) | %s | %s |\n",
       value("width"), value("batch"), value("sarray_ms"), value("view_batch_ms"),
-      value("hierarchical_tile1_ms"), value("hierarchical_best_ms"),
-      value("hierarchical_best_tile"), value("half2_ms"), value("half2_best_ms"),
+      value("batch_team_64_ms"), value("batch_team_best_ms"),
+      value("batch_team_best_size"), value("half2_ms"), value("half2_best_ms"),
       value("half2_best_policy"), value("half2_best_error"),
       value("half2_most_accurate_policy"))
   next
@@ -47,10 +47,10 @@ $1 == "generator_gpu_half2_policy" {
   next
 }
 
-$1 == "generator_gpu_tile" {
-  tile_rows = tile_rows sprintf("| %s | %s | %s | %s | %s | %s | %s | %s |\n",
-      value("width"), value("batch"), value("tile"), value("default_tile"),
-      value("tiled_ms"), value("speedup"), value("max_abs_difference"),
+$1 == "generator_gpu_batch_team" {
+  batch_team_rows = batch_team_rows sprintf("| %s | %s | %s | %s | %s | %s | %s |\n",
+      value("width"), value("batch"), value("team_size"),
+      value("batch_team_ms"), value("speedup"), value("max_abs_difference"),
       value("sarray_max_abs_difference"))
   next
 }
@@ -71,7 +71,8 @@ END {
   print "======================================="
   print "Times are milliseconds per inference call. Lower is better."
   print ""
-  print "| Width | Batch | SArray ms | View ms | Hier tile 1 ms | Best hier ms (tile) | Half2 baseline ms | Best half2 ms (policy) | Minimum half2 error | Most accurate half2 |"
+  print "| Width | Batch | SArray ms | View ms | Team 64 ms | Best batch-team ms (size) |" \
+        " Half2 baseline ms | Best half2 ms (policy) | Minimum half2 error | Most accurate half2 |"
   print "|---:|---:|---:|---:|---:|---:|---:|---:|---:|:---|"
   printf "%s", summary_rows
 
@@ -83,11 +84,11 @@ END {
   printf "%s", half2_rows
 
   print ""
-  print "Hierarchical batch tiles"
-  print "------------------------"
-  print "| Width | Batch | Tile | Generated default | Time ms | Speedup vs View | Max abs difference | SArray max abs difference |"
-  print "|---:|---:|---:|---:|---:|---:|---:|---:|"
-  printf "%s", tile_rows
+  print "Fixed batch-team sizes"
+  print "----------------------"
+  print "| Width | Batch | Team size | Time ms | Speedup vs View | Max abs difference | SArray max abs difference |"
+  print "|---:|---:|---:|---:|---:|---:|---:|"
+  printf "%s", batch_team_rows
 
   if (other_output != "") {
     print ""
