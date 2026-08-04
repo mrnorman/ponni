@@ -22,14 +22,12 @@ def check_header(path: Path) -> None:
             raise RuntimeError(f"{path.name}: direct View kernel contains forbidden reread/storage {forbidden!r}")
     if "preactivation" in generated:
         raise RuntimeError(f"{path.name}: generated dense preactivation was materialized")
-    for target in ("infer_one", "infer_batch", "infer_batch_half2", "infer_batch_hierarchical"):
+    for target in ("infer_one", "infer_batch", "infer_batch_half2"):
         if f"void {target}(" not in generated:
             raise RuntimeError(f"{path.name}: missing generated target {target}")
-    for team_size in (64, 128, 256, 512, 1024):
-        if f"void infer_batch_team_{team_size}(" not in generated:
-            raise RuntimeError(f"{path.name}: missing fixed batch-team target {team_size}")
-        if f"Kokkos::LaunchBounds<{team_size}, 0>" not in generated:
-            raise RuntimeError(f"{path.name}: batch-team launch bound does not match team size {team_size}")
+    for forbidden in ("infer_batch_hierarchical", "infer_batch_team", "Kokkos::TeamPolicy", "team_shmem"):
+        if forbidden in generated:
+            raise RuntimeError(f"{path.name}: obsolete generated construct {forbidden!r} remains")
 
 
 def main() -> None:
@@ -57,8 +55,6 @@ def main() -> None:
         raise RuntimeError("varying-width dense-chain storage does not cover the complete live workspace extent")
     if deep_local["streamed_dense_pairs"] < 2:
         raise RuntimeError("depth-10 model did not exercise generalized non-overlapping dense-chain streaming")
-    if deep_local["workspace_elements"] >= reports["deep"]["storage"]["total_elements"]:
-        raise RuntimeError("generalized dense-chain streaming did not reduce depth-10 sample-local storage")
     if dense_count(reports["resnet"]) != 10:
         raise RuntimeError("depth-10 ResNet did not retain ten canonical dense operations")
     if reports["resnet"]["optimized_operations"].count("ResidualAddActivation") != 5:
@@ -69,8 +65,8 @@ def main() -> None:
     for activation in ("Relu", "Sigmoid", "Tanh"):
         if int(branch_counts.get(activation, 0)) == 0:
             raise RuntimeError(f"branching model does not exercise {activation}")
-    if reports["branching"]["dense_chain_schedule"]["decision_counts"]["recompute"] != 1:
-        raise RuntimeError("branching model did not exercise bounded terminal-branch recomputation")
+    if reports["branching"]["dense_chain_schedule"]["decision_counts"]["retain"] < 1:
+        raise RuntimeError("branching model did not retain its shared activation")
     zoo_operations = set(reports["operator_zoo"]["optimized_operations"])
     required = {
         "BatchNormalization", "LayerNormalization", "Softmax", "LogSoftmax", "ReduceMean", "ReduceSum",

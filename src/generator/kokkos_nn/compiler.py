@@ -2,23 +2,18 @@ from __future__ import annotations
 
 from collections import Counter
 import json
-import math
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from .emitter import (
-    emit_cpp,
-    emit_autotuner,
-    half2_accumulator_plan,
-)
+from .emitter import emit_cpp
 from .errors import CompilerError
 from .importer import import_onnx
 from .interpreter import run_graph
 from .ir import DType
 from .passes import optimize
-from .planner import BatchTeamStoragePlan, plan_batch_team_storage, plan_storage
+from .planner import plan_storage
 from .scheduler import DenseChainSchedule, schedule_dense_chains
 from .weights import write_weights
 
@@ -42,8 +37,6 @@ def _fusion_rejections(graph, schedule: DenseChainSchedule) -> list[str]:
         consumers = graph.tensors[node.outputs[0]].consumers
         if len(consumers) > 1:
             decision = schedule.decisions.get(node.outputs[0])
-            if decision is not None and decision.action != "retain":
-                continue
             reasons.append(
                 f"node {node.id} ({node.op}) retains its output because it has {len(consumers)} consumers"
                 + (f": {decision.reason}" if decision is not None else "")
@@ -51,13 +44,8 @@ def _fusion_rejections(graph, schedule: DenseChainSchedule) -> list[str]:
     return reasons
 
 
-def _report(original, optimized, pass_report, strategy: str, plan, sample_plan, mask_plan, sample_mask_plan,
-            schedule: DenseChainSchedule, scalar_bytes: int,
-            default_batch_tile: int = 1, maximum_batch_tile: int = 1,
-            streaming_output_threshold: int = 8,
-            batch_team_plans: list[BatchTeamStoragePlan] | None = None,
-            batch_team_profile: dict[str, object] | None = None) -> dict[str, Any]:
-    batch_team_plans = batch_team_plans or []
+def _report(original, optimized, pass_report, sample_plan, sample_mask_plan,
+            schedule: DenseChainSchedule, scalar_bytes: int) -> dict[str, Any]:
     input_tensor = original.tensors[original.inputs[0]]
     output_tensor = original.tensors[original.outputs[0]]
     learned_parameter_count = sum(
@@ -68,21 +56,14 @@ def _report(original, optimized, pass_report, strategy: str, plan, sample_plan, 
         count for op, count in canonical_counts.items()
         if op in {"CompareSelect", "DenseBiasActivation", "ElementwiseChain", "ResidualAddActivation"}
     )
-    scheduled_consumers = [optimized.node_by_id(node_id) for node_id in schedule.pair_by_consumer]
-    streaming_pair = len(optimized.nodes) == 2 and len(scheduled_consumers) == 1
-    streaming_tail = bool(
-        scheduled_consumers and scheduled_consumers[-1].id == optimized.nodes[-1].id and
-        schedule.pair_by_consumer[scheduled_consumers[-1].id] == optimized.nodes[-2].id
-    )
-    storage_report = plan.to_dict(scalar_bytes)
-    storage_report["mask_plan"] = mask_plan.to_dict(1)
-    storage_report["estimated_stack_bytes"] += mask_plan.total_elements
-    storage_report["estimated_team_scratch_bytes"] += mask_plan.total_elements
+    storage_report = sample_plan.to_dict(scalar_bytes)
+    storage_report["mask_plan"] = sample_mask_plan.to_dict(1)
+    storage_report["estimated_stack_bytes"] += sample_mask_plan.total_elements
     return {
         "model_inputs": [{"name": input_tensor.name, "shape": _shape_string(input_tensor.shape),
                           "dtype": input_tensor.dtype.value}],
         "model_outputs": [{"name": output_tensor.name, "shape": _shape_string(output_tensor.shape),
-                            "dtype": output_tensor.dtype.value}],
+                           "dtype": output_tensor.dtype.value}],
         "onnx_ir_version": original.metadata.get("ir_version"),
         "onnx_opsets": original.metadata.get("opsets", {}),
         "onnx_operator_schema_counts": original.metadata.get("operator_schema_counts", {}),
@@ -106,346 +87,70 @@ def _report(original, optimized, pass_report, strategy: str, plan, sample_plan, 
             "mask_plan": sample_mask_plan.to_dict(1),
             "batch_input_staging_elements": optimized.tensors[optimized.inputs[0]].sample_size,
             "batch_input_staging_bytes": optimized.tensors[optimized.inputs[0]].sample_size * scalar_bytes,
-            "streaming_dense_pair": streaming_pair,
-            "streaming_dense_tail": streaming_tail,
             "streamed_dense_pairs": len(schedule.pair_by_consumer),
-            "recomputed_activations": sum(
-                decision.action == "recompute" for decision in schedule.decisions.values()
-            ),
-            "streaming_output_accumulators": max(
-                (optimized.tensors[node.outputs[0]].sample_size for node in scheduled_consumers),
-                default=0,
-            ),
         },
-        "recommended_batched_target": {
-            "sample-local": "infer_batch",
-            "team": "infer_batch_hierarchical",
-            "batch-team": "infer_batch_team_256",
-            "half2": "infer_batch_half2",
-        }.get(strategy, strategy),
-        "generated_targets": [
-            "infer_one", "infer_batch", "infer_batch_hierarchical", "infer_batch_half2",
-            *[f"infer_batch_team_{candidate.team_size}" for candidate in batch_team_plans],
-        ],
+        "generated_targets": ["infer_one", "infer_batch", "infer_batch_half2"],
         "execution_strategies": {
-            "infer_one": "device-inline fixed SArray inference with local planned storage",
-            "infer_batch": (
-                "View-based sample-local inference per RangePolicy batch iteration, with one fixed SArray input "
-                "staging pass and streaming dense emission when legal"
-            ),
-            "infer_batch_hierarchical": (
-                "one TeamPolicy team per batch tile, TeamThreadRange over neuron-by-batch work with batch "
-                "fastest, and batch-strided planned per-team scratch"
-            ),
-            **{
-                f"infer_batch_team_{candidate.team_size}": (
-                    f"fixed {candidate.team_size}-thread TeamPolicy with one serial sample per thread, "
-                    "vector length one, direct input access, and generator-planned mixed local/team-scratch storage"
-                )
-                for candidate in batch_team_plans
-            },
+            "infer_one": "device-inline fixed SArray inference with planned local storage",
+            "infer_batch": "Kokkos RangePolicy over samples with planned local storage",
             "infer_batch_half2": (
-                "Kokkos RangePolicy over pairs of adjacent batch samples using native CUDA/HIP half2 packed "
-                "FP16 multiply-accumulate with one dependent accumulation chain per dense dot product"
+                "Kokkos RangePolicy over adjacent sample pairs using ponni::TwoHalf and one dependent "
+                "FP16 accumulation chain per dense dot product"
             ),
         },
-        "hierarchical_batch_tiling": {
-            "default_tile": default_batch_tile,
-            "maximum_tile": maximum_batch_tile,
-            "scratch_bytes_at_default": (
-                plan.total_elements * scalar_bytes + mask_plan.total_elements
-            ) * default_batch_tile,
-            "index_order": "linear = neuron * active_batch + local_batch",
+        "half2": {
+            "batch_lanes": "two adjacent samples",
+            "input_output_views": f"{optimized.tensors[optimized.inputs[0]].dtype.value} API boundary",
+            "weight_storage": "persistent scalar FP16 DeviceSpace view, splatted across both lanes",
+            "multiply_type": "FP16",
+            "accumulator_type": "one dependent FP16 chain",
+            "launch": "Kokkos RangePolicy over ceil(batch_size / 2)",
         },
-        "batch_team": {
-            "profile": batch_team_profile or {},
-            "occupancy_scope": "scratch-limited theoretical occupancy; registers may reduce actual occupancy",
-            "index_order": "ibatch = league_rank * team_size + team_rank",
-            "candidates": [candidate.to_dict() for candidate in batch_team_plans],
-        },
-        "random_access_weights": (
-            "not selected: current dense loops use short, regular output-major weight traversals without a "
-            "demonstrated benefit from Kokkos::RandomAccess"
-        ),
         "batch_fastest": True,
         "fusion_rejections": _fusion_rejections(optimized, schedule),
         "rejected_constructs": [],
     }
 
 
+def _plans(optimized):
+    schedule = schedule_dense_chains(optimized)
+    floating = {DType.FLOAT32, DType.FLOAT64}
+    sample_plan = plan_storage(optimized, schedule.eliminated_tensors, dtypes=floating)
+    sample_mask_plan = plan_storage(optimized, dtypes={DType.BOOL})
+    return schedule, sample_plan, sample_mask_plan
+
+
 def validate_model(model_path: str | Path, disabled_passes: set[str] | None = None) -> dict[str, Any]:
     original, optimized, pass_report = load_and_optimize(model_path, disabled_passes)
-    floating = {DType.FLOAT32, DType.FLOAT64}
-    plan = plan_storage(optimized, dtypes=floating)
-    mask_plan = plan_storage(optimized, dtypes={DType.BOOL})
-    schedule = schedule_dense_chains(optimized)
-    sample_plan = plan_storage(
-        optimized, schedule.eliminated_tensors,
-        schedule.recompute_liveness_extensions(optimized),
-        floating,
-    )
-    sample_mask_plan = plan_storage(optimized, dtypes={DType.BOOL})
-    scalar_bytes = 4 if optimized.tensors[optimized.inputs[0]].dtype.value == "float32" else 8
+    schedule, sample_plan, sample_mask_plan = _plans(optimized)
+    scalar_bytes = 4 if optimized.tensors[optimized.inputs[0]].dtype == DType.FLOAT32 else 8
     return _report(
-        original, optimized, pass_report, "not-selected", plan, sample_plan, mask_plan, sample_mask_plan,
-        schedule, scalar_bytes,
+        original, optimized, pass_report, sample_plan, sample_mask_plan, schedule, scalar_bytes,
     )
 
 
-def _power_of_two_at_most(value: int) -> int:
-    result = 1
-    while result * 2 <= value:
-        result *= 2
-    return result
-
-
-def _hierarchical_batch_tiles(maximum_parallel_neurons: int, stack_bytes: int,
-                              max_team_scratch_bytes: int) -> tuple[int, int]:
-    scratch_limited = 32 if stack_bytes == 0 else max_team_scratch_bytes // stack_bytes
-    maximum_tile = _power_of_two_at_most(max(1, min(32, scratch_limited)))
-    # Use the smaller robust choice across NVIDIA Ampere and AMD MI250X. Ampere
-    # favored 32 throughout; MI250X favored 16 at width 64 and 8 at width 128.
-    if maximum_parallel_neurons <= 32:
-        measured_tile = 32
-    elif maximum_parallel_neurons <= 64:
-        measured_tile = 16
-    else:
-        measured_tile = 8
-    return min(maximum_tile, measured_tile), maximum_tile
-
-
-_BATCH_TEAM_SIZES = (64, 128, 256, 512, 1024)
-
-
-def _batch_team_storage_plans(graph, schedule: DenseChainSchedule, scalar_bytes: int,
-                              shared_bytes_per_cu: int, max_threads_per_cu: int,
-                              max_blocks_per_cu: int, target_occupancy: float,
-                              max_team_scratch_bytes: int) -> tuple[list[BatchTeamStoragePlan], dict[str, object]]:
-    plans: list[BatchTeamStoragePlan] = []
-    target_threads = math.ceil(target_occupancy * max_threads_per_cu)
-    for team_size in _BATCH_TEAM_SIZES:
-        required_teams = max(1, math.ceil(target_threads / team_size))
-        if required_teams > max_blocks_per_cu:
-            scratch_budget = 0
-        else:
-            scratch_budget = min(max_team_scratch_bytes, shared_bytes_per_cu // required_teams)
-        plans.append(plan_batch_team_storage(
-            graph, schedule, scalar_bytes, team_size, scratch_budget, required_teams,
-        ))
-    profile = {
-        "shared_bytes_per_cu": shared_bytes_per_cu,
-        "max_threads_per_cu": max_threads_per_cu,
-        "max_blocks_per_cu": max_blocks_per_cu,
-        "target_occupancy": target_occupancy,
-        "target_active_threads": target_threads,
-        "team_sizes": list(_BATCH_TEAM_SIZES),
-        "maximum_level0_scratch_bytes_per_team": max_team_scratch_bytes,
-    }
-    return plans, profile
-
-
-_HALF2_ACCUMULATOR_CHOICES = {0, 2, 4, 8, 16, 32}
-
-
-def _explicit_half2_accumulator_map(
-    graph, specification: int | str | list[int] | tuple[int, ...] | None
-) -> dict[int, int] | None:
-    if specification is None:
-        return None
-    dense_nodes = [node for node in graph.nodes if node.op in {"Dense", "DenseBiasActivation"}]
-    if isinstance(specification, int):
-        values = [specification]
-    elif isinstance(specification, str):
-        try:
-            values = [int(value.strip()) for value in specification.split(",") if value.strip()]
-        except ValueError as exc:
-            raise CompilerError(
-                "--half2-accumulators must be one integer or a comma-separated list of integers"
-            ) from exc
-    else:
-        values = [int(value) for value in specification]
-    if not values:
-        raise CompilerError("--half2-accumulators cannot be empty")
-    invalid = [value for value in values if value not in _HALF2_ACCUMULATOR_CHOICES]
-    if invalid:
-        choices = ", ".join(str(value) for value in sorted(_HALF2_ACCUMULATOR_CHOICES))
-        raise CompilerError(
-            f"unsupported half2 accumulator count {invalid[0]}; supported counts are {choices}"
-        )
-    if len(values) == 1:
-        values *= len(dense_nodes)
-    elif len(values) != len(dense_nodes):
-        raise CompilerError(
-            f"--half2-accumulators provided {len(values)} counts for {len(dense_nodes)} canonical dense nodes; "
-            "provide one count for all dense nodes or one count per dense node in optimization-report order"
-        )
-    return {node.id: value for node, value in zip(dense_nodes, values)}
-
-
-def compile_model(model_path: str | Path, output_dir: str | Path, strategy: str = "auto",
-                  disabled_passes: set[str] | None = None, model_name: str = "GeneratedModel",
-                  max_stack_bytes: int = 65536, team_output_threshold: int = 64,
-                  max_team_scratch_bytes: int = 49152, streaming_output_threshold: int = 8,
-                  half2_accumulators: int | str | list[int] | tuple[int, ...] | None = None,
-                  streaming_recompute_threshold: int = 64,
-                  batch_team_shared_bytes_per_cu: int = 65536,
-                  batch_team_max_threads_per_cu: int = 2048,
-                  batch_team_max_blocks_per_cu: int = 32,
-                  batch_team_target_occupancy: float = 0.5) -> dict[str, Any]:
-    nonnegative_options = {
-        "--max-stack-bytes": max_stack_bytes,
-        "--team-output-threshold": team_output_threshold,
-        "--max-team-scratch-bytes": max_team_scratch_bytes,
-        "--streaming-output-threshold": streaming_output_threshold,
-        "--streaming-recompute-threshold": streaming_recompute_threshold,
-        "--batch-team-shared-bytes-per-cu": batch_team_shared_bytes_per_cu,
-        "--batch-team-max-threads-per-cu": batch_team_max_threads_per_cu,
-        "--batch-team-max-blocks-per-cu": batch_team_max_blocks_per_cu,
-    }
-    for option, value in nonnegative_options.items():
-        if value < 0:
-            raise CompilerError(f"{option} must be nonnegative; got {value}")
-    if not 0 < batch_team_target_occupancy <= 1:
-        raise CompilerError(
-            "--batch-team-target-occupancy must be in (0, 1]; "
-            f"got {batch_team_target_occupancy}"
-        )
-    if batch_team_max_threads_per_cu == 0:
-        raise CompilerError("--batch-team-max-threads-per-cu must be positive")
-    if batch_team_max_blocks_per_cu == 0:
-        raise CompilerError("--batch-team-max-blocks-per-cu must be positive")
+def compile_model(model_path: str | Path, output_dir: str | Path,
+                  disabled_passes: set[str] | None = None,
+                  model_name: str = "GeneratedModel") -> dict[str, Any]:
     original, optimized, pass_report = load_and_optimize(model_path, disabled_passes)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    schedule = schedule_dense_chains(
-        optimized, streaming_output_threshold, streaming_recompute_threshold
-    )
-    if strategy == "auto":
-        maximum_parallel_neurons = max(
-            (optimized.tensors[node.outputs[0]].sample_size for node in optimized.nodes),
-            default=optimized.tensors[optimized.outputs[0]].sample_size,
-        )
-        strategy = (
-            "sample-local" if schedule.has_streaming
-            else ("team" if maximum_parallel_neurons >= team_output_threshold else "sample-local")
-        )
-    scalar_bytes = 4 if optimized.tensors[optimized.inputs[0]].dtype.value == "float32" else 8
-    if strategy not in {"sample-local", "team", "batch-team", "half2"}:
-        raise CompilerError(
-            f"unknown execution strategy {strategy!r}; choose auto, sample-local, team, batch-team, or half2"
-        )
-
-    floating = {DType.FLOAT32, DType.FLOAT64}
-    plan = plan_storage(optimized, dtypes=floating)
-    mask_plan = plan_storage(optimized, dtypes={DType.BOOL})
-    sample_plan = plan_storage(
-        optimized, schedule.eliminated_tensors,
-        schedule.recompute_liveness_extensions(optimized),
-        floating,
-    )
-    sample_mask_plan = plan_storage(optimized, dtypes={DType.BOOL})
-    stack_elements = sample_plan.total_elements
-    stack_bytes = stack_elements * scalar_bytes + sample_mask_plan.total_elements
-    team_scratch_bytes = plan.total_elements * scalar_bytes + mask_plan.total_elements
-    if stack_bytes > max_stack_bytes:
-        raise CompilerError(
-            f"planned local activation storage is {stack_bytes} bytes, above --max-stack-bytes={max_stack_bytes}; "
-            "use a larger explicit threshold or add a scratch/workspace execution strategy"
-        )
-    if team_scratch_bytes > max_team_scratch_bytes:
-        raise CompilerError(
-            f"planned per-team scratch is {team_scratch_bytes} bytes, above "
-            f"--max-team-scratch-bytes={max_team_scratch_bytes}; increase the explicit device-specific threshold "
-            "or use infer_batch"
-        )
-    maximum_parallel_neurons = max(
-        (optimized.tensors[node.outputs[0]].sample_size for node in optimized.nodes),
-        default=optimized.tensors[optimized.outputs[0]].sample_size,
-    )
-    default_batch_tile, maximum_batch_tile = _hierarchical_batch_tiles(
-        maximum_parallel_neurons, team_scratch_bytes, max_team_scratch_bytes
-    )
-    batch_team_plans, batch_team_profile = _batch_team_storage_plans(
-        optimized, schedule, scalar_bytes,
-        batch_team_shared_bytes_per_cu, batch_team_max_threads_per_cu,
-        batch_team_max_blocks_per_cu, batch_team_target_occupancy,
-        max_team_scratch_bytes,
-    )
+    schedule, sample_plan, sample_mask_plan = _plans(optimized)
+    scalar_bytes = 4 if optimized.tensors[optimized.inputs[0]].dtype == DType.FLOAT32 else 8
     offsets, manifest = write_weights(optimized, output_path)
     payload_elements = int(manifest["payload_bytes"]) // scalar_bytes
     scalar_code = 1 if scalar_bytes == 4 else 2
-    explicit_half2_accumulators = _explicit_half2_accumulator_map(optimized, half2_accumulators)
     header = emit_cpp(
-        optimized, plan, sample_plan, mask_plan, sample_mask_plan, schedule, offsets, output_path, model_name,
-        strategy, payload_elements, scalar_code,
-        default_batch_tile, maximum_batch_tile, streaming_output_threshold,
-        explicit_half2_accumulators, batch_team_plans
-    )
-    autotuner = emit_autotuner(
-        output_path, model_name, scalar_code, maximum_batch_tile,
-        explicit_half2_accumulators is not None, batch_team_plans
+        optimized, sample_plan, sample_mask_plan, schedule, offsets, output_path, model_name,
+        payload_elements, scalar_code,
     )
     report = _report(
-        original, optimized, pass_report, strategy, plan, sample_plan, mask_plan, sample_mask_plan,
-        schedule, scalar_bytes,
-        default_batch_tile, maximum_batch_tile, streaming_output_threshold,
-        batch_team_plans, batch_team_profile,
+        original, optimized, pass_report, sample_plan, sample_mask_plan, schedule, scalar_bytes,
     )
     report["generated_header"] = header.name
-    report["autotuner_source"] = autotuner.name
     report["weights"] = "weights.bin"
     report["manifest"] = "weights.json"
-    report["auto_strategy_rule"] = (
-        "recommend infer_batch when the deterministic dense-chain scheduler selects streaming or recomputation; "
-        "otherwise recommend "
-        f"infer_batch_hierarchical when an operation has at least {team_output_threshold} output neurons; "
-        "batch-team requires explicit selection until its fixed-team candidates have been measured; "
-        "half2 requires explicit selection because it changes floating-point semantics; "
-        "all five inference families are emitted"
-    )
-    report["half2"] = {
-        "batch_lanes": "two adjacent samples",
-        "input_output_views": f"{optimized.tensors[optimized.inputs[0]].dtype.value} API boundary",
-        "weight_storage": "one persistent scalar FP16 DeviceSpace view; each value is splatted across both lanes",
-        "multiply_type": "FP16",
-        "accumulator_type": "FP16 partial sums with an FP32 merge for multi-accumulator variants",
-        "launch": "Kokkos RangePolicy over ceil(batch_size / 2)",
-        "selection": "half2 is explicit-only",
-        "default_target": "infer_batch_half2",
-    }
-    dense_nodes = [node for node in optimized.nodes if node.op in {"Dense", "DenseBiasActivation"}]
-    heuristic_half2_accumulators = half2_accumulator_plan(
-        optimized, streaming_output_threshold, schedule
-    )
-    report["half2"]["heuristic"] = [
-        {
-            "dense_index": index,
-            "node_id": node.id,
-            "dot_length": optimized.tensors[node.inputs[0]].sample_size,
-            "output_size": optimized.tensors[node.outputs[0]].sample_size,
-            "accumulators": heuristic_half2_accumulators[node.id],
-        }
-        for index, node in enumerate(dense_nodes)
-    ]
-    if explicit_half2_accumulators is not None:
-        report["generated_targets"].append("infer_batch_half2_explicit")
-        report["execution_strategies"]["infer_batch_half2_explicit"] = (
-            "Kokkos half2 inference using user-specified per-dense accumulator counts"
-        )
-        report["half2"]["explicit"] = [
-            {
-                "dense_index": index,
-                "node_id": node.id,
-                "dot_length": optimized.tensors[node.inputs[0]].sample_size,
-                "output_size": optimized.tensors[node.outputs[0]].sample_size,
-                "accumulators": explicit_half2_accumulators[node.id],
-            }
-            for index, node in enumerate(dense_nodes)
-        ]
-    report["maximum_parallel_neurons"] = maximum_parallel_neurons
-    report["streaming_output_threshold"] = streaming_output_threshold
-    report["streaming_recompute_threshold"] = streaming_recompute_threshold
-    # Deterministic compiler self-check catches invalid fusions independently of ONNX Runtime.
+
     rng = np.random.default_rng(20260802)
     input_size = optimized.tensors[optimized.inputs[0]].sample_size
     verification_input = rng.standard_normal((input_size, 7)).astype(
@@ -464,5 +169,7 @@ def compile_model(model_path: str | Path, output_dir: str | Path, strategy: str 
             f"absolute_error={difference[index]}"
         )
     (output_path / "canonical_ir.json").write_text(optimized.to_json() + "\n")
-    (output_path / "optimization_report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    (output_path / "optimization_report.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n"
+    )
     return report

@@ -29,34 +29,8 @@ def _parser() -> argparse.ArgumentParser:
     compile_command = subparsers.add_parser("compile", help="generate Kokkos C++ and a weight blob")
     compile_command.add_argument("model", type=Path)
     compile_command.add_argument("--output-dir", type=Path, required=True)
-    compile_command.add_argument(
-        "--strategy", choices=("auto", "sample-local", "team", "batch-team", "half2"), default="auto"
-    )
     compile_command.add_argument("--model-name", default="GeneratedModel")
     compile_command.add_argument("--disable-pass", action="append", default=[], metavar="NAME[,NAME]")
-    compile_command.add_argument("--max-stack-bytes", type=int, default=65536)
-    compile_command.add_argument("--max-team-scratch-bytes", type=int, default=49152)
-    compile_command.add_argument("--team-output-threshold", type=int, default=64)
-    compile_command.add_argument("--batch-team-shared-bytes-per-cu", type=int, default=65536)
-    compile_command.add_argument("--batch-team-max-threads-per-cu", type=int, default=2048)
-    compile_command.add_argument("--batch-team-max-blocks-per-cu", type=int, default=32)
-    compile_command.add_argument("--batch-team-target-occupancy", type=float, default=0.5)
-    compile_command.add_argument("--streaming-output-threshold", type=int, default=8)
-    compile_command.add_argument(
-        "--streaming-recompute-threshold",
-        type=int,
-        default=64,
-        metavar="MADDS",
-        help="maximum duplicated dense multiply-adds allowed for deterministic terminal-branch recomputation",
-    )
-    compile_command.add_argument(
-        "--half2-accumulators",
-        metavar="COUNT[,COUNT...]",
-        help=(
-            "emit infer_batch_half2_explicit with one accumulator count for every dense node, or one count per "
-            "canonical dense node in optimization-report order; supported counts: 0,2,4,8,16,32"
-        ),
-    )
 
     passes = subparsers.add_parser("list-passes", help="list deterministic optimization pass names")
     passes.set_defaults(list_passes=True)
@@ -86,19 +60,8 @@ def main(argv: list[str] | None = None) -> None:
             report = compile_model(
                 args.model,
                 args.output_dir,
-                args.strategy,
                 disabled,
                 args.model_name,
-                args.max_stack_bytes,
-                args.team_output_threshold,
-                args.max_team_scratch_bytes,
-                args.streaming_output_threshold,
-                args.half2_accumulators,
-                args.streaming_recompute_threshold,
-                args.batch_team_shared_bytes_per_cu,
-                args.batch_team_max_threads_per_cu,
-                args.batch_team_max_blocks_per_cu,
-                args.batch_team_target_occupancy,
             )
         print(json.dumps(report, indent=2, sort_keys=True))
     except CompilerError as exc:

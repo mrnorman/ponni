@@ -108,7 +108,7 @@ class FrameworkExportTests(unittest.TestCase):
             self.assertIn("Concat", report["optimized_operations"])
             self.assertIn("ResidualAddActivation", report["optimized_operations"])
             self.assertEqual(report["learned_parameter_count"], 65)
-            self.assertGreaterEqual(report["dense_chain_schedule"]["decision_counts"]["recompute"], 1)
+            self.assertGreaterEqual(report["dense_chain_schedule"]["decision_counts"]["retain"], 1)
 
     def test_keras_activation_layers_keep_supported_attributes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -197,7 +197,7 @@ class FrameworkExportTests(unittest.TestCase):
             report = compile_model(model_path, root / "generated", model_name="TensorFlowRepresentationModel")
             self.assertEqual(report["optimized_operations"].count("DenseBiasActivation"), 3)
             self.assertIn("Concat", report["optimized_operations"])
-            self.assertGreaterEqual(report["dense_chain_schedule"]["decision_counts"]["recompute"], 1)
+            self.assertGreaterEqual(report["dense_chain_schedule"]["decision_counts"]["retain"], 1)
 
     def test_tensorflow_exported_unsupported_operation_has_actionable_diagnostic(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

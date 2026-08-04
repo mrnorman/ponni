@@ -64,65 +64,16 @@ No Python package installation is performed during CMake configure.
 
 ## Ahead-of-time generator tests
 
-The build exports deterministic PyTorch shallow MLP/residual examples plus depth-10, ResNet, DenseNet, branched,
-and operator-zoo functionality models. It also exports a Keras MLP and normalization pipeline through
-`Model.export(format="onnx")` and a pure TensorFlow residual module through `tf2onnx`. All are compiled into Kokkos
-headers, and the build creates
-`generator_integration` and `generator_benchmark`. Run the focused tests and benchmark with:
+The generator tests use one CPU-only Python environment at unit/build/python_cpu_env for PyTorch, Keras,
+TensorFlow, ONNX, and ONNX Runtime. Configure and build normally; the ponni_python_env target creates or refreshes it.
 
-```bash
-cd unit/build
-ctest -V -R generator
-./generator/generator_benchmark generator/generated/mlp_generated/weights.bin
-```
+The integration tests export representative framework and operator-zoo models, compile them to Kokkos C++, and
+compare infer_one, infer_batch, and infer_batch_half2 with CPU reference data. Structure checks verify that all three
+APIs are present and that obsolete team policies, team scratch, and batch-team entry points are absent.
 
-`generator_python_test` covers PyTorch, Keras, and TensorFlow ONNX interchange; Keras no-bias dense layers,
-branching, concatenation, residuals, direct activation attributes, decomposed normalization, and Boolean-select ELU;
-TensorFlow transposed constant weights,
-`bias_add`, reshape, shared branches, and unsupported-op diagnostics; importer diagnostics;
-canonicalization; fusion; generalized dense-chain scheduling;
-bounded branch recomputation, liveness/storage reuse, weight
-validation, unfused-versus-optimized IR numerics, and ONNX Runtime comparisons for expanded activations, static
-shape/layout glue, normalization, feature reductions, math, comparison, finite-value checks, logical selection, and
-mask-cast operators.
-`generator_integration_test` runs generated batched `DeviceSpace`
-batch-only, fixed 64-thread batch-team, hierarchical tile 1/default, packed half2, and embedded `SArray` inference.
-Together these cover the five inference families: inline SArray, View batch, hierarchical team-neuron, fixed
-batch-team, and packed two-sample FP16. The GPU scale test includes baseline and explicit four-partial half2 policies;
-the compiler unit tests cover every accepted explicit count
-(`0`, `2`, `4`, `8`, `16`, and `32`) and reject other values.
-The diverse models use batches 1, 2, 3, 7, and 11; the original examples retain 1, 2, 7, 32, and 67. A separate
-structure test rejects generated input rereads, View intermediates, truncated live workspaces, and preactivation arrays,
-and requires the operator-zoo operations to survive into generated code.
-
-When CUDA or HIP is enabled, `generator_gpu_scale_test` additionally checks `I -> I -> I -> 3` networks for
-`I = 4, 8, 16, 32, 64, 128`; fixed batch-team sizes 64, 128, 256, 512, and 1024; and single-precision batches 10,000,
-100,000, and 1,000,000 using a 1 GiB device pool. Each team thread evaluates one sample serially, and live workspace
-uses the generator-selected mixture of thread-local arrays and batch-strided team scratch. Use the debug machine file
-for correctness, but use
-the target machine's optimized GPU environment for walltimes used to evaluate scheduling changes. The formatted
-summary reports
-SArray, direct View batch, the 64-thread batch-team baseline, the best batch-team size, and Kokkos-launched
-packed half2 with baseline and explicit four-accumulator policies. Explicit multi-partial policies remain available
-for target-specific tuning or lower error.
-Sample-local
-emission deterministically selects non-overlapping dense pairs throughout deeper chains, streaming each
-selected activation into scalar output accumulators and retaining or cheaply recomputing branches as reported.
-
-`generator_batch_team_architecture_test` is the larger, portable CUDA/HIP performance experiment. At batch size
-1,000,000 it compares direct batch inference with all five fixed batch-team sizes across shallow and depth-eight
-sequential MLPs, short residual blocks, depth-eight long skips, and four-branch DAGs at widths 16 through 128. Its
-formatted output joins timing and correctness with the generated local/scratch placement and scratch budget. On a
-GPU machine, build and run only this experiment with:
-
-```bash
-make -j generator_batch_team_architecture_experiment
-ctest -V -R '^generator_batch_team_architecture_test$'
-```
-
-The models and generated reports are under
-`unit/build/generator/generated/batch_team_architectures`, allowing the same test to be configured with a CUDA
-machine file on `thatchroof` or a HIP machine file on Frontier.
+Generated artifacts are under unit/build/generator/generated. Each model directory contains its header, weights,
+canonical_ir.json, and optimization_report.json. Generator performance experiments and architecture-specific
+autotuning are intentionally not part of the unit suite.
 
 ## gcov coverage workflow
 

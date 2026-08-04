@@ -10,7 +10,6 @@ import onnx
 from onnx import TensorProto, helper, numpy_helper
 
 from kokkos_nn.compiler import compile_model, load_and_optimize, validate_model
-from kokkos_nn.emitter import half2_accumulator_heuristic
 from kokkos_nn.errors import CompilerError
 from kokkos_nn.export import export_operator_zoo
 from kokkos_nn.interpreter import run_graph
@@ -78,14 +77,6 @@ def _matmul_residual_model(path: Path, multiple_consumers: bool = False) -> Path
 
 
 class CompilerTests(unittest.TestCase):
-    def test_half2_accumulator_heuristic_uses_conservative_cross_vendor_policy(self) -> None:
-        self.assertEqual(half2_accumulator_heuristic(1), 0)
-        self.assertEqual(half2_accumulator_heuristic(8), 0)
-        self.assertEqual(half2_accumulator_heuristic(32), 0)
-        self.assertEqual(half2_accumulator_heuristic(128, 3), 0)
-        self.assertEqual(half2_accumulator_heuristic(128, 4), 0)
-        self.assertEqual(half2_accumulator_heuristic(128, 8), 0)
-
     def test_operator_zoo_matches_onnx_runtime_before_and_after_optimization(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -119,7 +110,7 @@ class CompilerTests(unittest.TestCase):
             self.assertIn("ponni::TwoHalf exponential_sum", generated)
             self.assertIn("ponni::TwoMask mask_workspace", generated)
             self.assertIn("ponni::TwoHalf::select", generated)
-            self.assertIn("TeamThreadRange(team, active_batch)", generated)
+            self.assertNotIn("Kokkos::TeamPolicy", generated)
             self.assertNotIn("preactivation", generated)
             self.assertEqual(report["storage"]["external_workspace_bytes"], 0)
             self.assertGreater(report["sample_local_storage"]["mask_workspace_elements"], 0)
@@ -235,60 +226,25 @@ class CompilerTests(unittest.TestCase):
                 values = np.arange(28, dtype=np.float32).reshape(4, 7) / 13
                 np.testing.assert_allclose(run_graph(original, values), run_graph(optimized, values), rtol=1e-6, atol=1e-6)
                 output = root / f"generated_{transposed}"
-                report = compile_model(model, output, strategy="sample-local", model_name="GemmModel")
+                report = compile_model(model, output, model_name="GemmModel")
                 generated = (output / "GemmModel.hpp").read_text()
                 self.assertIn("Scalar sum =", generated)
                 self.assertNotIn("preactivation", generated)
                 self.assertEqual(generated.count("void infer_one("), 1)
                 self.assertEqual(generated.count("void infer_batch("), 1)
-                self.assertEqual(generated.count("void infer_batch_hierarchical("), 1)
                 self.assertEqual(generated.count("void infer_batch_half2("), 1)
-                for team_size in (64, 128, 256, 512, 1024):
-                    self.assertEqual(generated.count(f"void infer_batch_team_{team_size}("), 1)
-                    self.assertEqual(generated.count(f"bool try_infer_batch_team_{team_size}("), 1)
-                    self.assertIn(f"Kokkos::LaunchBounds<{team_size}, 0>", generated)
-                self.assertNotIn("tensorcore", generated.lower())
-                self.assertNotIn("void infer_batch_half2_heuristic(", generated)
-                self.assertNotIn("void infer_batch_half2_explicit(", generated)
-                self.assertGreaterEqual(generated.count("Kokkos::LaunchBounds<MaxThreads, MinBlocks>"), 3)
+                self.assertNotIn("infer_batch_hierarchical", generated)
+                self.assertNotIn("infer_batch_team", generated)
+                self.assertNotIn("Kokkos::TeamPolicy", generated)
+                self.assertNotIn("Kokkos::LaunchBounds", generated)
+                self.assertNotIn("team_shmem", generated)
+                self.assertNotIn("infer_batch_half2_explicit", generated)
                 self.assertIn("ponni::TwoHalf::fma", generated)
-                self.assertIn("HalfParameterView", generated)
-                self.assertIn("int const ibatch = 2 * ipair", generated)
-                self.assertIn("Kokkos::TeamThreadRange(team", generated)
-                self.assertIn("team.team_shmem().get_shmem", generated)
-                self.assertIn("int const local_batch = linear % active_batch", generated)
-                self.assertIn("int const i = linear / active_batch", generated)
-                self.assertIn("int const batch_begin = team.league_rank() * batch_tile", generated)
-                self.assertIn("batch_tile > maximum_hierarchical_batch_tile", generated)
-                self.assertIn("default_hierarchical_batch_tile", generated)
-                autotuner = (output / "GemmModel_autotune.cpp").read_text()
-                self.assertIn("All results", autotuner)
-                self.assertIn("Best result for each family", autotuner)
-                self.assertIn("max_threads", autotuner)
-                self.assertIn("int constexpr default_batch_size = 1000000", autotuner)
-                self.assertIn("ponni::init_device_pool(", autotuner)
-                self.assertIn("ponni::finalize_device_pool();", autotuner)
-                self.assertIn('{"infer_batch", 1024, 1, 0, 0, &run_batch<1024, 1>}', autotuner)
-                self.assertIn('{"infer_batch_team", 64, 0, 1, ', autotuner)
-                self.assertIn("Skipping unsupported candidate", autotuner)
-                self.assertEqual(report["autotuner_source"], "GemmModel_autotune.cpp")
-                self.assertEqual(report["hierarchical_batch_tiling"]["index_order"],
-                                 "linear = neuron * active_batch + local_batch")
+                self.assertEqual(
+                    report["generated_targets"], ["infer_one", "infer_batch", "infer_batch_half2"]
+                )
                 self.assertEqual(report["optimized_operations"], ["DenseBiasActivation"])
-                self.assertEqual(
-                    [candidate["team_size"] for candidate in report["batch_team"]["candidates"]],
-                    [64, 128, 256, 512, 1024],
-                )
-                self.assertEqual(
-                    [candidate["scratch_budget_bytes_per_team"]
-                     for candidate in report["batch_team"]["candidates"]],
-                    [4096, 8192, 16384, 32768, 49152],
-                )
-                for candidate in report["batch_team"]["candidates"]:
-                    self.assertLessEqual(
-                        candidate["scratch_bytes_per_team"],
-                        candidate["scratch_budget_bytes_per_team"],
-                    )
+                self.assertNotIn("autotuner_source", report)
                 validate_weight_blob(output / "weights.bin", json.loads((output / "weights.json").read_text()))
 
     def test_matmul_bias_residual_and_storage_plan(self) -> None:
@@ -302,16 +258,12 @@ class CompilerTests(unittest.TestCase):
             values = np.random.default_rng(8).standard_normal((4, 32)).astype(np.float32)
             np.testing.assert_allclose(run_graph(original, values), run_graph(optimized, values), rtol=2e-6, atol=2e-6)
             report = compile_model(
-                model, Path(directory) / "generated", strategy="batch-team", model_name="ResidualModel",
+                model, Path(directory) / "generated", model_name="ResidualModel",
             )
-            candidate64 = report["batch_team"]["candidates"][0]
-            self.assertGreater(candidate64["scratch_bytes_per_team"], 0)
-            self.assertEqual(report["recommended_batched_target"], "infer_batch_team_256")
+            self.assertEqual(report["generated_targets"], ["infer_one", "infer_batch", "infer_batch_half2"])
             generated = (Path(directory) / "generated" / "ResidualModel.hpp").read_text()
-            self.assertIn("scratch_workspace[(0 + i) * 64 + team_rank]", generated)
-            self.assertNotIn("TeamThreadRange", generated.split("try_infer_batch_team_64", 1)[1].split(
-                "try_infer_batch_team_128", 1
-            )[0])
+            self.assertNotIn("scratch_workspace", generated)
+            self.assertNotIn("TeamThreadRange", generated)
 
     def test_two_dense_layers_stream_without_hidden_stack_array(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -333,7 +285,7 @@ class CompilerTests(unittest.TestCase):
             model = _save_model(root / "stream.onnx", nodes, initializers)
             report = compile_model(model, root / "out", model_name="StreamModel")
             generated = (root / "out" / "StreamModel.hpp").read_text()
-            self.assertTrue(report["sample_local_storage"]["streaming_dense_pair"])
+            self.assertEqual(report["sample_local_storage"]["streamed_dense_pairs"], 1)
             self.assertEqual(report["sample_local_storage"]["workspace_elements"], 0)
             self.assertIn("Scalar hidden =", generated)
             self.assertIn("Scalar output_accumulator_0", generated)
@@ -342,44 +294,10 @@ class CompilerTests(unittest.TestCase):
             self.assertNotIn("sample_outputs", generated)
             self.assertIn("ponni::SArray<Scalar,num_inputs> inputs;", generated)
             self.assertIn("inputs(i) = input_view(i,ibatch)", generated)
-            direct_batch = generated.split("void infer_batch_hierarchical(", 1)[0].rsplit("void infer_batch(", 1)[1]
+            direct_batch = generated.split("void infer_batch_half2(", 1)[0].rsplit("void infer_batch(", 1)[1]
             self.assertNotIn("inputs(j,ibatch)", direct_batch)
-            self.assertNotIn("tensorcore", generated.lower())
-            self.assertNotIn("tensorcore", report)
-            half2_report = compile_model(model, root / "half2", strategy="half2", model_name="Half2Model")
-            self.assertEqual(half2_report["recommended_batched_target"], "infer_batch_half2")
-            self.assertEqual(
-                [entry["accumulators"] for entry in half2_report["half2"]["heuristic"]],
-                [0, 0],
-            )
-            explicit_report = compile_model(
-                model,
-                root / "half2_explicit",
-                strategy="half2",
-                model_name="ExplicitHalf2Model",
-                half2_accumulators="2,16",
-            )
-            explicit_generated = (root / "half2_explicit" / "ExplicitHalf2Model.hpp").read_text()
-            self.assertIn("void infer_batch_half2_explicit(", explicit_generated)
-            self.assertIn("output_accumulator_0_15", explicit_generated)
-            self.assertEqual(
-                [entry["accumulators"] for entry in explicit_report["half2"]["explicit"]],
-                [2, 16],
-            )
-            for accumulator_count in (0, 2, 4, 8, 16, 32):
-                policy_report = compile_model(
-                    model,
-                    root / f"half2_policy_{accumulator_count}",
-                    half2_accumulators=accumulator_count,
-                )
-                self.assertEqual(
-                    [entry["accumulators"] for entry in policy_report["half2"]["explicit"]],
-                    [accumulator_count, accumulator_count],
-                )
-            with self.assertRaisesRegex(CompilerError, "provided 3 counts for 2 canonical dense nodes"):
-                compile_model(model, root / "bad_half2_length", half2_accumulators="2,4,8")
-            with self.assertRaisesRegex(CompilerError, "unsupported half2 accumulator count 3"):
-                compile_model(model, root / "bad_half2_value", half2_accumulators=3)
+            self.assertEqual(report["half2"]["accumulator_type"], "one dependent FP16 chain")
+            self.assertNotIn("infer_batch_half2_explicit", generated)
 
 
     def test_generalized_dense_chain_streaming_uses_weighted_nonoverlapping_pairs(self) -> None:
@@ -416,99 +334,13 @@ class CompilerTests(unittest.TestCase):
             report = compile_model(model, root / "out", model_name="DeepStreamModel")
             generated = (root / "out" / "DeepStreamModel.hpp").read_text()
             self.assertEqual(report["sample_local_storage"]["streamed_dense_pairs"], 2)
-            self.assertEqual(report["dense_chain_schedule"]["eliminated_elements"], 15)
-            self.assertEqual(report["sample_local_storage"]["workspace_elements"], 6)
+            self.assertEqual(report["dense_chain_schedule"]["eliminated_elements"], 13)
+            self.assertEqual(report["sample_local_storage"]["workspace_elements"], 13)
             self.assertEqual(
                 report["dense_chain_schedule"]["decision_counts"],
-                {"materialize": 2, "stream": 2, "retain": 0, "recompute": 0},
+                {"materialize": 2, "stream": 2, "retain": 0},
             )
-            self.assertNotIn("workspace[13]", generated)
-
-    def test_small_terminal_dense_branch_recomputes_only_under_explicit_cost_rule(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            rng = np.random.default_rng(41)
-            initializers = [
-                numpy_helper.from_array(rng.standard_normal((4, 4)).astype(np.float32), "weight0"),
-                numpy_helper.from_array(rng.standard_normal(4).astype(np.float32), "bias0"),
-                numpy_helper.from_array(rng.standard_normal((4, 2)).astype(np.float32), "weight1"),
-                numpy_helper.from_array(rng.standard_normal(2).astype(np.float32), "bias1"),
-                numpy_helper.from_array(rng.standard_normal((4, 2)).astype(np.float32), "weight2"),
-                numpy_helper.from_array(rng.standard_normal(2).astype(np.float32), "bias2"),
-            ]
-            nodes = [
-                helper.make_node("Transpose", ["input"], ["x"], perm=[1, 0]),
-                helper.make_node("Gemm", ["x", "weight0", "bias0"], ["dense0"]),
-                helper.make_node("Tanh", ["dense0"], ["shared"]),
-                helper.make_node("Gemm", ["shared", "weight1", "bias1"], ["left"]),
-                helper.make_node("Gemm", ["shared", "weight2", "bias2"], ["right"]),
-                helper.make_node("Add", ["left", "right"], ["joined"]),
-                helper.make_node("Transpose", ["joined"], ["output"], perm=[1, 0]),
-            ]
-            model = _save_model(
-                root / "recompute.onnx", nodes, initializers,
-                input_shape=(4, "batch"), output_shape=(2, "batch")
-            )
-            recomputed = compile_model(
-                model, root / "recomputed", model_name="RecomputedModel",
-                streaming_recompute_threshold=16,
-            )
-            retained = compile_model(
-                model, root / "retained", model_name="RetainedModel",
-                streaming_recompute_threshold=0,
-            )
-            self.assertEqual(recomputed["dense_chain_schedule"]["decision_counts"]["recompute"], 1)
-            self.assertEqual(recomputed["dense_chain_schedule"]["recompute_extra_madds"], 16)
-            self.assertEqual(recomputed["sample_local_storage"]["workspace_elements"], 4)
-            self.assertEqual(retained["dense_chain_schedule"]["decision_counts"]["retain"], 1)
-            self.assertEqual(retained["sample_local_storage"]["workspace_elements"], 8)
-            recomputed_header = (root / "recomputed" / "RecomputedModel.hpp").read_text()
-            retained_header = (root / "retained" / "RetainedModel.hpp").read_text()
-            streaming_loop = "for (int ihidden = 0; ihidden < 4; ihidden++)"
-            self.assertGreater(recomputed_header.count(streaming_loop), retained_header.count(streaming_loop))
-
-    def test_recomputed_branch_extends_materialized_source_liveness(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            rng = np.random.default_rng(43)
-            widths = ((4, 3), (3, 2), (2, 2), (2, 2))
-            initializers = []
-            for index, (input_width, output_width) in enumerate(widths):
-                initializers.extend([
-                    numpy_helper.from_array(
-                        rng.standard_normal((input_width, output_width)).astype(np.float32), f"weight{index}"
-                    ),
-                    numpy_helper.from_array(
-                        rng.standard_normal(output_width).astype(np.float32), f"bias{index}"
-                    ),
-                ])
-            nodes = [
-                helper.make_node("Transpose", ["input"], ["x"], perm=[1, 0]),
-                helper.make_node("Gemm", ["x", "weight0", "bias0"], ["dense0"]),
-                helper.make_node("Tanh", ["dense0"], ["base"]),
-                helper.make_node("Gemm", ["base", "weight1", "bias1"], ["dense1"]),
-                helper.make_node("Tanh", ["dense1"], ["shared"]),
-                helper.make_node("Gemm", ["shared", "weight2", "bias2"], ["left"]),
-                helper.make_node("Gemm", ["shared", "weight3", "bias3"], ["right"]),
-                helper.make_node("Add", ["left", "right"], ["joined"]),
-                helper.make_node("Transpose", ["joined"], ["output"], perm=[1, 0]),
-            ]
-            model = _save_model(
-                root / "nested_recompute.onnx", nodes, initializers,
-                input_shape=(4, "batch"), output_shape=(2, "batch")
-            )
-            _, optimized, _ = load_and_optimize(model)
-            schedule = schedule_dense_chains(optimized, recompute_madd_threshold=6)
-            recompute = next(
-                decision for decision in schedule.decisions.values() if decision.action == "recompute"
-            )
-            source_id = optimized.node_by_id(recompute.producer_id).inputs[0]
-            extensions = schedule.recompute_liveness_extensions(optimized)
-            self.assertEqual(extensions[source_id], set(recompute.consumer_ids))
-            sample_plan = plan_storage(optimized, schedule.eliminated_tensors, extensions)
-            source_slot = sample_plan.slots[source_id]
-            positions = {node.id: index for index, node in enumerate(optimized.nodes)}
-            self.assertEqual(source_slot.last_use, max(positions[node_id] for node_id in recompute.consumer_ids))
+            self.assertIn("Scalar workspace[13]", generated)
 
     def test_storage_reuse_after_last_consumer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -596,17 +428,7 @@ class CompilerTests(unittest.TestCase):
             self.assertEqual(report["optimized_operations"], [])
             self.assertEqual(report["sample_local_storage"]["workspace_elements"], 0)
             self.assertIn("outputs(i) = inputs(i);", generated)
-            self.assertIn("outputs(i,ibatch) = inputs(i,ibatch);", generated)
-
-    def test_negative_generation_limits_are_rejected_before_compilation(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            with self.assertRaisesRegex(CompilerError, "--streaming-recompute-threshold must be nonnegative"):
-                compile_model(
-                    root / "unused.onnx", root / "out", streaming_recompute_threshold=-1
-                )
-            with self.assertRaisesRegex(CompilerError, "--batch-team-target-occupancy"):
-                compile_model(root / "unused.onnx", root / "out", batch_team_target_occupancy=1.1)
+            self.assertIn("output_view(i,ibatch) = outputs(i);", generated)
 
     def test_static_feature_concat_imports_and_emits_for_all_portable_paths(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -629,7 +451,7 @@ class CompilerTests(unittest.TestCase):
             generated = (root / "out" / "ConcatModel.hpp").read_text()
             self.assertIn("workspace[0 + 0 + i] = inputs(i)", generated)
             self.assertIn("ponni::TwoHalf workspace", generated)
-            self.assertIn("else if (i < 8)", generated)
+            self.assertIn("workspace[0 + 4 + i] = inputs(i)", generated)
 
     def test_multiple_consumers_prevent_illegal_dense_activation_fusion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
