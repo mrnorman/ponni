@@ -229,11 +229,38 @@ def make_functionality_models():
             right = torch.sigmoid(self.right(shared))
             return self.output(torch.tanh(left + right))
 
+    class WorkspaceLevels(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.chain0 = torch.nn.Linear(12, 20)
+            self.chain1 = torch.nn.Linear(20, 10)
+            self.chain2 = torch.nn.Linear(10, 6)
+            self.shared2 = torch.nn.Linear(12, 30)
+            self.branch2 = torch.nn.ModuleList(torch.nn.Linear(30, 6) for _ in range(2))
+            self.shared3 = torch.nn.Linear(12, 25)
+            self.branch3 = torch.nn.ModuleList(torch.nn.Linear(25, 6) for _ in range(3))
+            self.tail = torch.nn.Linear(6, 12)
+            self.output = torch.nn.Linear(12, 4)
+
+        def forward(self, value):
+            chain = torch.tanh(self.chain0(value))
+            chain = torch.tanh(self.chain1(chain))
+            chain = torch.tanh(self.chain2(chain))
+            shared2 = torch.tanh(self.shared2(value))
+            joined2 = torch.tanh(self.branch2[0](shared2)) + torch.tanh(self.branch2[1](shared2))
+            shared3 = torch.tanh(self.shared3(value))
+            joined3 = torch.tanh(self.branch3[0](shared3))
+            joined3 = joined3 + torch.tanh(self.branch3[1](shared3))
+            joined3 = joined3 + torch.tanh(self.branch3[2](shared3))
+            tail = torch.tanh(self.tail(chain + joined2 + joined3))
+            return self.output(tail)
+
     return {
         "deep10": (DeepTen().eval(), 9),
         "resnet10": (ResNetTen().eval(), 10),
         "densenet": (DenseNet().eval(), 8),
         "branching": (Branching().eval(), 11),
+        "workspace_levels": (WorkspaceLevels().eval(), 12),
     }
 
 

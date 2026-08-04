@@ -5,6 +5,11 @@
 #include "DenseNetModel.hpp"
 #include "BranchingModel.hpp"
 #include "OperatorZooModel.hpp"
+#include "WorkspaceLevel1Model.hpp"
+#include "WorkspaceLevel2Model.hpp"
+#include "WorkspaceLevel3Model.hpp"
+#include "WorkspaceLevel4Model.hpp"
+#include "WorkspaceLevel5Model.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -197,12 +202,14 @@ bool check_model(std::string const & weight_path, std::string const & reference_
 }  // namespace
 
 int main(int argc, char ** argv) {
-  if (argc != 15) {
+  if (argc != 21) {
     std::cerr << "Usage: " << argv[0]
               << " mlp_weights mlp_reference residual_weights residual_reference"
               << " deep10_weights deep10_reference resnet10_weights resnet10_reference"
               << " densenet_weights densenet_reference branching_weights branching_reference"
-              << " operator_zoo_weights operator_zoo_reference" << std::endl;
+              << " operator_zoo_weights operator_zoo_reference"
+              << " workspace_level1_weights workspace_level2_weights workspace_level3_weights"
+              << " workspace_level4_weights workspace_level5_weights workspace_reference" << std::endl;
     return 2;
   }
   Kokkos::initialize(argc, argv);
@@ -217,6 +224,11 @@ int main(int argc, char ** argv) {
     using DenseNet = ponni::generated::DenseNetModel<float>;
     using Branching = ponni::generated::BranchingModel<float>;
     using OperatorZoo = ponni::generated::OperatorZooModel<float>;
+    using WorkspaceLevel1 = ponni::generated::WorkspaceLevel1Model<float>;
+    using WorkspaceLevel2 = ponni::generated::WorkspaceLevel2Model<float>;
+    using WorkspaceLevel3 = ponni::generated::WorkspaceLevel3Model<float>;
+    using WorkspaceLevel4 = ponni::generated::WorkspaceLevel4Model<float>;
+    using WorkspaceLevel5 = ponni::generated::WorkspaceLevel5Model<float>;
     passed = check_model<Mlp>(argv[1], argv[2], "MLP", maximum_error) && passed;
     passed = check_model<Residual>(argv[3], argv[4], "residual", maximum_error) && passed;
     passed = check_model<Deep10>(argv[5], argv[6], "depth-10 MLP", maximum_error) && passed;
@@ -224,6 +236,11 @@ int main(int argc, char ** argv) {
     passed = check_model<DenseNet>(argv[9], argv[10], "DenseNet", maximum_error) && passed;
     passed = check_model<Branching>(argv[11], argv[12], "branching DAG", maximum_error) && passed;
     passed = check_model<OperatorZoo>(argv[13], argv[14], "operator zoo", maximum_error) && passed;
+    passed = check_model<WorkspaceLevel1>(argv[15], argv[20], "workspace level 1", maximum_error) && passed;
+    passed = check_model<WorkspaceLevel2>(argv[16], argv[20], "workspace level 2", maximum_error) && passed;
+    passed = check_model<WorkspaceLevel3>(argv[17], argv[20], "workspace level 3", maximum_error) && passed;
+    passed = check_model<WorkspaceLevel4>(argv[18], argv[20], "workspace level 4", maximum_error) && passed;
+    passed = check_model<WorkspaceLevel5>(argv[19], argv[20], "workspace level 5", maximum_error) && passed;
     passed = check_parameter_api<Mlp,float>(argv[1], "float model/float parameters") && passed;
     passed = check_parameter_api<Mlp,double>(argv[1], "float model/double parameters", true) && passed;
     passed = check_parameter_api<ponni::generated::MlpModel<double>,float>(

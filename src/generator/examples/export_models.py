@@ -11,6 +11,7 @@ from kokkos_nn.export import export_module, export_operator_zoo, make_example_mo
 def main() -> None:
     parser = argparse.ArgumentParser(description="Export deterministic PONNI generator example models")
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--quiet", action="store_true", help="do not print the JSON report to stdout")
     args = parser.parse_args()
     mlp, residual = make_example_models()
     results = {
@@ -32,7 +33,8 @@ def main() -> None:
         for name, result in results.items()
     }
     (args.output_dir / "export_report.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
-    print(json.dumps(summary, indent=2, sort_keys=True))
+    if not args.quiet:
+        print(json.dumps(summary, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

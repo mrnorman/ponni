@@ -286,6 +286,7 @@ class CompilerTests(unittest.TestCase):
             report = compile_model(model, root / "out", model_name="StreamModel")
             generated = (root / "out" / "StreamModel.hpp").read_text()
             self.assertEqual(report["sample_local_storage"]["streamed_dense_pairs"], 1)
+            self.assertEqual(report["workspace_reduction_aggressiveness"], 3)
             self.assertEqual(report["sample_local_storage"]["workspace_elements"], 0)
             self.assertIn("Scalar hidden =", generated)
             self.assertIn("Scalar output_accumulator_0", generated)
@@ -333,14 +334,29 @@ class CompilerTests(unittest.TestCase):
             )
             report = compile_model(model, root / "out", model_name="DeepStreamModel")
             generated = (root / "out" / "DeepStreamModel.hpp").read_text()
+            _, optimized, _ = load_and_optimize(model)
+            schedules = [schedule_dense_chains(optimized, level) for level in range(1, 4)]
+            self.assertEqual([len(schedule.pair_by_consumer) for schedule in schedules], [0, 1, 2])
             self.assertEqual(report["sample_local_storage"]["streamed_dense_pairs"], 2)
             self.assertEqual(report["dense_chain_schedule"]["eliminated_elements"], 13)
             self.assertEqual(report["sample_local_storage"]["workspace_elements"], 13)
             self.assertEqual(
                 report["dense_chain_schedule"]["decision_counts"],
-                {"materialize": 2, "stream": 2, "retain": 0},
+                {"materialize": 2, "stream": 2, "retain": 0, "recompute": 0},
             )
             self.assertIn("Scalar workspace[13]", generated)
+
+    def test_workspace_reduction_aggressiveness_rejects_values_outside_one_through_five(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for value in (0, 6):
+                with self.assertRaisesRegex(
+                    CompilerError, "--workspace-reduction-aggressiveness must be an integer from 1 through 5",
+                ):
+                    compile_model(
+                        root / "unused.onnx", root / "out",
+                        workspace_reduction_aggressiveness=value,
+                    )
 
     def test_storage_reuse_after_last_consumer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

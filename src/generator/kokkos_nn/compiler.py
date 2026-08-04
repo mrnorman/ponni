@@ -37,6 +37,8 @@ def _fusion_rejections(graph, schedule: DenseChainSchedule) -> list[str]:
         consumers = graph.tensors[node.outputs[0]].consumers
         if len(consumers) > 1:
             decision = schedule.decisions.get(node.outputs[0])
+            if decision is not None and decision.action != "retain":
+                continue
             reasons.append(
                 f"node {node.id} ({node.op}) retains its output because it has {len(consumers)} consumers"
                 + (f": {decision.reason}" if decision is not None else "")
@@ -78,6 +80,7 @@ def _report(original, optimized, pass_report, sample_plan, sample_mask_plan,
         "passes": pass_report,
         "storage": storage_report,
         "dense_chain_schedule": schedule.to_dict(),
+        "workspace_reduction_aggressiveness": schedule.aggressiveness,
         "sample_local_storage": {
             "workspace_elements": sample_plan.total_elements,
             "workspace_bytes": sample_plan.total_elements * scalar_bytes,
@@ -87,7 +90,13 @@ def _report(original, optimized, pass_report, sample_plan, sample_mask_plan,
             "mask_plan": sample_mask_plan.to_dict(1),
             "batch_input_staging_elements": optimized.tensors[optimized.inputs[0]].sample_size,
             "batch_input_staging_bytes": optimized.tensors[optimized.inputs[0]].sample_size * scalar_bytes,
-            "streamed_dense_pairs": len(schedule.pair_by_consumer),
+            "streamed_dense_pairs": sum(
+                decision.action == "stream" for decision in schedule.decisions.values()
+            ),
+            "recomputed_activations": sum(
+                decision.action == "recompute" for decision in schedule.decisions.values()
+            ),
+            "extra_recomputation_madds": schedule.recompute_extra_madds,
         },
         "generated_targets": ["infer_one", "infer_batch", "infer_batch_half2"],
         "execution_strategies": {
@@ -112,17 +121,32 @@ def _report(original, optimized, pass_report, sample_plan, sample_mask_plan,
     }
 
 
-def _plans(optimized):
-    schedule = schedule_dense_chains(optimized)
+def _plans(optimized, workspace_reduction_aggressiveness: int):
+    schedule = schedule_dense_chains(optimized, workspace_reduction_aggressiveness)
     floating = {DType.FLOAT32, DType.FLOAT64}
-    sample_plan = plan_storage(optimized, schedule.eliminated_tensors, dtypes=floating)
+    sample_plan = plan_storage(
+        optimized, schedule.eliminated_tensors,
+        schedule.recompute_liveness_extensions(optimized), floating,
+    )
     sample_mask_plan = plan_storage(optimized, dtypes={DType.BOOL})
     return schedule, sample_plan, sample_mask_plan
 
 
-def validate_model(model_path: str | Path, disabled_passes: set[str] | None = None) -> dict[str, Any]:
+def _validate_workspace_reduction_aggressiveness(value: int) -> None:
+    if value not in range(1, 6):
+        raise CompilerError(
+            "--workspace-reduction-aggressiveness must be an integer from 1 through 5; "
+            f"got {value}"
+        )
+
+
+def validate_model(model_path: str | Path, disabled_passes: set[str] | None = None,
+                   workspace_reduction_aggressiveness: int = 3) -> dict[str, Any]:
+    _validate_workspace_reduction_aggressiveness(workspace_reduction_aggressiveness)
     original, optimized, pass_report = load_and_optimize(model_path, disabled_passes)
-    schedule, sample_plan, sample_mask_plan = _plans(optimized)
+    schedule, sample_plan, sample_mask_plan = _plans(
+        optimized, workspace_reduction_aggressiveness,
+    )
     scalar_bytes = 4 if optimized.tensors[optimized.inputs[0]].dtype == DType.FLOAT32 else 8
     return _report(
         original, optimized, pass_report, sample_plan, sample_mask_plan, schedule, scalar_bytes,
@@ -131,11 +155,15 @@ def validate_model(model_path: str | Path, disabled_passes: set[str] | None = No
 
 def compile_model(model_path: str | Path, output_dir: str | Path,
                   disabled_passes: set[str] | None = None,
-                  model_name: str = "GeneratedModel") -> dict[str, Any]:
+                  model_name: str = "GeneratedModel",
+                  workspace_reduction_aggressiveness: int = 3) -> dict[str, Any]:
+    _validate_workspace_reduction_aggressiveness(workspace_reduction_aggressiveness)
     original, optimized, pass_report = load_and_optimize(model_path, disabled_passes)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    schedule, sample_plan, sample_mask_plan = _plans(optimized)
+    schedule, sample_plan, sample_mask_plan = _plans(
+        optimized, workspace_reduction_aggressiveness,
+    )
     scalar_bytes = 4 if optimized.tensors[optimized.inputs[0]].dtype == DType.FLOAT32 else 8
     offsets, manifest = write_weights(optimized, output_path)
     payload_elements = int(manifest["payload_bytes"]) // scalar_bytes

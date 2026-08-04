@@ -16,6 +16,7 @@ from kokkos_nn.framework_export import export_keras_model, export_keras_normaliz
 def main() -> None:
     parser = argparse.ArgumentParser(description="Export Keras and TensorFlow PONNI examples to ONNX")
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--quiet", action="store_true", help="do not print the JSON report to stdout")
     args = parser.parse_args()
     results = {
         "keras_mlp": export_keras_model(args.output_dir),
@@ -34,7 +35,8 @@ def main() -> None:
     (args.output_dir / "framework_export_report.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n"
     )
-    print(json.dumps(summary, indent=2, sort_keys=True))
+    if not args.quiet:
+        print(json.dumps(summary, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

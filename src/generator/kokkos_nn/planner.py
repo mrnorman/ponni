@@ -34,9 +34,11 @@ class StoragePlan:
 
 
 def plan_storage(graph: Graph, excluded_tensors: set[int] | None = None,
+                 additional_consumers: dict[int, set[int]] | None = None,
                  dtypes: set[DType] | None = None) -> StoragePlan:
     graph.rebuild_links()
     excluded_tensors = excluded_tensors or set()
+    additional_consumers = additional_consumers or {}
     position = {node.id: index for index, node in enumerate(graph.nodes)}
     intervals: list[tuple[int, int, int, int]] = []
     for tensor_id, tensor in graph.tensors.items():
@@ -47,7 +49,7 @@ def plan_storage(graph: Graph, excluded_tensors: set[int] | None = None,
         if tensor.is_input or tensor.is_constant or tensor_id in graph.outputs or tensor.producer is None:
             continue
         first = position[tensor.producer]
-        consumers = set(tensor.consumers)
+        consumers = set(tensor.consumers) | additional_consumers.get(tensor_id, set())
         last = max((position[consumer] for consumer in consumers), default=first)
         intervals.append((first, last, tensor_id, tensor.sample_size))
     intervals.sort(key=lambda item: (item[0], item[2]))

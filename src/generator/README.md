@@ -13,9 +13,9 @@ minimizes activation lifetimes, and assigns remaining floating-point and Boolean
 slots. It writes a generated header, `weights.bin`, `weights.json`, `canonical_ir.json`, and
 `optimization_report.json`.
 
-Legal dense pairs are streamed only when doing so reduces the number of live scalar values. Shared branch values are
-materialized once and retained through their final consumer. The generator does not use architecture-specific
-thresholds, recomputation cost rules, launch bounds, team scratch, or an autotuner.
+Legal dense pairs can be streamed instead of materialized, and the two highest workspace-reduction levels can
+recompute selected shared branches. The generator does not use architecture-specific thresholds, launch bounds, team
+scratch, or an autotuner.
 
 ## Installation and use
 
@@ -31,6 +31,37 @@ Compile an exported model:
 python -m kokkos_nn validate model.onnx
 python -m kokkos_nn compile model.onnx --output-dir generated --model-name MyModel
 ```
+
+Both commands print their JSON report by default. Add `--quiet` to suppress that terminal output;
+`compile` still writes its report files, and the CMake generation targets use this mode.
+
+### Workspace-reduction aggressiveness
+
+`--workspace-reduction-aggressiveness 1-5` controls how aggressively PONNI avoids materialized intermediate
+workspace. The default is level 3, which matches PONNI's standard deterministic dense-chain scheduling.
+
+| Level | Dense streaming | Shared branches |
+|---|---|---|
+| 1 | Disabled | Always materialized |
+| 2 | Only a legal dense pair whose consumer produces the model output | Always materialized |
+| 3 | Legal non-overlapping pairs throughout the graph, maximizing total `H - O` | Always materialized |
+| 4 | Level 3 search around selected branches | Recompute a two-consumer terminal dense branch only when planned workspace decreases |
+| 5 | Level 3 search around selected branches | Recompute eligible one-hop dense branches of any fan-out when planned workspace decreases |
+
+Here `H` is the eliminated hidden width and `O` is the consumer output width. Levels 4 and 5 extend the producer
+input's planned lifetime through every recomputed consumer. Recursive recomputation is prohibited. Level 4 introduces
+at most one additional producer evaluation; level 5 may duplicate more work for higher-fan-out branches.
+
+For example:
+
+```bash
+python -m kokkos_nn compile model.onnx --output-dir generated \
+  --workspace-reduction-aggressiveness 4
+```
+
+The optimization report records the selected level, streamed pairs, recomputed activations, eliminated workspace
+elements, and additional dense multiply-adds. These levels describe generated workspace policy, not measured hardware
+register allocation.
 
 Disable an optimization pass when diagnosing a graph:
 

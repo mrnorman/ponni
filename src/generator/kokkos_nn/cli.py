@@ -25,12 +25,22 @@ def _parser() -> argparse.ArgumentParser:
     validate = subparsers.add_parser("validate", help="validate, canonicalize, and report a model")
     validate.add_argument("model", type=Path)
     validate.add_argument("--disable-pass", action="append", default=[], metavar="NAME[,NAME]")
+    validate.add_argument(
+        "--workspace-reduction-aggressiveness", type=int, choices=range(1, 6), default=3,
+        help="cross-layer streaming and one-hop recomputation level (1-5; default: 3)",
+    )
+    validate.add_argument("--quiet", action="store_true", help="do not print the JSON report to stdout")
 
     compile_command = subparsers.add_parser("compile", help="generate Kokkos C++ and a weight blob")
     compile_command.add_argument("model", type=Path)
     compile_command.add_argument("--output-dir", type=Path, required=True)
     compile_command.add_argument("--model-name", default="GeneratedModel")
     compile_command.add_argument("--disable-pass", action="append", default=[], metavar="NAME[,NAME]")
+    compile_command.add_argument(
+        "--workspace-reduction-aggressiveness", type=int, choices=range(1, 6), default=3,
+        help="cross-layer streaming and one-hop recomputation level (1-5; default: 3)",
+    )
+    compile_command.add_argument("--quiet", action="store_true", help="do not print the JSON report to stdout")
 
     passes = subparsers.add_parser("list-passes", help="list deterministic optimization pass names")
     passes.set_defaults(list_passes=True)
@@ -55,15 +65,19 @@ def main(argv: list[str] | None = None) -> None:
             return
         disabled = _disabled(args.disable_pass)
         if args.command == "validate":
-            report = validate_model(args.model, disabled)
+            report = validate_model(
+                args.model, disabled, args.workspace_reduction_aggressiveness,
+            )
         else:
             report = compile_model(
                 args.model,
                 args.output_dir,
                 disabled,
                 args.model_name,
+                args.workspace_reduction_aggressiveness,
             )
-        print(json.dumps(report, indent=2, sort_keys=True))
+        if not args.quiet:
+            print(json.dumps(report, indent=2, sort_keys=True))
     except CompilerError as exc:
         print(f"kokkos_nn: error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc

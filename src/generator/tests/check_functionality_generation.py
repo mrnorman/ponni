@@ -37,10 +37,14 @@ def main() -> None:
     parser.add_argument("--densenet", type=Path, required=True)
     parser.add_argument("--branching", type=Path, required=True)
     parser.add_argument("--operator-zoo", type=Path, required=True)
+    parser.add_argument("--workspace-levels", type=Path, required=True)
     args = parser.parse_args()
 
     reports: dict[str, dict[str, object]] = {}
-    for name, directory in vars(args).items():
+    model_directories = {
+        name: directory for name, directory in vars(args).items() if name != "workspace_levels"
+    }
+    for name, directory in model_directories.items():
         check_header(next(directory.glob("*.hpp")))
         reports[name] = json.loads((directory / "optimization_report.json").read_text())
         if reports[name]["storage"]["external_workspace_bytes"] != 0:
@@ -67,6 +71,26 @@ def main() -> None:
             raise RuntimeError(f"branching model does not exercise {activation}")
     if reports["branching"]["dense_chain_schedule"]["decision_counts"]["retain"] < 1:
         raise RuntimeError("branching model did not retain its shared activation")
+
+    level_reports = [
+        json.loads((args.workspace_levels / f"level_{level}" / "optimization_report.json").read_text())
+        for level in range(1, 6)
+    ]
+    for level, report in enumerate(level_reports, 1):
+        if report["workspace_reduction_aggressiveness"] != level:
+            raise RuntimeError(f"workspace level {level} report records the wrong policy")
+        check_header(next((args.workspace_levels / f"level_{level}").glob("*.hpp")))
+    counts = [report["dense_chain_schedule"]["decision_counts"] for report in level_reports]
+    if counts[0]["stream"] != 0 or counts[0]["recompute"] != 0:
+        raise RuntimeError("workspace level 1 unexpectedly streams or recomputes")
+    if not 0 < counts[1]["stream"] < counts[2]["stream"]:
+        raise RuntimeError("workspace levels 2 and 3 did not progressively enable dense streaming")
+    if counts[2]["recompute"] != 0:
+        raise RuntimeError("workspace level 3 unexpectedly recomputes a shared branch")
+    if counts[3]["recompute"] != 1:
+        raise RuntimeError("workspace level 4 did not recompute exactly the two-consumer branch")
+    if counts[4]["recompute"] != 2:
+        raise RuntimeError("workspace level 5 did not additionally recompute the three-consumer branch")
     zoo_operations = set(reports["operator_zoo"]["optimized_operations"])
     required = {
         "BatchNormalization", "LayerNormalization", "Softmax", "LogSoftmax", "ReduceMean", "ReduceSum",

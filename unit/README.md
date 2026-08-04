@@ -71,6 +71,11 @@ The integration tests export representative framework and operator-zoo models, c
 compare infer_one, infer_batch, and infer_batch_half2 with CPU reference data. Structure checks verify that all three
 APIs are present and that obsolete team policies, team scratch, and batch-team entry points are absent.
 
+A dedicated mixed chain/branch graph is generated at every `--workspace-reduction-aggressiveness` level from 1
+through 5. All five headers are compiled, all three inference APIs in each header are checked against the same
+reference outputs, and their reports are inspected to ensure each level exercised its intended streaming or
+recomputation behavior.
+
 Generated artifacts are under unit/build/generator/generated. Each model directory contains its header, weights,
 canonical_ir.json, and optimization_report.json. Generator performance experiments and architecture-specific
 autotuning are intentionally not part of the unit suite.
