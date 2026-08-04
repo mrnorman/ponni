@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -80,9 +81,14 @@ def main() -> int:
     parser.add_argument("--root", type=Path, required=True)
     args = parser.parse_args()
 
+    executable_environment = os.environ.copy()
+    # Python reference generation is CPU-only, but HIP also honors this CUDA
+    # visibility variable.  Do not hide the GPU from the compiled child.
+    executable_environment.pop("CUDA_VISIBLE_DEVICES", None)
     result = subprocess.run(
         [str(args.executable), str(args.root)],
         check=False,
+        env=executable_environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,

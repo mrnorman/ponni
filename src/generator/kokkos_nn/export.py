@@ -384,7 +384,11 @@ def export_operator_zoo(output_dir: str | Path, batch_sizes: tuple[int, ...] = (
         [helper.make_tensor_value_info("output", TensorProto.FLOAT, [width, "batch"])],
         [numpy_helper.from_array(value, name) for name, value in arrays.items()],
     )
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 22)])
+    # ONNX Runtime 1.23 does not provide a CPU implementation for the
+    # LpNormalization schema introduced in opset 22.  Opset 21 selects the
+    # equivalent version-1 schema while retaining the opset-20 operators in
+    # this fixture (notably Gelu), so the reference model remains portable.
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 21)])
     model.ir_version = 10
     for key, value in {"ponni.orientation": "features_batch", "ponni.batch_symbol": "batch"}.items():
         entry = model.metadata_props.add()

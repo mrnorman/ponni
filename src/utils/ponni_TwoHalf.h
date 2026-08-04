@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstdint>
+#include <limits>
+
 #include <Kokkos_Core.hpp>
 
 #include "ponni_TwoMask.h"
@@ -14,6 +17,17 @@ public:
   using half_type = Kokkos::Experimental::half_t;
 
 private:
+  static_assert(sizeof(float) == sizeof(std::uint32_t),
+                "TwoHalf NaN classification requires a 32-bit float");
+  static_assert(std::numeric_limits<float>::is_iec559,
+                "TwoHalf NaN classification requires IEEE-754 floating point");
+
+  KOKKOS_INLINE_FUNCTION static bool is_nan_value(float value) {
+    std::uint32_t const bits = Kokkos::bit_cast<std::uint32_t>(value);
+    return (bits & 0x7f800000u) == 0x7f800000u &&
+           (bits & 0x007fffffu) != 0;
+  }
+
   KOKKOS_INLINE_FUNCTION static float round_to_nearest_even(float value) {
     if (!Kokkos::isfinite(value) || value == 0.0f) return value;
     float const lower = Kokkos::floor(value);
@@ -25,7 +39,9 @@ private:
   }
 
   KOKKOS_INLINE_FUNCTION static float sign_value(float value) {
-    if (Kokkos::isnan(value)) return value;
+    // Bit classification remains valid under -ffast-math, which otherwise
+    // permits the compiler to assume that NaNs do not occur.
+    if (is_nan_value(value)) return value;
     if (value > 0.0f) return 1.0f;
     if (value < 0.0f) return -1.0f;
     return 0.0f;
@@ -306,7 +322,7 @@ public:
   }
 
   KOKKOS_INLINE_FUNCTION static TwoMask is_nan(TwoHalf value) {
-    return TwoMask::from_bools(Kokkos::isnan(value.low()), Kokkos::isnan(value.high()));
+    return TwoMask::from_bools(is_nan_value(value.low()), is_nan_value(value.high()));
   }
 
   KOKKOS_INLINE_FUNCTION static TwoMask is_inf(TwoHalf value, bool detect_negative, bool detect_positive) {

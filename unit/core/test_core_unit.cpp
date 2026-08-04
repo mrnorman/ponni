@@ -1,14 +1,27 @@
 #include "ponni.h"
 
 #include <array>
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
+#include <limits>
 #include <string>
 
 namespace {
 
 bool nearly_equal(float a, float b, float tol = 1e-6f) {
   return std::fabs(a - b) <= tol;
+}
+
+bool is_ieee_nan(float value) {
+  static_assert(sizeof(float) == sizeof(std::uint32_t),
+                "NaN test requires a 32-bit float");
+  static_assert(std::numeric_limits<float>::is_iec559,
+                "NaN test requires IEEE-754 floating point");
+  std::uint32_t const bits = std::bit_cast<std::uint32_t>(value);
+  return (bits & 0x7f800000u) == 0x7f800000u &&
+         (bits & 0x007fffffu) != 0;
 }
 
 template <class Layer>
@@ -757,8 +770,10 @@ int main(int argc, char** argv) {
       require_true(nearly_equal(result_h(4), 2.0f) && nearly_equal(result_h(5), -4.0f) &&
                    nearly_equal(result_h(6), 2.0f) && nearly_equal(result_h(7), -2.0f),
                    "TwoHalf ONNX ties-to-even rounding produced incorrect lanes");
-      require_true(std::isnan(result_h(8)) && result_h(9) == 0.0f && !std::signbit(result_h(9)),
-                   "TwoHalf ONNX sign handling produced incorrect lanes");
+      require_true(is_ieee_nan(result_h(8)) && result_h(9) == 0.0f && !std::signbit(result_h(9)),
+                   "TwoHalf ONNX sign handling produced incorrect lanes: low=" +
+                   std::to_string(result_h(8)) + ", high=" + std::to_string(result_h(9)) +
+                   ", high_signbit=" + std::to_string(std::signbit(result_h(9))));
       require_true(nearly_equal(result_h(10), 0.0f) && nearly_equal(result_h(11), 0.0f) &&
                    nearly_equal(result_h(12), 0.0f) && nearly_equal(result_h(13), 1.0f) &&
                    nearly_equal(result_h(14), 4.0f) && nearly_equal(result_h(15), -3.0f),

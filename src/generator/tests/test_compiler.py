@@ -126,7 +126,7 @@ class CompilerTests(unittest.TestCase):
             self.assertNotIn("preactivation", generated)
             self.assertEqual(report["storage"]["external_workspace_bytes"], 0)
             self.assertGreater(report["sample_local_storage"]["mask_workspace_elements"], 0)
-            self.assertEqual(report["onnx_opsets"]["ai.onnx"], 22)
+            self.assertEqual(report["onnx_opsets"]["ai.onnx"], 21)
             self.assertIn("Gelu:20", report["onnx_operator_schema_counts"])
             self.assertEqual(report["learned_parameter_count"], 33)
             self.assertEqual(manifest["learned_parameter_count"], 33)
