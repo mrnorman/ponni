@@ -9,6 +9,7 @@ import numpy as np
 
 
 class DType(str, Enum):
+    BOOL = "bool"
     FLOAT32 = "float32"
     FLOAT64 = "float64"
     INT32 = "int32"

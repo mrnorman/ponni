@@ -1,4 +1,4 @@
-# PONNI: Portable Online Neural Network Inferencing
+# PONNI: POrtable Neural Network Inferencing
 ### Efficient in-loop neural network inferencing made easy in C++
 
 Author: Matt Norman, Oak Ridge National Laboratory, https://mrnorman.github.io
@@ -25,8 +25,9 @@ a standalone launch-bounds and batch-tile autotuner. ONNX and Python are build-t
 does not link an ML runtime.
 
 The supported model class is a fixed-feature, inference-only vector DAG: dense MLPs, residual and branched networks,
-feature concatenation, supported activations, feature normalization/probabilities/reductions, and scalar or
-exact-shape elementwise arithmetic. One dynamic batch dimension is allowed. Convolution/pooling, attention,
+feature concatenation, supported activations, feature normalization/probabilities/reductions, scalar or exact-shape
+elementwise arithmetic, and typed Boolean comparisons, logical masks, and selection. One dynamic batch dimension is
+allowed. Convolution/pooling, attention,
 recurrent/control-flow models, dynamic hidden or sequence dimensions, multiple inputs/outputs, arbitrary
 broadcasting, training behavior, quantization, and custom ONNX operators are not yet supported. The generator emits
 four families: inline one-sample `SArray`, View batch, hierarchical team-neuron, and packed two-sample FP16. See the

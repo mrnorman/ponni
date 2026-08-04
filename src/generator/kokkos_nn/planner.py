@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .ir import Graph
+from .ir import DType, Graph
 
 
 @dataclass
@@ -36,13 +36,16 @@ class StoragePlan:
 
 
 def plan_storage(graph: Graph, excluded_tensors: set[int] | None = None,
-                 additional_consumers: dict[int, set[int]] | None = None) -> StoragePlan:
+                 additional_consumers: dict[int, set[int]] | None = None,
+                 dtypes: set[DType] | None = None) -> StoragePlan:
     graph.rebuild_links()
     excluded_tensors = excluded_tensors or set()
     additional_consumers = additional_consumers or {}
     position = {node.id: index for index, node in enumerate(graph.nodes)}
     intervals: list[tuple[int, int, int, int]] = []
     for tensor_id, tensor in graph.tensors.items():
+        if dtypes is not None and tensor.dtype not in dtypes:
+            continue
         if tensor_id in excluded_tensors:
             continue
         if tensor.is_input or tensor.is_constant or tensor_id in graph.outputs or tensor.producer is None:

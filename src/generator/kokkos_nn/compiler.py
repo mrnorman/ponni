@@ -15,6 +15,7 @@ from .emitter import (
 from .errors import CompilerError
 from .importer import import_onnx
 from .interpreter import run_graph
+from .ir import DType
 from .passes import optimize
 from .planner import plan_storage
 from .scheduler import DenseChainSchedule, schedule_dense_chains
@@ -49,7 +50,7 @@ def _fusion_rejections(graph, schedule: DenseChainSchedule) -> list[str]:
     return reasons
 
 
-def _report(original, optimized, pass_report, strategy: str, plan, sample_plan,
+def _report(original, optimized, pass_report, strategy: str, plan, sample_plan, mask_plan, sample_mask_plan,
             schedule: DenseChainSchedule, scalar_bytes: int,
             default_batch_tile: int = 1, maximum_batch_tile: int = 1,
             streaming_output_threshold: int = 8) -> dict[str, Any]:
@@ -61,7 +62,7 @@ def _report(original, optimized, pass_report, strategy: str, plan, sample_plan,
     canonical_counts = dict(sorted(Counter(node.op for node in optimized.nodes).items()))
     fused_ops = sum(
         count for op, count in canonical_counts.items()
-        if op in {"DenseBiasActivation", "ElementwiseChain", "ResidualAddActivation"}
+        if op in {"CompareSelect", "DenseBiasActivation", "ElementwiseChain", "ResidualAddActivation"}
     )
     scheduled_consumers = [optimized.node_by_id(node_id) for node_id in schedule.pair_by_consumer]
     streaming_pair = len(optimized.nodes) == 2 and len(scheduled_consumers) == 1
@@ -69,11 +70,18 @@ def _report(original, optimized, pass_report, strategy: str, plan, sample_plan,
         scheduled_consumers and scheduled_consumers[-1].id == optimized.nodes[-1].id and
         schedule.pair_by_consumer[scheduled_consumers[-1].id] == optimized.nodes[-2].id
     )
+    storage_report = plan.to_dict(scalar_bytes)
+    storage_report["mask_plan"] = mask_plan.to_dict(1)
+    storage_report["estimated_stack_bytes"] += mask_plan.total_elements
+    storage_report["estimated_team_scratch_bytes"] += mask_plan.total_elements
     return {
         "model_inputs": [{"name": input_tensor.name, "shape": _shape_string(input_tensor.shape),
                           "dtype": input_tensor.dtype.value}],
         "model_outputs": [{"name": output_tensor.name, "shape": _shape_string(output_tensor.shape),
                             "dtype": output_tensor.dtype.value}],
+        "onnx_ir_version": original.metadata.get("ir_version"),
+        "onnx_opsets": original.metadata.get("opsets", {}),
+        "onnx_operator_schema_counts": original.metadata.get("operator_schema_counts", {}),
         "operator_counts": original.metadata.get("operator_counts", {}),
         "learned_parameter_count": int(learned_parameter_count),
         "original_onnx_node_count": int(original.metadata.get("original_node_count", len(original.nodes))),
@@ -83,12 +91,15 @@ def _report(original, optimized, pass_report, strategy: str, plan, sample_plan,
         "canonical_operations": [node.op for node in original.nodes],
         "optimized_operations": [node.op for node in optimized.nodes],
         "passes": pass_report,
-        "storage": plan.to_dict(scalar_bytes),
+        "storage": storage_report,
         "dense_chain_schedule": schedule.to_dict(),
         "sample_local_storage": {
             "workspace_elements": sample_plan.total_elements,
             "workspace_bytes": sample_plan.total_elements * scalar_bytes,
+            "mask_workspace_elements": sample_mask_plan.total_elements,
+            "mask_workspace_bytes": sample_mask_plan.total_elements,
             "plan": sample_plan.to_dict(scalar_bytes),
+            "mask_plan": sample_mask_plan.to_dict(1),
             "batch_input_staging_elements": optimized.tensors[optimized.inputs[0]].sample_size,
             "batch_input_staging_bytes": optimized.tensors[optimized.inputs[0]].sample_size * scalar_bytes,
             "streaming_dense_pair": streaming_pair,
@@ -128,7 +139,9 @@ def _report(original, optimized, pass_report, strategy: str, plan, sample_plan,
         "hierarchical_batch_tiling": {
             "default_tile": default_batch_tile,
             "maximum_tile": maximum_batch_tile,
-            "scratch_bytes_at_default": plan.total_elements * scalar_bytes * default_batch_tile,
+            "scratch_bytes_at_default": (
+                plan.total_elements * scalar_bytes + mask_plan.total_elements
+            ) * default_batch_tile,
             "index_order": "linear = neuron * active_batch + local_batch",
         },
         "random_access_weights": (
@@ -143,14 +156,21 @@ def _report(original, optimized, pass_report, strategy: str, plan, sample_plan,
 
 def validate_model(model_path: str | Path, disabled_passes: set[str] | None = None) -> dict[str, Any]:
     original, optimized, pass_report = load_and_optimize(model_path, disabled_passes)
-    plan = plan_storage(optimized)
+    floating = {DType.FLOAT32, DType.FLOAT64}
+    plan = plan_storage(optimized, dtypes=floating)
+    mask_plan = plan_storage(optimized, dtypes={DType.BOOL})
     schedule = schedule_dense_chains(optimized)
     sample_plan = plan_storage(
         optimized, schedule.eliminated_tensors,
         schedule.recompute_liveness_extensions(optimized),
+        floating,
     )
+    sample_mask_plan = plan_storage(optimized, dtypes={DType.BOOL})
     scalar_bytes = 4 if optimized.tensors[optimized.inputs[0]].dtype.value == "float32" else 8
-    return _report(original, optimized, pass_report, "not-selected", plan, sample_plan, schedule, scalar_bytes)
+    return _report(
+        original, optimized, pass_report, "not-selected", plan, sample_plan, mask_plan, sample_mask_plan,
+        schedule, scalar_bytes,
+    )
 
 
 def _power_of_two_at_most(value: int) -> int:
@@ -250,14 +270,18 @@ def compile_model(model_path: str | Path, output_dir: str | Path, strategy: str 
             f"unknown execution strategy {strategy!r}; choose auto, sample-local, team, or half2"
         )
 
-    plan = plan_storage(optimized)
+    floating = {DType.FLOAT32, DType.FLOAT64}
+    plan = plan_storage(optimized, dtypes=floating)
+    mask_plan = plan_storage(optimized, dtypes={DType.BOOL})
     sample_plan = plan_storage(
         optimized, schedule.eliminated_tensors,
         schedule.recompute_liveness_extensions(optimized),
+        floating,
     )
+    sample_mask_plan = plan_storage(optimized, dtypes={DType.BOOL})
     stack_elements = sample_plan.total_elements
-    stack_bytes = stack_elements * scalar_bytes
-    team_scratch_bytes = plan.total_elements * scalar_bytes
+    stack_bytes = stack_elements * scalar_bytes + sample_mask_plan.total_elements
+    team_scratch_bytes = plan.total_elements * scalar_bytes + mask_plan.total_elements
     if stack_bytes > max_stack_bytes:
         raise CompilerError(
             f"planned local activation storage is {stack_bytes} bytes, above --max-stack-bytes={max_stack_bytes}; "
@@ -281,7 +305,7 @@ def compile_model(model_path: str | Path, output_dir: str | Path, strategy: str 
     scalar_code = 1 if scalar_bytes == 4 else 2
     explicit_half2_accumulators = _explicit_half2_accumulator_map(optimized, half2_accumulators)
     header = emit_cpp(
-        optimized, plan, sample_plan, schedule, offsets, output_path, model_name,
+        optimized, plan, sample_plan, mask_plan, sample_mask_plan, schedule, offsets, output_path, model_name,
         strategy, payload_elements, scalar_code,
         default_batch_tile, maximum_batch_tile, streaming_output_threshold,
         explicit_half2_accumulators
@@ -291,7 +315,8 @@ def compile_model(model_path: str | Path, output_dir: str | Path, strategy: str 
         explicit_half2_accumulators is not None
     )
     report = _report(
-        original, optimized, pass_report, strategy, plan, sample_plan, schedule, scalar_bytes,
+        original, optimized, pass_report, strategy, plan, sample_plan, mask_plan, sample_mask_plan,
+        schedule, scalar_bytes,
         default_batch_tile, maximum_batch_tile, streaming_output_threshold
     )
     report["generated_header"] = header.name

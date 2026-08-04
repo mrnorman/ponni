@@ -75,13 +75,15 @@ ctest -V -R generator
 ```
 
 `generator_python_test` covers PyTorch, Keras, and TensorFlow ONNX interchange; Keras no-bias dense layers,
-branching, concatenation, residuals, direct activation attributes, decomposed normalization, and the currently
-unsupported Boolean-select ELU spelling; TensorFlow transposed constant weights,
+branching, concatenation, residuals, direct activation attributes, decomposed normalization, and Boolean-select ELU;
+TensorFlow transposed constant weights,
 `bias_add`, reshape, shared branches, and unsupported-op diagnostics; importer diagnostics;
 canonicalization; fusion; generalized dense-chain scheduling;
 bounded branch recomputation, liveness/storage reuse, weight
-validation, unfused-versus-optimized IR numerics, and ONNX Runtime comparisons for expanded activations,
-normalization, softmax/reduction, and math operators. `generator_integration_test` runs generated batched `DeviceSpace`
+validation, unfused-versus-optimized IR numerics, and ONNX Runtime comparisons for expanded activations, static
+shape/layout glue, normalization, feature reductions, math, comparison, finite-value checks, logical selection, and
+mask-cast operators.
+`generator_integration_test` runs generated batched `DeviceSpace`
 batch-only, hierarchical tile 1/default, packed half2, embedded `SArray`, and eligible CUDA Tensor Core inference.
 Together these cover the five inference families: inline SArray, View batch, hierarchical team-neuron, raw-CUDA
 TF32 WMMA, and packed two-sample FP16. Half2 tests include the baseline single dependency chain, the generated

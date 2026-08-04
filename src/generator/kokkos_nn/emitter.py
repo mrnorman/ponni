@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 
 from .errors import CompilerError
-from .ir import Graph, Node
+from .ir import DType, Graph, Node
 from .planner import StoragePlan
 from .scheduler import DenseChainSchedule
 
@@ -105,6 +105,7 @@ def half2_accumulator_plan(graph: Graph, maximum_output_accumulators: int = 8,
 
 class CppEmitter:
     def __init__(self, graph: Graph, plan: StoragePlan, sample_plan: StoragePlan,
+                 mask_plan: StoragePlan, sample_mask_plan: StoragePlan,
                  schedule: DenseChainSchedule, weight_offsets: dict[int, int], model_name: str,
                  strategy: str, default_batch_tile: int, maximum_batch_tile: int) -> None:
         if strategy not in {"sample-local", "team", "half2"}:
@@ -114,6 +115,8 @@ class CppEmitter:
         self.graph = graph
         self.plan = plan
         self.sample_plan = sample_plan
+        self.mask_plan = mask_plan
+        self.sample_mask_plan = sample_mask_plan
         self.schedule = schedule
         self.weight_offsets = weight_offsets
         self.model_name = _identifier(model_name)
@@ -129,6 +132,8 @@ class CppEmitter:
 
     def _read(self, tensor_id: int, index: str) -> str:
         tensor = self.graph.tensors[tensor_id]
+        if tensor.dtype == DType.BOOL:
+            return self._mask_read(tensor_id, index)
         use_index = "0" if tensor.sample_size == 1 else index
         if tensor.is_constant:
             if tensor_id not in self.weight_offsets:
@@ -143,6 +148,8 @@ class CppEmitter:
         return f"workspace[{self.sample_plan.slots[tensor_id].offset} + {use_index}]"
 
     def _write(self, tensor_id: int, index: str) -> str:
+        if self.graph.tensors[tensor_id].dtype == DType.BOOL:
+            return self._mask_write(tensor_id, index)
         if tensor_id == self.graph.outputs[0]:
             return f"outputs({index})"
         if tensor_id not in self.sample_plan.slots:
@@ -151,6 +158,8 @@ class CppEmitter:
 
     def _batch_read(self, tensor_id: int, index: str) -> str:
         tensor = self.graph.tensors[tensor_id]
+        if tensor.dtype == DType.BOOL:
+            return self._batch_mask_read(tensor_id, index)
         use_index = "0" if tensor.sample_size == 1 else index
         if tensor.is_constant:
             if tensor_id not in self.weight_offsets:
@@ -165,6 +174,8 @@ class CppEmitter:
         return f"workspace[{self.sample_plan.slots[tensor_id].offset} + {use_index}]"
 
     def _batch_write(self, tensor_id: int, index: str) -> str:
+        if self.graph.tensors[tensor_id].dtype == DType.BOOL:
+            return self._batch_mask_write(tensor_id, index)
         if tensor_id == self.graph.outputs[0]:
             return f"outputs({index},ibatch)"
         if tensor_id not in self.sample_plan.slots:
@@ -175,6 +186,8 @@ class CppEmitter:
 
     def _team_read(self, tensor_id: int, index: str) -> str:
         tensor = self.graph.tensors[tensor_id]
+        if tensor.dtype == DType.BOOL:
+            return self._team_mask_read(tensor_id, index)
         use_index = "0" if tensor.sample_size == 1 else index
         if tensor.is_constant:
             if tensor_id not in self.weight_offsets:
@@ -189,6 +202,8 @@ class CppEmitter:
         return f"workspace[({self.plan.slots[tensor_id].offset} + {use_index}) * batch_tile + local_batch]"
 
     def _team_write(self, tensor_id: int, index: str) -> str:
+        if self.graph.tensors[tensor_id].dtype == DType.BOOL:
+            return self._team_mask_write(tensor_id, index)
         if tensor_id == self.graph.outputs[0]:
             return f"outputs({index},ibatch)"
         if tensor_id not in self.plan.slots:
@@ -199,6 +214,8 @@ class CppEmitter:
 
     def _half_read(self, tensor_id: int, index: str) -> str:
         tensor = self.graph.tensors[tensor_id]
+        if tensor.dtype == DType.BOOL:
+            return self._half_mask_read(tensor_id, index)
         use_index = "0" if tensor.sample_size == 1 else index
         if tensor.is_constant:
             if tensor_id not in self.weight_offsets:
@@ -213,6 +230,8 @@ class CppEmitter:
         return f"workspace[{self.sample_plan.slots[tensor_id].offset} + {use_index}]"
 
     def _half_write(self, tensor_id: int, index: str) -> str:
+        if self.graph.tensors[tensor_id].dtype == DType.BOOL:
+            return self._half_mask_write(tensor_id, index)
         if tensor_id == self.graph.outputs[0]:
             return f"outputs({index})"
         if tensor_id not in self.sample_plan.slots:
@@ -220,6 +239,74 @@ class CppEmitter:
                 f"no half2 activation storage assigned to output tensor {self.graph.tensors[tensor_id].name!r}"
             )
         return f"workspace[{self.sample_plan.slots[tensor_id].offset} + {index}]"
+
+    def _mask_read(self, tensor_id: int, index: str) -> str:
+        tensor = self.graph.tensors[tensor_id]
+        use_index = "0" if tensor.sample_size == 1 else index
+        if tensor.is_constant:
+            return f"(parameters_({self.weight_offsets[tensor_id]} + {use_index}) != static_cast<Scalar>(0))"
+        if tensor_id not in self.sample_mask_plan.slots:
+            raise CompilerError(f"no mask storage assigned to tensor {tensor.name!r}")
+        return f"(mask_workspace[{self.sample_mask_plan.slots[tensor_id].offset} + {use_index}] != 0)"
+
+    def _mask_write(self, tensor_id: int, index: str) -> str:
+        if tensor_id not in self.sample_mask_plan.slots:
+            raise CompilerError(f"no mask storage assigned to output tensor {self.graph.tensors[tensor_id].name!r}")
+        return f"mask_workspace[{self.sample_mask_plan.slots[tensor_id].offset} + {index}]"
+
+    def _batch_mask_read(self, tensor_id: int, index: str) -> str:
+        tensor = self.graph.tensors[tensor_id]
+        use_index = "0" if tensor.sample_size == 1 else index
+        if tensor.is_constant:
+            return f"(weights({self.weight_offsets[tensor_id]} + {use_index}) != static_cast<Scalar>(0))"
+        if tensor_id not in self.sample_mask_plan.slots:
+            raise CompilerError(f"no batch-local mask storage assigned to tensor {tensor.name!r}")
+        return f"(mask_workspace[{self.sample_mask_plan.slots[tensor_id].offset} + {use_index}] != 0)"
+
+    def _batch_mask_write(self, tensor_id: int, index: str) -> str:
+        if tensor_id not in self.sample_mask_plan.slots:
+            raise CompilerError(
+                f"no batch-local mask storage assigned to output tensor {self.graph.tensors[tensor_id].name!r}"
+            )
+        return f"mask_workspace[{self.sample_mask_plan.slots[tensor_id].offset} + {index}]"
+
+    def _team_mask_read(self, tensor_id: int, index: str) -> str:
+        tensor = self.graph.tensors[tensor_id]
+        use_index = "0" if tensor.sample_size == 1 else index
+        if tensor.is_constant:
+            return f"(weights({self.weight_offsets[tensor_id]} + {use_index}) != static_cast<Scalar>(0))"
+        if tensor_id not in self.mask_plan.slots:
+            raise CompilerError(f"no hierarchical mask scratch assigned to tensor {tensor.name!r}")
+        return (
+            f"(mask_workspace[({self.mask_plan.slots[tensor_id].offset} + {use_index}) * "
+            "batch_tile + local_batch] != 0)"
+        )
+
+    def _team_mask_write(self, tensor_id: int, index: str) -> str:
+        if tensor_id not in self.mask_plan.slots:
+            raise CompilerError(
+                f"no hierarchical mask scratch assigned to output tensor {self.graph.tensors[tensor_id].name!r}"
+            )
+        return f"mask_workspace[({self.mask_plan.slots[tensor_id].offset} + {index}) * batch_tile + local_batch]"
+
+    def _half_mask_read(self, tensor_id: int, index: str) -> str:
+        tensor = self.graph.tensors[tensor_id]
+        use_index = "0" if tensor.sample_size == 1 else index
+        if tensor.is_constant:
+            return (
+                "ponni::TwoMask::splat(static_cast<float>(half_weights("
+                f"{self.weight_offsets[tensor_id]} + {use_index})) != 0.0f)"
+            )
+        if tensor_id not in self.sample_mask_plan.slots:
+            raise CompilerError(f"no half2 mask storage assigned to tensor {tensor.name!r}")
+        return f"mask_workspace[{self.sample_mask_plan.slots[tensor_id].offset} + {use_index}]"
+
+    def _half_mask_write(self, tensor_id: int, index: str) -> str:
+        if tensor_id not in self.sample_mask_plan.slots:
+            raise CompilerError(
+                f"no half2 mask storage assigned to output tensor {self.graph.tensors[tensor_id].name!r}"
+            )
+        return f"mask_workspace[{self.sample_mask_plan.slots[tensor_id].offset} + {index}]"
 
     @staticmethod
     def _activation(name: str, expression: str, attributes: dict[str, object] | None = None) -> str:
@@ -248,11 +335,40 @@ class CppEmitter:
         if name in {"Elu", "Gelu", "HardSigmoid", "HardSwish", "LeakyRelu", "Mish", "Relu", "Sigmoid", "Silu",
                     "Softplus", "Tanh"}:
             return CppEmitter._activation(name, expression, attributes)
-        function = {"Abs": "Kokkos::abs", "Exp": "Kokkos::exp", "Log": "Kokkos::log", "Sqrt": "Kokkos::sqrt"}.get(name)
+        attributes = attributes or {}
+        if name == "Celu":
+            alpha = float(attributes.get("alpha", 1.0))
+            return (
+                f"({expression} > static_cast<Scalar>(0) ? {expression} : static_cast<Scalar>({alpha!r}) * "
+                f"(Kokkos::exp({expression} / static_cast<Scalar>({alpha!r})) - static_cast<Scalar>(1)))"
+            )
+        if name == "Selu":
+            alpha = float(attributes.get("alpha", 1.6732631921768188))
+            gamma = float(attributes.get("gamma", 1.0507010221481323))
+            return (
+                f"(static_cast<Scalar>({gamma!r}) * ({expression} > static_cast<Scalar>(0) ? {expression} : "
+                f"static_cast<Scalar>({alpha!r}) * (Kokkos::exp({expression}) - static_cast<Scalar>(1))))"
+            )
+        if name == "Softsign":
+            return f"({expression} / (static_cast<Scalar>(1) + Kokkos::abs({expression})))"
+        if name == "ThresholdedRelu":
+            alpha = float(attributes.get("alpha", 1.0))
+            return f"({expression} > static_cast<Scalar>({alpha!r}) ? {expression} : static_cast<Scalar>(0))"
+        function = {
+            "Abs": "Kokkos::abs", "Acos": "Kokkos::acos", "Acosh": "Kokkos::acosh", "Asin": "Kokkos::asin",
+            "Asinh": "Kokkos::asinh", "Atan": "Kokkos::atan", "Atanh": "Kokkos::atanh", "Ceil": "Kokkos::ceil",
+            "Cos": "Kokkos::cos", "Cosh": "Kokkos::cosh", "Erf": "Kokkos::erf", "Exp": "Kokkos::exp",
+            "Floor": "Kokkos::floor", "Log": "Kokkos::log", "Sin": "Kokkos::sin", "Sinh": "Kokkos::sinh",
+            "Sqrt": "Kokkos::sqrt", "Tan": "Kokkos::tan",
+        }.get(name)
         if name == "Neg":
             return f"(-{expression})"
         if name == "Reciprocal":
             return f"(static_cast<Scalar>(1) / {expression})"
+        if name == "Round":
+            return f"apply_round({expression})"
+        if name == "Sign":
+            return f"apply_sign({expression})"
         if function is None:
             raise CompilerError(f"C++ emitter has no unary implementation for {name}")
         return f"{function}({expression})"
@@ -274,6 +390,33 @@ class CppEmitter:
             return f"Kokkos::pow({left}, {right})"
         raise CompilerError(f"C++ emitter has no binary implementation for {op}")
 
+    @staticmethod
+    def _comparison(op: str, left: str, right: str, half: bool = False,
+                    boolean_inputs: bool = False) -> str:
+        if half:
+            if boolean_inputs:
+                if op != "Equal":
+                    raise CompilerError(f"unsupported Boolean comparison {op}")
+                return f"ponni::TwoMask::equal({left}, {right})"
+            function = {
+                "Equal": "equal", "Greater": "greater", "GreaterOrEqual": "greater_or_equal", "Less": "less",
+                "LessOrEqual": "less_or_equal",
+            }[op]
+            return f"ponni::TwoHalf::{function}({left}, {right})"
+        symbol = {"Equal": "==", "Greater": ">", "GreaterOrEqual": ">=", "Less": "<", "LessOrEqual": "<="}[op]
+        return f"({left} {symbol} {right})"
+
+    @staticmethod
+    def _logical(op: str, left: str, right: str | None = None, half: bool = False) -> str:
+        if half:
+            function = {"And": "logical_and", "Not": "logical_not", "Or": "logical_or", "Xor": "logical_xor"}[op]
+            arguments = left if right is None else f"{left}, {right}"
+            return f"ponni::TwoMask::{function}({arguments})"
+        if op == "Not":
+            return f"(!{left})"
+        symbol = {"And": "&&", "Or": "||", "Xor": "!="}[op]
+        return f"({left} {symbol} {right})"
+
     def _validate_binary(self, node: Node) -> None:
         output_size = self._size(node.outputs[0])
         for tensor_id in node.inputs:
@@ -293,6 +436,17 @@ class CppEmitter:
             return f"ponni::TwoHalf::leaky_relu({expression}, {float(attributes.get('alpha', 0.01))!r}f)"
         if name == "Elu":
             return f"ponni::TwoHalf::elu({expression}, {float(attributes.get('alpha', 1.0))!r}f)"
+        if name == "Celu":
+            return f"ponni::TwoHalf::celu({expression}, {float(attributes.get('alpha', 1.0))!r}f)"
+        if name == "Selu":
+            alpha = float(attributes.get("alpha", 1.6732631921768188))
+            gamma = float(attributes.get("gamma", 1.0507010221481323))
+            return f"ponni::TwoHalf::selu({expression}, {alpha!r}f, {gamma!r}f)"
+        if name == "ThresholdedRelu":
+            return (
+                f"ponni::TwoHalf::thresholded_relu({expression}, "
+                f"{float(attributes.get('alpha', 1.0))!r}f)"
+            )
         if name == "Gelu":
             approximate = str(attributes.get("approximate", "none")) == "tanh"
             return f"ponni::TwoHalf::gelu({expression}, {str(approximate).lower()})"
@@ -301,14 +455,110 @@ class CppEmitter:
             beta = float(attributes.get("beta", 0.5))
             return f"ponni::TwoHalf::hard_sigmoid({expression}, {alpha!r}f, {beta!r}f)"
         function = {
-            "Abs": "abs", "Exp": "exp", "HardSwish": "hard_swish", "Log": "log", "Mish": "mish",
-            "Reciprocal": "reciprocal", "Relu": "relu", "Sigmoid": "sigmoid", "Silu": "silu",
-            "Softplus": "softplus", "Sqrt": "sqrt",
+            "Abs": "abs", "Acos": "acos", "Acosh": "acosh", "Asin": "asin", "Asinh": "asinh", "Atan": "atan",
+            "Atanh": "atanh", "Ceil": "ceil", "Cos": "cos", "Cosh": "cosh", "Erf": "erf", "Exp": "exp",
+            "Floor": "floor", "HardSwish": "hard_swish", "Log": "log", "Mish": "mish", "Reciprocal": "reciprocal",
+            "Relu": "relu", "Round": "round", "Sigmoid": "sigmoid", "Sign": "sign", "Silu": "silu", "Sin": "sin",
+            "Sinh": "sinh", "Softplus": "softplus", "Softsign": "softsign", "Sqrt": "sqrt", "Tan": "tan",
             "Tanh": "tanh",
         }.get(name)
         if function is None:
             raise CompilerError(f"half2 C++ emitter has no unary implementation for {name}")
         return f"ponni::TwoHalf::{function}({expression})"
+
+    def _scalar_reduction(self, node: Node, read, write, indent: str) -> list[str]:
+        input_id = node.inputs[0]
+        input_size = self._size(input_id)
+        value = lambda index: read(input_id, index)
+        lines: list[str] = []
+        if node.op in {"ReduceMax", "ReduceMin"}:
+            lines.append(f"{indent}Scalar reduction = {value('0')};")
+            comparison = ">" if node.op == "ReduceMax" else "<"
+            lines.append(f"{indent}for (int i = 1; i < {input_size}; i++) {{")
+            lines.append(f"{indent}  Scalar const value = {value('i')};")
+            lines.append(f"{indent}  reduction = value {comparison} reduction ? value : reduction;")
+            lines.append(f"{indent}}}")
+        elif node.op == "ReduceLogSumExp":
+            lines.append(f"{indent}Scalar maximum = {value('0')};")
+            lines.append(f"{indent}for (int i = 1; i < {input_size}; i++) {{")
+            lines.append(f"{indent}  Scalar const value = {value('i')};")
+            lines.append(f"{indent}  maximum = value > maximum ? value : maximum;")
+            lines.append(f"{indent}}}")
+            lines.append(f"{indent}Scalar reduction = static_cast<Scalar>(0);")
+            lines.append(
+                f"{indent}for (int i = 0; i < {input_size}; i++) reduction += Kokkos::exp({value('i')} - maximum);"
+            )
+            lines.append(
+                f"{indent}reduction = Kokkos::isinf(maximum) ? maximum : maximum + Kokkos::log(reduction);"
+            )
+        else:
+            initial = "static_cast<Scalar>(1)" if node.op == "ReduceProd" else "static_cast<Scalar>(0)"
+            lines.append(f"{indent}Scalar reduction = {initial};")
+            expression = value("i")
+            if node.op == "ReduceL1":
+                expression = f"Kokkos::abs({expression})"
+            elif node.op in {"ReduceL2", "ReduceSumSquare"}:
+                expression = f"({expression} * {expression})"
+            operator = "*=" if node.op == "ReduceProd" else "+="
+            lines.append(f"{indent}for (int i = 0; i < {input_size}; i++) reduction {operator} {expression};")
+            if node.op == "ReduceMean":
+                lines.append(f"{indent}reduction /= static_cast<Scalar>({input_size});")
+            elif node.op == "ReduceL2":
+                lines.append(f"{indent}reduction = Kokkos::sqrt(reduction);")
+            elif node.op == "ReduceLogSum":
+                lines.append(f"{indent}reduction = Kokkos::log(reduction);")
+        lines.append(f"{indent}{write(node.outputs[0], '0')} = reduction;")
+        return lines
+
+    def _half_reduction(self, node: Node) -> list[str]:
+        input_id = node.inputs[0]
+        input_size = self._size(input_id)
+        value = lambda index: self._half_read(input_id, index)
+        lines: list[str] = []
+        if node.op in {"ReduceMax", "ReduceMin"}:
+            function = "maximum" if node.op == "ReduceMax" else "minimum"
+            lines.append(f"    ponni::TwoHalf reduction = {value('0')};")
+            lines.append(
+                f"    for (int i = 1; i < {input_size}; i++) reduction = "
+                f"ponni::TwoHalf::{function}(reduction, {value('i')});"
+            )
+        elif node.op == "ReduceLogSumExp":
+            lines.append(f"    ponni::TwoHalf maximum = {value('0')};")
+            lines.append(
+                f"    for (int i = 1; i < {input_size}; i++) maximum = "
+                f"ponni::TwoHalf::maximum(maximum, {value('i')});"
+            )
+            lines.append("    ponni::TwoHalf reduction = ponni::TwoHalf::zero();")
+            lines.append(
+                f"    for (int i = 0; i < {input_size}; i++) reduction = reduction + "
+                f"ponni::TwoHalf::exp({value('i')} - maximum);"
+            )
+            lines.append(
+                "    reduction = ponni::TwoHalf::select(ponni::TwoHalf::is_inf(maximum, true, true), maximum, "
+                "maximum + ponni::TwoHalf::log(reduction));"
+            )
+        else:
+            initial = "ponni::TwoHalf::from_floats(1.0f, 1.0f)" if node.op == "ReduceProd" else "ponni::TwoHalf::zero()"
+            lines.append(f"    ponni::TwoHalf reduction = {initial};")
+            expression = value("i")
+            if node.op == "ReduceL1":
+                expression = f"ponni::TwoHalf::abs({expression})"
+            elif node.op in {"ReduceL2", "ReduceSumSquare"}:
+                expression = f"({expression} * {expression})"
+            operator = "*" if node.op == "ReduceProd" else "+"
+            lines.append(
+                f"    for (int i = 0; i < {input_size}; i++) reduction = reduction {operator} {expression};"
+            )
+            if node.op == "ReduceMean":
+                lines.append(
+                    f"    reduction = reduction / ponni::TwoHalf::from_floats({input_size}.0f, {input_size}.0f);"
+                )
+            elif node.op == "ReduceL2":
+                lines.append("    reduction = ponni::TwoHalf::sqrt(reduction);")
+            elif node.op == "ReduceLogSum":
+                lines.append("    reduction = ponni::TwoHalf::log(reduction);")
+        lines.append(f"    {self._half_write(node.outputs[0], '0')} = reduction;")
+        return lines
 
     def _emit_node(self, node: Node, batch: bool = False) -> list[str]:
         output_id = node.outputs[0]
@@ -346,8 +596,82 @@ class CppEmitter:
             lines.append(f"      {write(output_id, 'i')} = {value};")
             lines.append("    }")
             return lines
-        if node.op in {"Abs", "Elu", "Exp", "Gelu", "HardSigmoid", "HardSwish", "LeakyRelu", "Log", "Mish",
-                        "Neg", "Reciprocal", "Relu", "Sigmoid", "Silu", "Softplus", "Sqrt", "Tanh"}:
+        if node.op in {"Equal", "Greater", "GreaterOrEqual", "Less", "LessOrEqual"}:
+            lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
+            value = self._comparison(
+                node.op, read(node.inputs[0], "i"), read(node.inputs[1], "i"),
+                boolean_inputs=self.graph.tensors[node.inputs[0]].dtype == DType.BOOL,
+            )
+            lines.append(f"      {write(output_id, 'i')} = {value};")
+            lines.append("    }")
+            return lines
+        if node.op in {"And", "Or", "Xor"}:
+            lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
+            value = self._logical(node.op, read(node.inputs[0], "i"), read(node.inputs[1], "i"))
+            lines.append(f"      {write(output_id, 'i')} = {value};")
+            lines.append("    }")
+            return lines
+        if node.op == "Not":
+            lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
+            lines.append(f"      {write(output_id, 'i')} = {self._logical('Not', read(node.inputs[0], 'i'))};")
+            lines.append("    }")
+            return lines
+        if node.op == "Cast":
+            lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
+            lines.append(f"      {write(output_id, 'i')} = static_cast<Scalar>({read(node.inputs[0], 'i')});")
+            lines.append("    }")
+            return lines
+        if node.op == "PRelu":
+            lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
+            value = read(node.inputs[0], "i")
+            slope = read(node.inputs[1], "i")
+            lines.append(f"      {write(output_id, 'i')} = {value} >= static_cast<Scalar>(0) ? {value} : {value} * {slope};")
+            lines.append("    }")
+            return lines
+        if node.op in {"Mean", "Sum"}:
+            lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
+            expression = " + ".join(read(tensor_id, "i") for tensor_id in node.inputs)
+            if node.op == "Mean":
+                expression = f"({expression}) / static_cast<Scalar>({len(node.inputs)})"
+            lines.append(f"      {write(output_id, 'i')} = {expression};")
+            lines.append("    }")
+            return lines
+        if node.op in {"IsInf", "IsNaN"}:
+            lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
+            value = read(node.inputs[0], "i")
+            if node.op == "IsNaN":
+                predicate = f"Kokkos::isnan({value})"
+            else:
+                negative = bool(int(node.attributes.get("detect_negative", 1)))
+                positive = bool(int(node.attributes.get("detect_positive", 1)))
+                signs = []
+                if negative:
+                    signs.append(f"{value} < static_cast<Scalar>(0)")
+                if positive:
+                    signs.append(f"{value} > static_cast<Scalar>(0)")
+                predicate = f"(Kokkos::isinf({value}) && ({' || '.join(signs) if signs else 'false'}))"
+            lines.append(f"      {write(output_id, 'i')} = {predicate};")
+            lines.append("    }")
+            return lines
+        if node.op in {"Where", "CompareSelect"}:
+            lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
+            if node.op == "Where":
+                condition = read(node.inputs[0], "i")
+                when_true = read(node.inputs[1], "i")
+                when_false = read(node.inputs[2], "i")
+            else:
+                condition = self._comparison(
+                    str(node.attributes["comparison"]), read(node.inputs[0], "i"), read(node.inputs[1], "i")
+                )
+                when_true = read(node.inputs[2], "i")
+                when_false = read(node.inputs[3], "i")
+            lines.append(f"      {write(output_id, 'i')} = {condition} ? {when_true} : {when_false};")
+            lines.append("    }")
+            return lines
+        if node.op in {"Abs", "Acos", "Acosh", "Asin", "Asinh", "Atan", "Atanh", "Ceil", "Celu", "Cos", "Cosh",
+                        "Elu", "Erf", "Exp", "Floor", "Gelu", "HardSigmoid", "HardSwish", "LeakyRelu", "Log", "Mish",
+                        "Neg", "Reciprocal", "Relu", "Round", "Selu", "Sigmoid", "Sign", "Silu", "Sin", "Sinh",
+                        "Softplus", "Softsign", "Sqrt", "Tan", "Tanh", "ThresholdedRelu"}:
             lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
             value = self._unary(node.op, read(node.inputs[0], "i"), node.attributes)
             lines.append(f"      {write(output_id, 'i')} = {value};")
@@ -431,13 +755,24 @@ class CppEmitter:
             lines.append(f"      {write(output_id, 'i')} = {value};")
             lines.append("    }")
             return lines
-        if node.op in {"ReduceMean", "ReduceSum"}:
-            input_size = self._size(node.inputs[0])
-            lines.append("    Scalar reduction = static_cast<Scalar>(0);")
-            lines.append(f"    for (int i = 0; i < {input_size}; i++) reduction += {read(node.inputs[0], 'i')};")
-            if node.op == "ReduceMean":
-                lines.append(f"    reduction /= static_cast<Scalar>({input_size});")
-            lines.append(f"    {write(output_id, '0')} = reduction;")
+        if node.op.startswith("Reduce"):
+            return self._scalar_reduction(node, read, write, "    ")
+        if node.op == "LpNormalization":
+            input_id = node.inputs[0]
+            p = int(node.attributes.get("p", 2))
+            lines.append("    Scalar norm = static_cast<Scalar>(0);")
+            expression = f"Kokkos::abs({read(input_id, 'i')})"
+            if p == 2:
+                expression = f"({read(input_id, 'i')} * {read(input_id, 'i')})"
+            lines.append(f"    for (int i = 0; i < {output_size}; i++) norm += {expression};")
+            if p == 2:
+                lines.append("    norm = Kokkos::sqrt(norm);")
+            lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
+            lines.append(
+                f"      {write(output_id, 'i')} = norm == static_cast<Scalar>(0) ? static_cast<Scalar>(0) : "
+                f"{read(input_id, 'i')} / norm;"
+            )
+            lines.append("    }")
             return lines
         if node.op == "Concat":
             offset = 0
@@ -449,6 +784,10 @@ class CppEmitter:
                 offset += input_size
             if offset != output_size:
                 raise CompilerError(f"Concat node {node.id} has inconsistent flattened sample sizes")
+            return lines
+        if node.op == "Gather":
+            for output_index, input_index in enumerate(node.attributes["indices"]):
+                lines.append(f"    {write(output_id, str(output_index))} = {read(node.inputs[0], str(input_index))};")
             return lines
         if node.op == "ResidualAddActivation":
             self._validate_binary(node)
@@ -481,7 +820,7 @@ class CppEmitter:
         output_id = node.outputs[0]
         output_size = self._size(output_id)
         lines: list[str] = []
-        if node.op in {"LayerNormalization", "LogSoftmax", "ReduceMean", "ReduceSum", "Softmax"}:
+        if node.op in {"LayerNormalization", "LogSoftmax", "LpNormalization", "Softmax"} or node.op.startswith("Reduce"):
             lines.append(
                 "          Kokkos::parallel_for(Kokkos::TeamThreadRange(team, active_batch), "
                 "[&](int local_batch) {"
@@ -536,16 +875,25 @@ class CppEmitter:
                     value = f"({value} + {self._team_read(node.inputs[2], 'i')})"
                 lines.append(f"              {self._team_write(output_id, 'i')} = {value};")
                 lines.append("            }")
-            else:
-                input_size = self._size(node.inputs[0])
-                lines.append("            Scalar reduction = static_cast<Scalar>(0);")
+            elif node.op == "LpNormalization":
+                input_id = node.inputs[0]
+                p = int(node.attributes.get("p", 2))
+                lines.append("            Scalar norm = static_cast<Scalar>(0);")
+                expression = f"Kokkos::abs({self._team_read(input_id, 'i')})"
+                if p == 2:
+                    value = self._team_read(input_id, "i")
+                    expression = f"({value} * {value})"
+                lines.append(f"            for (int i = 0; i < {output_size}; i++) norm += {expression};")
+                if p == 2:
+                    lines.append("            norm = Kokkos::sqrt(norm);")
+                lines.append(f"            for (int i = 0; i < {output_size}; i++) {{")
                 lines.append(
-                    f"            for (int i = 0; i < {input_size}; i++) reduction += "
-                    f"{self._team_read(node.inputs[0], 'i')};"
+                    f"              {self._team_write(output_id, 'i')} = norm == static_cast<Scalar>(0) ? "
+                    f"static_cast<Scalar>(0) : {self._team_read(input_id, 'i')} / norm;"
                 )
-                if node.op == "ReduceMean":
-                    lines.append(f"            reduction /= static_cast<Scalar>({input_size});")
-                lines.append(f"            {self._team_write(output_id, '0')} = reduction;")
+                lines.append("            }")
+            else:
+                lines.extend(self._scalar_reduction(node, self._team_read, self._team_write, "            "))
             lines.extend(["          });", "          team.team_barrier();"])
             return lines
         lines.append(
@@ -582,8 +930,68 @@ class CppEmitter:
                 node.op, self._team_read(node.inputs[0], "i"), self._team_read(node.inputs[1], "i")
             )
             lines.append(f"            {self._team_write(output_id, 'i')} = {value};")
-        elif node.op in {"Abs", "Elu", "Exp", "Gelu", "HardSigmoid", "HardSwish", "LeakyRelu", "Log", "Mish",
-                            "Neg", "Reciprocal", "Relu", "Sigmoid", "Silu", "Softplus", "Sqrt", "Tanh"}:
+        elif node.op in {"Equal", "Greater", "GreaterOrEqual", "Less", "LessOrEqual"}:
+            value = self._comparison(
+                node.op, self._team_read(node.inputs[0], "i"), self._team_read(node.inputs[1], "i"),
+                boolean_inputs=self.graph.tensors[node.inputs[0]].dtype == DType.BOOL,
+            )
+            lines.append(f"            {self._team_write(output_id, 'i')} = {value};")
+        elif node.op in {"And", "Or", "Xor"}:
+            value = self._logical(
+                node.op, self._team_read(node.inputs[0], "i"), self._team_read(node.inputs[1], "i")
+            )
+            lines.append(f"            {self._team_write(output_id, 'i')} = {value};")
+        elif node.op == "Not":
+            value = self._logical("Not", self._team_read(node.inputs[0], "i"))
+            lines.append(f"            {self._team_write(output_id, 'i')} = {value};")
+        elif node.op == "Cast":
+            value = f"static_cast<Scalar>({self._team_read(node.inputs[0], 'i')})"
+            lines.append(f"            {self._team_write(output_id, 'i')} = {value};")
+        elif node.op == "PRelu":
+            value = self._team_read(node.inputs[0], "i")
+            slope = self._team_read(node.inputs[1], "i")
+            lines.append(
+                f"            {self._team_write(output_id, 'i')} = {value} >= static_cast<Scalar>(0) ? "
+                f"{value} : {value} * {slope};"
+            )
+        elif node.op in {"Mean", "Sum"}:
+            expression = " + ".join(self._team_read(tensor_id, "i") for tensor_id in node.inputs)
+            if node.op == "Mean":
+                expression = f"({expression}) / static_cast<Scalar>({len(node.inputs)})"
+            lines.append(f"            {self._team_write(output_id, 'i')} = {expression};")
+        elif node.op in {"IsInf", "IsNaN"}:
+            value = self._team_read(node.inputs[0], "i")
+            if node.op == "IsNaN":
+                predicate = f"Kokkos::isnan({value})"
+            else:
+                negative = bool(int(node.attributes.get("detect_negative", 1)))
+                positive = bool(int(node.attributes.get("detect_positive", 1)))
+                signs = []
+                if negative:
+                    signs.append(f"{value} < static_cast<Scalar>(0)")
+                if positive:
+                    signs.append(f"{value} > static_cast<Scalar>(0)")
+                predicate = f"(Kokkos::isinf({value}) && ({' || '.join(signs) if signs else 'false'}))"
+            lines.append(f"            {self._team_write(output_id, 'i')} = {predicate};")
+        elif node.op in {"Where", "CompareSelect"}:
+            if node.op == "Where":
+                condition = self._team_read(node.inputs[0], "i")
+                when_true = self._team_read(node.inputs[1], "i")
+                when_false = self._team_read(node.inputs[2], "i")
+            else:
+                condition = self._comparison(
+                    str(node.attributes["comparison"]), self._team_read(node.inputs[0], "i"),
+                    self._team_read(node.inputs[1], "i"),
+                )
+                when_true = self._team_read(node.inputs[2], "i")
+                when_false = self._team_read(node.inputs[3], "i")
+            lines.append(
+                f"            {self._team_write(output_id, 'i')} = {condition} ? {when_true} : {when_false};"
+            )
+        elif node.op in {"Abs", "Acos", "Acosh", "Asin", "Asinh", "Atan", "Atanh", "Ceil", "Celu", "Cos",
+                            "Cosh", "Elu", "Erf", "Exp", "Floor", "Gelu", "HardSigmoid", "HardSwish", "LeakyRelu",
+                            "Log", "Mish", "Neg", "Reciprocal", "Relu", "Round", "Selu", "Sigmoid", "Sign", "Silu",
+                            "Sin", "Sinh", "Softplus", "Softsign", "Sqrt", "Tan", "Tanh", "ThresholdedRelu"}:
             value = self._unary(node.op, self._team_read(node.inputs[0], "i"), node.attributes)
             lines.append(f"            {self._team_write(output_id, 'i')} = {value};")
         elif node.op == "Clip":
@@ -624,6 +1032,15 @@ class CppEmitter:
                 offset += input_size
             if offset != output_size:
                 raise CompilerError(f"Concat node {node.id} has inconsistent flattened sample sizes")
+        elif node.op == "Gather":
+            indices = node.attributes["indices"]
+            lines.append(f"            switch (i) {{")
+            for output_index, input_index in enumerate(indices):
+                lines.append(
+                    f"              case {output_index}: {self._team_write(output_id, 'i')} = "
+                    f"{self._team_read(node.inputs[0], str(input_index))}; break;"
+                )
+            lines.append("            }")
         elif node.op == "ResidualAddActivation":
             self._validate_binary(node)
             added = self._binary(
@@ -718,8 +1135,87 @@ class CppEmitter:
             lines.append(f"      {self._half_write(output_id, 'i')} = {value};")
             lines.append("    }")
             return lines
-        if node.op in {"Abs", "Elu", "Exp", "Gelu", "HardSigmoid", "HardSwish", "LeakyRelu", "Log", "Mish",
-                        "Neg", "Reciprocal", "Relu", "Sigmoid", "Silu", "Softplus", "Sqrt", "Tanh"}:
+        if node.op in {"Equal", "Greater", "GreaterOrEqual", "Less", "LessOrEqual"}:
+            lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
+            value = self._comparison(
+                node.op, self._half_read(node.inputs[0], "i"), self._half_read(node.inputs[1], "i"), half=True,
+                boolean_inputs=self.graph.tensors[node.inputs[0]].dtype == DType.BOOL,
+            )
+            lines.append(f"      {self._half_write(output_id, 'i')} = {value};")
+            lines.append("    }")
+            return lines
+        if node.op in {"And", "Or", "Xor"}:
+            lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
+            value = self._logical(
+                node.op, self._half_read(node.inputs[0], "i"), self._half_read(node.inputs[1], "i"), half=True
+            )
+            lines.append(f"      {self._half_write(output_id, 'i')} = {value};")
+            lines.append("    }")
+            return lines
+        if node.op == "Not":
+            lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
+            value = self._logical("Not", self._half_read(node.inputs[0], "i"), half=True)
+            lines.append(f"      {self._half_write(output_id, 'i')} = {value};")
+            lines.append("    }")
+            return lines
+        if node.op == "Cast":
+            lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
+            value = (
+                f"ponni::TwoHalf::select({self._half_read(node.inputs[0], 'i')}, "
+                "ponni::TwoHalf::from_floats(1.0f, 1.0f), ponni::TwoHalf::zero())"
+            )
+            lines.append(f"      {self._half_write(output_id, 'i')} = {value};")
+            lines.append("    }")
+            return lines
+        if node.op == "PRelu":
+            lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
+            value = self._half_read(node.inputs[0], "i")
+            slope = self._half_read(node.inputs[1], "i")
+            lines.append(f"      {self._half_write(output_id, 'i')} = ponni::TwoHalf::prelu({value}, {slope});")
+            lines.append("    }")
+            return lines
+        if node.op in {"Mean", "Sum"}:
+            lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
+            expression = " + ".join(self._half_read(tensor_id, "i") for tensor_id in node.inputs)
+            if node.op == "Mean":
+                divisor = len(node.inputs)
+                expression = f"({expression}) / ponni::TwoHalf::from_floats({divisor}.0f, {divisor}.0f)"
+            lines.append(f"      {self._half_write(output_id, 'i')} = {expression};")
+            lines.append("    }")
+            return lines
+        if node.op in {"IsInf", "IsNaN"}:
+            lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
+            value = self._half_read(node.inputs[0], "i")
+            if node.op == "IsNaN":
+                predicate = f"ponni::TwoHalf::is_nan({value})"
+            else:
+                negative = str(bool(int(node.attributes.get("detect_negative", 1)))).lower()
+                positive = str(bool(int(node.attributes.get("detect_positive", 1)))).lower()
+                predicate = f"ponni::TwoHalf::is_inf({value}, {negative}, {positive})"
+            lines.append(f"      {self._half_write(output_id, 'i')} = {predicate};")
+            lines.append("    }")
+            return lines
+        if node.op in {"Where", "CompareSelect"}:
+            lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
+            if node.op == "Where":
+                condition = self._half_read(node.inputs[0], "i")
+                when_true = self._half_read(node.inputs[1], "i")
+                when_false = self._half_read(node.inputs[2], "i")
+            else:
+                condition = self._comparison(
+                    str(node.attributes["comparison"]), self._half_read(node.inputs[0], "i"),
+                    self._half_read(node.inputs[1], "i"), half=True,
+                )
+                when_true = self._half_read(node.inputs[2], "i")
+                when_false = self._half_read(node.inputs[3], "i")
+            value = f"ponni::TwoHalf::select({condition}, {when_true}, {when_false})"
+            lines.append(f"      {self._half_write(output_id, 'i')} = {value};")
+            lines.append("    }")
+            return lines
+        if node.op in {"Abs", "Acos", "Acosh", "Asin", "Asinh", "Atan", "Atanh", "Ceil", "Celu", "Cos", "Cosh",
+                        "Elu", "Erf", "Exp", "Floor", "Gelu", "HardSigmoid", "HardSwish", "LeakyRelu", "Log", "Mish",
+                        "Neg", "Reciprocal", "Relu", "Round", "Selu", "Sigmoid", "Sign", "Silu", "Sin", "Sinh",
+                        "Softplus", "Softsign", "Sqrt", "Tan", "Tanh", "ThresholdedRelu"}:
             lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
             value = self._half_unary(node.op, self._half_read(node.inputs[0], "i"), node.attributes)
             lines.append(f"      {self._half_write(output_id, 'i')} = {value};")
@@ -818,18 +1314,27 @@ class CppEmitter:
             lines.append(f"      {self._half_write(output_id, 'i')} = {value};")
             lines.append("    }")
             return lines
-        if node.op in {"ReduceMean", "ReduceSum"}:
-            input_size = self._size(node.inputs[0])
-            lines.append("    ponni::TwoHalf reduction = ponni::TwoHalf::zero();")
-            lines.append(
-                f"    for (int i = 0; i < {input_size}; i++) reduction = reduction + "
-                f"{self._half_read(node.inputs[0], 'i')};"
+        if node.op.startswith("Reduce"):
+            return self._half_reduction(node)
+        if node.op == "LpNormalization":
+            input_id = node.inputs[0]
+            p = int(node.attributes.get("p", 2))
+            lines.append("    ponni::TwoHalf norm = ponni::TwoHalf::zero();")
+            expression = f"ponni::TwoHalf::abs({self._half_read(input_id, 'i')})"
+            if p == 2:
+                value = self._half_read(input_id, "i")
+                expression = f"({value} * {value})"
+            lines.append(f"    for (int i = 0; i < {output_size}; i++) norm = norm + {expression};")
+            if p == 2:
+                lines.append("    norm = ponni::TwoHalf::sqrt(norm);")
+            lines.append("    ponni::TwoMask const zero_norm = ponni::TwoHalf::equal(norm, ponni::TwoHalf::zero());")
+            lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
+            value = (
+                f"ponni::TwoHalf::select(zero_norm, ponni::TwoHalf::zero(), "
+                f"{self._half_read(input_id, 'i')} / norm)"
             )
-            if node.op == "ReduceMean":
-                lines.append(
-                    f"    reduction = reduction / ponni::TwoHalf::from_floats({input_size}.0f, {input_size}.0f);"
-                )
-            lines.append(f"    {self._half_write(output_id, '0')} = reduction;")
+            lines.append(f"      {self._half_write(output_id, 'i')} = {value};")
+            lines.append("    }")
             return lines
         if node.op == "Concat":
             offset = 0
@@ -843,6 +1348,13 @@ class CppEmitter:
                 offset += input_size
             if offset != output_size:
                 raise CompilerError(f"Concat node {node.id} has inconsistent flattened sample sizes")
+            return lines
+        if node.op == "Gather":
+            for output_index, input_index in enumerate(node.attributes["indices"]):
+                lines.append(
+                    f"    {self._half_write(output_id, str(output_index))} = "
+                    f"{self._half_read(node.inputs[0], str(input_index))};"
+                )
             return lines
         if node.op == "ResidualAddActivation":
             self._validate_binary(node)
@@ -1145,6 +1657,7 @@ class CppEmitter:
         }
         team_body_text = "\n".join(team_body)
         local_workspace_elements = self.sample_plan.total_elements
+        local_mask_workspace_elements = self.sample_mask_plan.total_elements
         inline_workspace_declaration = (
             f"    Scalar workspace[{local_workspace_elements}];\n" if local_workspace_elements > 0 else ""
         )
@@ -1154,6 +1667,18 @@ class CppEmitter:
         half_workspace_declaration = (
             f"          ponni::TwoHalf workspace[{local_workspace_elements}];\n"
             if local_workspace_elements > 0 else ""
+        )
+        inline_mask_workspace_declaration = (
+            f"    std::uint8_t mask_workspace[{local_mask_workspace_elements}];\n"
+            if local_mask_workspace_elements > 0 else ""
+        )
+        batch_mask_workspace_declaration = (
+            f"          std::uint8_t mask_workspace[{local_mask_workspace_elements}];\n"
+            if local_mask_workspace_elements > 0 else ""
+        )
+        half_mask_workspace_declaration = (
+            f"          ponni::TwoMask mask_workspace[{local_mask_workspace_elements}];\n"
+            if local_mask_workspace_elements > 0 else ""
         )
         batch_launch = f"""    InputView const input_view = inputs;
     OutputView const output_view = outputs;
@@ -1169,7 +1694,7 @@ class CppEmitter:
           ponni::SArray<Scalar,num_outputs> outputs;
           for (int i = 0; i < num_inputs; i++) inputs(i) = input_view(i,ibatch);
           ParameterView const parameters_ = parameters;
-{batch_workspace_declaration}{batch_body_text}
+{batch_workspace_declaration}{batch_mask_workspace_declaration}{batch_body_text}
           for (int i = 0; i < num_outputs; i++) output_view(i,ibatch) = outputs(i);
         }});"""
         def make_half_launch(method_name: str) -> str:
@@ -1190,7 +1715,7 @@ class CppEmitter:
             float const high = has_high_lane ? static_cast<float>(input_view(i,ibatch + 1)) : 0.0f;
             inputs(i) = ponni::TwoHalf::from_floats(low, high);
           }}
-{half_workspace_declaration}{half_body_texts[method_name]}
+{half_workspace_declaration}{half_mask_workspace_declaration}{half_body_texts[method_name]}
           for (int i = 0; i < num_outputs; i++) {{
             output_view(i,ibatch) = static_cast<Scalar>(outputs(i).low());
             if (has_high_lane) output_view(i,ibatch + 1) = static_cast<Scalar>(outputs(i).high());
@@ -1237,6 +1762,7 @@ public:
   int static constexpr num_inputs = {num_inputs};
   int static constexpr num_outputs = {num_outputs};
   int static constexpr workspace_elements = {self.plan.total_elements};
+  int static constexpr mask_workspace_elements = {self.mask_plan.total_elements};
   int static constexpr sample_local_workspace_elements = {local_workspace_elements};
   int static constexpr default_hierarchical_batch_tile = {self.default_batch_tile};
   int static constexpr maximum_hierarchical_batch_tile = {self.maximum_batch_tile};
@@ -1282,6 +1808,23 @@ private:
   }}
 
   KOKKOS_INLINE_FUNCTION static Scalar apply_tanh(Scalar value) {{ return Kokkos::tanh(value); }}
+
+  KOKKOS_INLINE_FUNCTION static Scalar apply_round(Scalar value) {{
+    if (!Kokkos::isfinite(value) || value == static_cast<Scalar>(0)) return value;
+    Scalar const lower = Kokkos::floor(value);
+    Scalar const fraction = value - lower;
+    if (fraction < static_cast<Scalar>(0.5)) return lower;
+    if (fraction > static_cast<Scalar>(0.5)) return lower + static_cast<Scalar>(1);
+    Scalar const half_lower = lower * static_cast<Scalar>(0.5);
+    return Kokkos::floor(half_lower) == half_lower ? lower : lower + static_cast<Scalar>(1);
+  }}
+
+  KOKKOS_INLINE_FUNCTION static Scalar apply_sign(Scalar value) {{
+    if (Kokkos::isnan(value)) return value;
+    if (value > static_cast<Scalar>(0)) return static_cast<Scalar>(1);
+    if (value < static_cast<Scalar>(0)) return static_cast<Scalar>(-1);
+    return static_cast<Scalar>(0);
+  }}
 
   KOKKOS_INLINE_FUNCTION static Scalar apply_leaky_relu(Scalar value, Scalar alpha) {{
     return value >= static_cast<Scalar>(0) ? value : alpha * value;
@@ -1552,7 +2095,7 @@ public:
   KOKKOS_INLINE_FUNCTION
   void infer_one(ponni::SArray<Scalar,num_inputs> const & inputs,
                  ponni::SArray<Scalar,num_outputs> & outputs) const {{
-{inline_workspace_declaration}{body_text}
+{inline_workspace_declaration}{inline_mask_workspace_declaration}{body_text}
   }}
 
   template <unsigned MaxThreads = 0, unsigned MinBlocks = 0>
@@ -1587,7 +2130,9 @@ public:
         execution_space, Kokkos::LaunchBounds<MaxThreads, MinBlocks>>;
     using member_type = typename policy_type::member_type;
     int const league_size = (batch_size + batch_tile - 1) / batch_tile;
-    int const scratch_bytes = workspace_elements * batch_tile * static_cast<int>(sizeof(Scalar));
+    int const scalar_scratch_bytes = workspace_elements * batch_tile * static_cast<int>(sizeof(Scalar));
+    int const mask_scratch_bytes = mask_workspace_elements * batch_tile * static_cast<int>(sizeof(std::uint8_t));
+    int const scratch_bytes = scalar_scratch_bytes + mask_scratch_bytes;
     policy_type policy(league_size, Kokkos::AUTO);
     policy.set_scratch_size(0, Kokkos::PerTeam(scratch_bytes));
     ParameterView const weights = parameters_;
@@ -1598,8 +2143,11 @@ public:
           int const remaining_batch = batch_size - batch_begin;
           int const active_batch = remaining_batch < batch_tile ? remaining_batch : batch_tile;
           Scalar * workspace = nullptr;
+          std::uint8_t * mask_workspace = nullptr;
           if (scratch_bytes > 0) {{
-            workspace = reinterpret_cast<Scalar *>(team.team_shmem().get_shmem(scratch_bytes));
+            unsigned char * scratch = reinterpret_cast<unsigned char *>(team.team_shmem().get_shmem(scratch_bytes));
+            workspace = reinterpret_cast<Scalar *>(scratch);
+            mask_workspace = reinterpret_cast<std::uint8_t *>(scratch + scalar_scratch_bytes);
           }}
 {team_body_text}
         }});
@@ -1611,7 +2159,8 @@ public:
         output_path.write_text(text)
 
 
-def emit_cpp(graph: Graph, plan: StoragePlan, sample_plan: StoragePlan, schedule: DenseChainSchedule,
+def emit_cpp(graph: Graph, plan: StoragePlan, sample_plan: StoragePlan,
+             mask_plan: StoragePlan, sample_mask_plan: StoragePlan, schedule: DenseChainSchedule,
              offsets: dict[int, int], output_dir: Path, model_name: str,
              strategy: str, payload_elements: int, payload_scalar_code: int,
              default_batch_tile: int, maximum_batch_tile: int, streaming_output_threshold: int,
@@ -1619,7 +2168,7 @@ def emit_cpp(graph: Graph, plan: StoragePlan, sample_plan: StoragePlan, schedule
              emit_half2_heuristic: bool = False) -> Path:
     output_path = output_dir / f"{model_name}.hpp"
     CppEmitter(
-        graph, plan, sample_plan, schedule, offsets, model_name, strategy,
+        graph, plan, sample_plan, mask_plan, sample_mask_plan, schedule, offsets, model_name, strategy,
         default_batch_tile, maximum_batch_tile
     ).emit(
         output_path, payload_elements, payload_scalar_code, streaming_output_threshold,

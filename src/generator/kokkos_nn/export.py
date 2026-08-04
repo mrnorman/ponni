@@ -26,6 +26,35 @@ def _dependencies():
     return torch, onnx, ort
 
 
+def _set_dimension(dimension, value: int | str) -> None:
+    dimension.ClearField("dim_value")
+    dimension.ClearField("dim_param")
+    if isinstance(value, int):
+        dimension.dim_value = value
+    else:
+        dimension.dim_param = value
+
+
+def _normalize_feature_batch_boundaries(model, num_inputs: int, exporter: str) -> None:
+    """Make exporter-chosen symbolic names irrelevant to the PONNI boundary contract."""
+    if len(model.graph.input) != 1 or len(model.graph.output) != 1:
+        raise CompilerError(
+            f"{exporter} produced {len(model.graph.input)} inputs and {len(model.graph.output)} outputs; "
+            "PONNI requires exactly one of each"
+        )
+    input_shape = model.graph.input[0].type.tensor_type.shape.dim
+    output_shape = model.graph.output[0].type.tensor_type.shape.dim
+    if len(input_shape) != 2 or len(output_shape) != 2:
+        raise CompilerError(
+            f"{exporter} produced boundary ranks {len(input_shape)} and {len(output_shape)}; expected rank 2"
+        )
+    if output_shape[0].dim_value <= 0:
+        raise CompilerError(f"{exporter} did not infer a static output feature count")
+    _set_dimension(input_shape[0], num_inputs)
+    _set_dimension(input_shape[1], "batch")
+    _set_dimension(output_shape[1], "batch")
+
+
 def export_module(module, num_inputs: int, output_dir: str | Path, name: str,
                   batch_sizes: tuple[int, ...] = (1, 2, 7, 32, 67), seed: int = 8128) -> ExportResult:
     torch, onnx, ort = _dependencies()
@@ -59,6 +88,7 @@ def export_module(module, num_inputs: int, output_dir: str | Path, name: str,
     )
 
     model = onnx.load(model_path)
+    _normalize_feature_batch_boundaries(model, num_inputs, "torch.onnx.export")
     metadata = {entry.key: entry for entry in model.metadata_props}
     for key, value in {
         "ponni.orientation": "features_batch",
@@ -228,16 +258,49 @@ def export_operator_zoo(output_dir: str | Path, batch_sizes: tuple[int, ...] = (
         "ln_scale": rng.uniform(0.8, 1.2, width).astype(np.float32),
         "ln_bias": rng.uniform(-0.1, 0.1, width).astype(np.float32),
         "one": np.array(1.25, dtype=np.float32),
+        "zero": np.array(0.0, dtype=np.float32),
         "clip_min": np.array(-1.0, dtype=np.float32),
         "clip_max": np.array(1.0, dtype=np.float32),
         "two": np.array(2.0, dtype=np.float32),
         "upper": np.array(0.75, dtype=np.float32),
         "lower": np.array(0.05, dtype=np.float32),
         "axes": np.array([1], dtype=np.int64),
+        "feature_indices": np.arange(width - 1, -1, -1, dtype=np.int64),
+        "singleton_axis": np.array([1], dtype=np.int64),
+        "shape_index": np.array(0, dtype=np.int64),
+        "prelu_slope": np.array(0.25, dtype=np.float32),
     }
     nodes = [
-        helper.make_node("Transpose", ["input"], ["x"], perm=[1, 0]),
-        helper.make_node("BatchNormalization", ["x", "bn_scale", "bn_bias", "bn_mean", "bn_var"], ["bn"]),
+        helper.make_node("Transpose", ["input"], ["raw_x"], perm=[1, 0]),
+        helper.make_node("Dropout", ["raw_x"], ["dropout_x"]),
+        helper.make_node("Unsqueeze", ["dropout_x", "singleton_axis"], ["expanded_x"]),
+        helper.make_node("Squeeze", ["expanded_x", "singleton_axis"], ["squeezed_x"]),
+        helper.make_node("CastLike", ["squeezed_x", "one"], ["cast_like_x"]),
+        helper.make_node("Gather", ["cast_like_x", "feature_indices"], ["x"], axis=1),
+        helper.make_node("Shape", ["bn_scale"], ["static_shape"]),
+        helper.make_node("Size", ["bn_scale"], ["static_size"]),
+        helper.make_node("Gather", ["static_shape", "shape_index"], ["static_dimension"], axis=0),
+        helper.make_node("Greater", ["x", "zero"], ["greater"]),
+        helper.make_node("GreaterOrEqual", ["x", "zero"], ["greater_equal"]),
+        helper.make_node("Less", ["x", "one"], ["less"]),
+        helper.make_node("LessOrEqual", ["x", "one"], ["less_equal"]),
+        helper.make_node("Equal", ["greater", "greater_equal"], ["equal"]),
+        helper.make_node("And", ["greater", "less_equal"], ["logical_and"]),
+        helper.make_node("Not", ["logical_and"], ["logical_not"]),
+        helper.make_node("Or", ["less", "equal"], ["logical_or"]),
+        helper.make_node("Xor", ["logical_or", "logical_not"], ["logical_xor"]),
+        helper.make_node("Cast", ["logical_xor"], ["logical_value"], to=TensorProto.FLOAT),
+        helper.make_node("Neg", ["x"], ["negative_x"]),
+        helper.make_node("Where", ["logical_xor", "x", "negative_x"], ["selected"]),
+        helper.make_node("Add", ["selected", "logical_value"], ["selected_with_mask"]),
+        helper.make_node("Greater", ["selected_with_mask", "zero"], ["direct_condition"]),
+        helper.make_node("Neg", ["selected_with_mask"], ["negative_selected"]),
+        helper.make_node(
+            "Where", ["direct_condition", "selected_with_mask", "negative_selected"], ["direct_selected"]
+        ),
+        helper.make_node(
+            "BatchNormalization", ["direct_selected", "bn_scale", "bn_bias", "bn_mean", "bn_var"], ["bn"]
+        ),
         helper.make_node("LeakyRelu", ["bn"], ["leaky"], alpha=0.125),
         helper.make_node("Elu", ["leaky"], ["elu"], alpha=0.75),
         helper.make_node("Gelu", ["elu"], ["gelu"], approximate="tanh"),
@@ -257,15 +320,62 @@ def export_operator_zoo(output_dir: str | Path, batch_sizes: tuple[int, ...] = (
         helper.make_node("Pow", ["clipped", "two"], ["powered"]),
         helper.make_node("Min", ["powered", "upper"], ["minimum"]),
         helper.make_node("Max", ["minimum", "lower"], ["maximum"]),
-        helper.make_node("LayerNormalization", ["maximum", "ln_scale", "ln_bias"], ["normalized"], axis=1),
-        helper.make_node("Softmax", ["normalized"], ["probability"], axis=1),
-        helper.make_node("LogSoftmax", ["normalized"], ["log_probability"], axis=1),
+        helper.make_node("Sin", ["maximum"], ["sine"]),
+        helper.make_node("Cos", ["sine"], ["cosine"]),
+        helper.make_node("Tan", ["cosine"], ["tangent"]),
+        helper.make_node("Atan", ["tangent"], ["arctangent"]),
+        helper.make_node("Acos", ["arctangent"], ["arccosine"]),
+        helper.make_node("Asin", ["arccosine"], ["arcsine"]),
+        helper.make_node("Atanh", ["arcsine"], ["inverse_hyperbolic_tangent"]),
+        helper.make_node("Asinh", ["inverse_hyperbolic_tangent"], ["inverse_hyperbolic_sine"]),
+        helper.make_node("Sinh", ["inverse_hyperbolic_sine"], ["hyperbolic_sine"]),
+        helper.make_node("Cosh", ["hyperbolic_sine"], ["hyperbolic_cosine"]),
+        helper.make_node("Acosh", ["hyperbolic_cosine"], ["inverse_hyperbolic_cosine"]),
+        helper.make_node("Erf", ["inverse_hyperbolic_cosine"], ["error_function"]),
+        helper.make_node("Ceil", ["error_function"], ["ceiling"]),
+        helper.make_node("Floor", ["ceiling"], ["floor"]),
+        helper.make_node("Round", ["floor"], ["rounded"]),
+        helper.make_node("Sign", ["rounded"], ["signed"]),
+        helper.make_node("Add", ["maximum", "signed"], ["math_result"]),
+        helper.make_node("LayerNormalization", ["math_result", "ln_scale", "ln_bias"], ["normalized"], axis=1),
+        helper.make_node("Celu", ["normalized"], ["celu"], alpha=0.75),
+        helper.make_node("Selu", ["celu"], ["selu"]),
+        helper.make_node("Softsign", ["selu"], ["softsign"]),
+        helper.make_node("ThresholdedRelu", ["softsign"], ["thresholded"], alpha=0.05),
+        helper.make_node("PRelu", ["thresholded", "prelu_slope"], ["prelu"]),
+        helper.make_node("IsNaN", ["prelu"], ["is_nan"]),
+        helper.make_node("IsInf", ["prelu"], ["is_inf"]),
+        helper.make_node("Or", ["is_nan", "is_inf"], ["non_finite"]),
+        helper.make_node("Cast", ["non_finite"], ["non_finite_value"], to=TensorProto.FLOAT),
+        helper.make_node("Mean", ["prelu", "normalized"], ["extended_mean"]),
+        helper.make_node("Sum", ["extended_mean", "non_finite_value"], ["extended"]),
+        helper.make_node("LpNormalization", ["extended"], ["lp_normalized"], axis=1, p=2),
+        helper.make_node("Abs", ["extended"], ["reduction_abs"]),
+        helper.make_node("Add", ["reduction_abs", "one"], ["reduction_positive"]),
+        helper.make_node("ReduceL1", ["reduction_positive", "axes"], ["reduce_l1_flat"], keepdims=0),
+        helper.make_node("Unsqueeze", ["reduce_l1_flat", "singleton_axis"], ["reduce_l1"]),
+        helper.make_node("ReduceL2", ["reduction_positive", "axes"], ["reduce_l2"], keepdims=1),
+        helper.make_node("ReduceLogSum", ["reduction_positive", "axes"], ["reduce_log_sum"], keepdims=1),
+        helper.make_node("ReduceLogSumExp", ["extended", "axes"], ["reduce_log_sum_exp"], keepdims=1),
+        helper.make_node("ReduceMax", ["extended", "axes"], ["reduce_max"], keepdims=1),
+        helper.make_node("ReduceMin", ["extended", "axes"], ["reduce_min"], keepdims=1),
+        helper.make_node("ReduceProd", ["reduction_positive", "axes"], ["reduce_prod"], keepdims=1),
+        helper.make_node("ReduceSumSquare", ["extended", "axes"], ["reduce_sum_square"], keepdims=1),
+        helper.make_node(
+            "Sum",
+            ["reduce_l1", "reduce_l2", "reduce_log_sum", "reduce_log_sum_exp", "reduce_max", "reduce_min",
+             "reduce_prod", "reduce_sum_square"],
+            ["reduction_summary"],
+        ),
+        helper.make_node("Softmax", ["lp_normalized"], ["probability"], axis=1),
+        helper.make_node("LogSoftmax", ["lp_normalized"], ["log_probability"], axis=1),
         helper.make_node("ReduceMean", ["log_probability", "axes"], ["log_mean"], keepdims=1),
         helper.make_node("ReduceSum", ["probability", "axes"], ["probability_sum"], keepdims=1),
         helper.make_node("Add", ["probability", "log_probability"], ["combined"]),
         helper.make_node("Add", ["combined", "log_mean"], ["centered"]),
         helper.make_node("Add", ["centered", "probability_sum"], ["result"]),
-        helper.make_node("Transpose", ["result"], ["output"], perm=[1, 0]),
+        helper.make_node("Add", ["result", "reduction_summary"], ["result_with_reductions"]),
+        helper.make_node("Transpose", ["result_with_reductions"], ["output"], perm=[1, 0]),
     ]
     graph = helper.make_graph(
         nodes,

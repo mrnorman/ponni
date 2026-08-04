@@ -7,7 +7,7 @@ from typing import Callable
 import numpy as np
 
 from .errors import CompilerError
-from .ir import ConstantTensor, Graph, Node
+from .ir import ConstantTensor, DType, Graph, Node
 
 
 ACTIVATIONS = {
@@ -15,7 +15,12 @@ ACTIVATIONS = {
     "Softplus", "Tanh",
 }
 ELEMENTWISE = {"Add", "Div", "Max", "Min", "Mul", "Pow", "Sub"}
-UNARY = ACTIVATIONS | {"Abs", "Exp", "Log", "Neg", "Reciprocal", "Sqrt"}
+COMPARISONS = {"Equal", "Greater", "GreaterOrEqual", "Less", "LessOrEqual"}
+UNARY = ACTIVATIONS | {
+    "Abs", "Acos", "Acosh", "Asin", "Asinh", "Atan", "Atanh", "Ceil", "Celu", "Cos", "Cosh", "Erf", "Exp",
+    "Floor", "Log", "Neg", "Reciprocal", "Round", "Selu", "Sign", "Sin", "Sinh", "Softsign", "Sqrt", "Tan",
+    "ThresholdedRelu",
+}
 
 
 def _constant(graph: Graph, tensor_id: int) -> np.ndarray | None:
@@ -83,6 +88,44 @@ def constant_fold(graph: Graph) -> bool:
                 result = values[0] * values[1]
             elif node.op == "Div":
                 result = values[0] / values[1]
+            elif node.op == "Equal":
+                result = np.equal(values[0], values[1])
+            elif node.op == "Greater":
+                result = np.greater(values[0], values[1])
+            elif node.op == "GreaterOrEqual":
+                result = np.greater_equal(values[0], values[1])
+            elif node.op == "Less":
+                result = np.less(values[0], values[1])
+            elif node.op == "LessOrEqual":
+                result = np.less_equal(values[0], values[1])
+            elif node.op == "And":
+                result = np.logical_and(values[0], values[1])
+            elif node.op == "Or":
+                result = np.logical_or(values[0], values[1])
+            elif node.op == "Xor":
+                result = np.logical_xor(values[0], values[1])
+            elif node.op == "Not":
+                result = np.logical_not(values[0])
+            elif node.op == "Cast":
+                result = values[0]
+            elif node.op == "PRelu":
+                result = np.where(values[0] >= 0, values[0], values[0] * values[1])
+            elif node.op == "Sum":
+                result = sum(values[1:], start=values[0])
+            elif node.op == "Mean":
+                result = sum(values[1:], start=values[0]) / len(values)
+            elif node.op == "IsNaN":
+                result = np.isnan(values[0])
+            elif node.op == "IsInf":
+                result = np.isinf(values[0])
+                if not int(node.attributes.get("detect_negative", 1)):
+                    result &= ~np.isneginf(values[0])
+                if not int(node.attributes.get("detect_positive", 1)):
+                    result &= ~np.isposinf(values[0])
+            elif node.op == "Gather":
+                result = np.take(values[0], node.attributes["indices"], axis=int(node.attributes.get("axis", 0)))
+            elif node.op == "Where":
+                result = np.where(values[0], values[1], values[2])
             elif node.op in UNARY:
                 from .interpreter import _unary
                 result = _unary(node.op, values[0], node.attributes)
@@ -116,7 +159,8 @@ def constant_fold(graph: Graph) -> bool:
             raise CompilerError(f"constant folding failed for {node.source_name or node.op}: {exc}") from exc
         output_id = node.outputs[0]
         output = graph.tensors[output_id]
-        result = np.asarray(result, dtype=values[0].dtype)
+        result_dtype = np.bool_ if output.dtype == DType.BOOL else values[0].dtype
+        result = np.asarray(result, dtype=result_dtype)
         constant_name = f"__folded_{output_id}_{output.name}"
         graph.constants[constant_name] = ConstantTensor(
             constant_name, tuple(int(dim) for dim in result.shape), output.dtype, result.copy(), "folded", False
@@ -147,7 +191,7 @@ def fold_layout_operations(graph: Graph) -> bool:
     # Otherwise folding a preceding Transpose would hide whether batch was first
     # or last in the original ONNX operation.
     for node in graph.nodes:
-        if node.op not in {"Flatten", "Reshape"}:
+        if node.op not in {"Flatten", "Reshape", "Squeeze", "Unsqueeze"}:
             continue
         input_tensor = graph.tensors[node.inputs[0]]
         output_tensor = graph.tensors[node.outputs[0]]
@@ -181,7 +225,7 @@ def fold_layout_operations(graph: Graph) -> bool:
     changed = False
     retained: list[Node] = []
     for node in graph.nodes:
-        if node.op not in {"Flatten", "Reshape", "Transpose"}:
+        if node.op not in {"Flatten", "Reshape", "Squeeze", "Transpose", "Unsqueeze"}:
             retained.append(node)
             continue
         input_id = node.inputs[0]
@@ -460,6 +504,33 @@ def fuse_elementwise_chains(graph: Graph) -> bool:
     return changed
 
 
+def fuse_comparison_where(graph: Graph) -> bool:
+    """Fuse a sole-consumer comparison mask directly into floating-point selection."""
+    graph.rebuild_links()
+    remove: set[int] = set()
+    changed = False
+    for node in graph.nodes:
+        if node.op != "Where":
+            continue
+        condition = graph.tensors[node.inputs[0]]
+        if condition.producer is None or condition.consumers != [node.id]:
+            continue
+        comparison = graph.node_by_id(condition.producer)
+        if comparison.op not in COMPARISONS:
+            continue
+        if graph.tensors[comparison.inputs[0]].dtype == DType.BOOL:
+            continue
+        node.op = "CompareSelect"
+        node.inputs = comparison.inputs + node.inputs[1:]
+        node.attributes = {"comparison": comparison.op}
+        remove.add(comparison.id)
+        changed = True
+    if changed:
+        graph.nodes = [node for node in graph.nodes if node.id not in remove]
+        graph.renumber_nodes()
+    return changed
+
+
 PASS_PIPELINE: list[tuple[str, Callable[[Graph], bool]]] = [
     ("topological-schedule", topological_schedule),
     ("constant-fold", constant_fold),
@@ -471,6 +542,7 @@ PASS_PIPELINE: list[tuple[str, Callable[[Graph], bool]]] = [
     ("silu-fusion", fuse_silu),
     ("dense-activation-fusion", fuse_dense_activation),
     ("residual-activation-fusion", fuse_residual_activation),
+    ("comparison-where-fusion", fuse_comparison_where),
     ("elementwise-chain-fusion", fuse_elementwise_chains),
     ("dead-code-cleanup", eliminate_dead_code),
     ("final-schedule", topological_schedule),

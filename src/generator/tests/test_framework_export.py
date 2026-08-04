@@ -133,7 +133,7 @@ class FrameworkExportTests(unittest.TestCase):
             report = compile_model(model_path, root / "generated", model_name="KerasActivationModel")
             self.assertEqual(report["optimized_operations"], ["LeakyRelu", "Softplus"])
 
-    def test_keras_elu_boolean_select_decomposition_is_rejected_actionably(self) -> None:
+    def test_keras_elu_boolean_select_decomposition_compiles(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             inputs = keras.Input(batch_shape=(4, None), dtype="float32", name="input")
@@ -142,14 +142,19 @@ class FrameworkExportTests(unittest.TestCase):
             outputs = keras.ops.transpose(values, axes=(1, 0))
             model = keras.Model(inputs, outputs)
             model(np.zeros((4, 1), dtype=np.float32))
+            test_values = np.random.default_rng(47).standard_normal((4, 9)).astype(np.float32)
+            expected = np.asarray(model(test_values, training=False), dtype=np.float32)
             model_path = root / "keras_elu.onnx"
             model.export(model_path, format="onnx", verbose=False)
             _annotate_feature_batch_model(model_path, 4, 4, "keras ELU representation test")
+            self._assert_onnx_matches(model_path, test_values, expected)
             operations = [node.op_type for node in onnx.load(model_path).graph.node]
             self.assertIn("Elu", operations)
             self.assertIn("Greater", operations)
-            with self.assertRaisesRegex(CompilerError, "unsupported operator 'Greater'"):
-                compile_model(model_path, root / "generated", model_name="KerasEluModel")
+            self.assertIn("Cast", operations)
+            report = compile_model(model_path, root / "generated", model_name="KerasEluModel")
+            self.assertGreater(report["sample_local_storage"]["mask_workspace_elements"], 0)
+            self.assertIn("Cast", report["optimized_operations"])
 
     def test_tensorflow_transposed_weight_bias_add_reshape_and_shared_branches(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -199,13 +204,13 @@ class FrameworkExportTests(unittest.TestCase):
             @tf.function(input_signature=[tf.TensorSpec([4, None], tf.float32, name="input")])
             @tf.autograph.experimental.do_not_convert
             def unsupported(values):
-                return tf.math.sin(values)
+                return tf.expand_dims(tf.argmax(values, axis=0, output_type=tf.int64), axis=0)
 
-            model_path = root / "tensorflow_sin.onnx"
+            model_path = root / "tensorflow_argmax.onnx"
             signature = [tf.TensorSpec([4, None], tf.float32, name="input")]
             tf2onnx.convert.from_function(unsupported, input_signature=signature, opset=18, output_path=str(model_path))
-            _annotate_feature_batch_model(model_path, 4, 4, "tf2onnx unsupported-operation test")
-            with self.assertRaisesRegex(CompilerError, "unsupported operator 'Sin'"):
+            _annotate_feature_batch_model(model_path, 4, 1, "tf2onnx unsupported-operation test")
+            with self.assertRaisesRegex(CompilerError, "unsupported operator 'ArgMax'"):
                 compile_model(model_path, root / "generated", model_name="UnsupportedModel")
 
 

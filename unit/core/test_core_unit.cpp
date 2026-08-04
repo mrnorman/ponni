@@ -718,21 +718,51 @@ int main(int argc, char** argv) {
 
     // Exercise both lanes and the packed multiply-add on the active device backend.
     {
-      Kokkos::View<float*,ponni::DeviceSpace> result("two_half_result", 4);
+      Kokkos::View<float*,ponni::DeviceSpace> result("two_half_result", 16);
       Kokkos::parallel_for(PONNI_AUTO_LABEL(), 1, KOKKOS_LAMBDA(int) {
         ponni::TwoHalf const left = ponni::TwoHalf::from_floats(2.0f, -3.0f);
         ponni::TwoHalf const right = ponni::TwoHalf::from_floats(4.0f, 5.0f);
         ponni::TwoHalf const added = left + right;
         ponni::TwoHalf const fused = ponni::TwoHalf::fma(left, right, ponni::TwoHalf::from_floats(1.0f, 2.0f));
+        ponni::TwoHalf const rounded_even = ponni::TwoHalf::round(ponni::TwoHalf::from_floats(2.5f, -3.5f));
+        ponni::TwoHalf const rounded_odd = ponni::TwoHalf::round(ponni::TwoHalf::from_floats(1.5f, -2.5f));
+        ponni::TwoHalf const signed_values = ponni::TwoHalf::sign(
+            ponni::TwoHalf::from_floats(Kokkos::Experimental::quiet_NaN_v<float>, -0.0f));
+        ponni::TwoMask const greater = ponni::TwoHalf::greater(left, right);
+        ponni::TwoMask const either = ponni::TwoMask::logical_or(
+            greater, ponni::TwoMask::from_bools(true, false));
+        ponni::TwoMask const inverted = ponni::TwoMask::logical_not(either);
+        ponni::TwoHalf const selected = ponni::TwoHalf::select(inverted, left, right);
         result(0) = added.low();
         result(1) = added.high();
         result(2) = fused.low();
         result(3) = fused.high();
+        result(4) = rounded_even.low();
+        result(5) = rounded_even.high();
+        result(6) = rounded_odd.low();
+        result(7) = rounded_odd.high();
+        result(8) = signed_values.low();
+        result(9) = signed_values.high();
+        result(10) = greater.low() ? 1.0f : 0.0f;
+        result(11) = greater.high() ? 1.0f : 0.0f;
+        result(12) = inverted.low() ? 1.0f : 0.0f;
+        result(13) = inverted.high() ? 1.0f : 0.0f;
+        result(14) = selected.low();
+        result(15) = selected.high();
       });
       auto result_h = ponni::create_host_copy(result);
       require_true(nearly_equal(result_h(0), 6.0f) && nearly_equal(result_h(1), 2.0f) &&
                    nearly_equal(result_h(2), 9.0f) && nearly_equal(result_h(3), -13.0f),
                    "TwoHalf packed arithmetic produced incorrect lanes");
+      require_true(nearly_equal(result_h(4), 2.0f) && nearly_equal(result_h(5), -4.0f) &&
+                   nearly_equal(result_h(6), 2.0f) && nearly_equal(result_h(7), -2.0f),
+                   "TwoHalf ONNX ties-to-even rounding produced incorrect lanes");
+      require_true(std::isnan(result_h(8)) && result_h(9) == 0.0f && !std::signbit(result_h(9)),
+                   "TwoHalf ONNX sign handling produced incorrect lanes");
+      require_true(nearly_equal(result_h(10), 0.0f) && nearly_equal(result_h(11), 0.0f) &&
+                   nearly_equal(result_h(12), 0.0f) && nearly_equal(result_h(13), 1.0f) &&
+                   nearly_equal(result_h(14), 4.0f) && nearly_equal(result_h(15), -3.0f),
+                   "TwoMask comparison, logical, and selection operations produced incorrect lanes");
     }
   }
 

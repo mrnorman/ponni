@@ -51,6 +51,26 @@ This means familiar combinations of `nn.Linear`, activation modules/functions, r
 reductions can compile when their exported ONNX spelling uses the supported operators below. Support is determined by
 the validated ONNX graph, not merely by the PyTorch class name.
 
+### ONNX compatibility contract
+
+The importer accepts ONNX IR versions 8 through 13 and the standard `ai.onnx` opsets 13 through 22. It records every
+domain-specific opset import and every resolved `Operator:since_version` schema in `optimization_report.json`.
+Operator support is schema-versioned: encountering a familiar operator name with a newly revised ONNX schema is an
+error until that schema has been reviewed. Custom-domain nodes are rejected; an unused custom-domain opset declaration
+is retained as provenance.
+
+Import performs ONNX checking and strict shape inference, validates node arity and attributes against the selected
+standard schema, materializes schema defaults, and then lowers emitter variation to one internal spelling. In
+particular, positional `Clip` bounds and reduction axes become canonical attributes, omitted `Transpose` permutations
+become explicit, and older reduction/reshape defaults become explicit. Semantic restrictions narrower than ONNX—such
+as full feature-axis reductions, `Reshape allowzero=0`, and inference-mode normalization—are rejected before
+optimization or code generation. The framework exporters also rewrite actual input and output dimensions to the
+declared `(features,batch)` contract, so exporter-chosen names such as `s0` cannot conflict with metadata.
+
+This is intentionally a two-layer defense: the ONNX standard supplies the schema contract, while direct fixtures and
+the CPU exporter matrix cover legal but emitter-dependent graph decompositions. See
+[`ONNX_VERSION_STUDY.md`](ONNX_VERSION_STUDY.md) for the current matrix and provenance procedure.
+
 The following model families are not currently supported:
 
 - convolution, pooling, images with preserved spatial semantics, or general multidimensional tensor kernels;
@@ -125,35 +145,62 @@ ONNX Runtime and writes reproducible references. C++ integration checks SArray, 
 1 and default tile, and packed half2 inference.
 
 Focused framework tests target exporter representation differences rather than reproducing every PyTorch topology.
-They cover Keras Functional branching, no-bias dense layers, feature concatenation, residual activation, and
-decomposed normalization; TensorFlow `transpose_b` constant weights, `tf.nn.bias_add`, compile-time reshape, shared
-branches, and actionable rejection of an exported unsupported op. Keras LayerNormalization currently exports
-`Sqrt -> Reciprocal` plus reductions and elementwise operations, all of which are compiled directly. Keras 3's ELU
-export currently adds Boolean `Greater/Not/Cast` selection around `Elu`; Boolean tensors and `Where`-style selection
-are outside the present floating-point IR, so that spelling is rejected explicitly even though a direct ONNX `Elu`
-node is supported.
+They cover Keras Functional branching, no-bias dense layers, feature concatenation, residual activation, decomposed
+normalization, and Boolean-select ELU; TensorFlow `transpose_b` constant weights, `tf.nn.bias_add`, compile-time
+reshape, shared branches, and actionable rejection of an exported unsupported op. Keras LayerNormalization currently
+exports `Sqrt -> Reciprocal` plus reductions and elementwise operations, all of which are compiled directly. Keras
+3's ELU export adds Boolean `Greater/Not/Cast` selection around `Elu`; the typed-mask path compiles this spelling.
+
+To investigate exporter drift across CPU-only framework versions, run:
+
+```bash
+python3 src/generator/examples/probe_onnx_versions.py --output-dir /tmp/ponni-onnx-versions
+```
+
+The version stacks are defined in `examples/onnx_version_matrix.json`. The probe creates isolated `uv` environments,
+exports the existing PyTorch, Keras, and TensorFlow examples, records exact package provenance and exporter logs, and
+compares raw ONNX structure with PONNI's canonical IR, optimized operations, storage plans, and numerical checks.
+Additional coherent stacks can be appended to the matrix without changing the probe.
+The results from the initial three-stack CPU investigation are recorded in `ONNX_VERSION_STUDY.md`.
 
 ## Supported ONNX scope
 
+The generated [`ONNX_OPERATOR_SUPPORT.md`](ONNX_OPERATOR_SUPPORT.md) table gives a complete operator-by-operator and
+schema-version accounting for the supported opset envelope, including PONNI-specific semantic restrictions.
+
 Supported standard-domain operations are:
 
-- dense/layout: `Gemm`, constant-right-hand-side `MatMul`, static feature-axis `Concat`, `Identity`, order-preserving
-  static `Reshape`/`Flatten`, and batch-axis or constant-weight `Transpose`;
+- dense/layout: `Gemm`, constant-right-hand-side `MatMul`, static feature-axis `Concat` and constant-index `Gather`,
+  `Identity`, order-preserving static `Reshape`/`Flatten`/`Squeeze`/`Unsqueeze`, and batch-axis or constant-weight
+  `Transpose`; statically resolvable `Shape` and `Size` expressions are folded during import;
 - arithmetic: binary `Add`, `Mul`, `Sub`, `Div`, `Min`, `Max`, and `Pow`; scalar-bound `Clip`; and unary `Abs`,
-  `Neg`, `Exp`, `Log`, `Sqrt`, and `Reciprocal`;
+  `Neg`, `Exp`, `Log`, `Sqrt`, `Reciprocal`, `Sin`, `Cos`, `Tan`, `Asin`, `Acos`, `Atan`, `Sinh`, `Cosh`, `Asinh`,
+  `Acosh`, `Atanh`, `Erf`, `Ceil`, `Floor`, `Round`, and `Sign`; variadic `Mean` and `Sum`;
+- Boolean/select: `Equal`, `Greater`, `GreaterOrEqual`, `Less`, `LessOrEqual`, `And`, `Or`, `Xor`, `Not`, `Where`,
+  `IsNaN`, `IsInf`, Boolean-to-floating `Cast`, and narrowly equivalent `CastLike`;
 - activations: `Tanh`, `Relu`, `Sigmoid`, `LeakyRelu`, `Elu`, `Gelu`, `Softplus`, `HardSigmoid`, `HardSwish`, and
-  `Mish`; `Sigmoid(x) -> Mul(x, ...)` is canonicalized to scalar `Silu`;
-- inference-mode `BatchNormalization`, feature-axis `LayerNormalization`, stable `Softmax` and `LogSoftmax`;
-- `ReduceMean` and `ReduceSum` over the complete static feature axis.
+  `Mish`, plus `PRelu`, `Selu`, `Celu`, `Softsign`, and `ThresholdedRelu`; `Sigmoid(x) -> Mul(x, ...)` is
+  canonicalized to scalar `Silu`;
+- inference-mode `Dropout` elimination and `BatchNormalization`, feature-axis `LayerNormalization` and
+  `LpNormalization`, and stable `Softmax` and `LogSoftmax`;
+- `ReduceL1`, `ReduceL2`, `ReduceLogSum`, `ReduceLogSumExp`, `ReduceMax`, `ReduceMean`, `ReduceMin`, `ReduceProd`,
+  `ReduceSum`, and `ReduceSumSquare` over the complete static feature axis, with either `keepdims` setting.
 
-Concatenating or reducing the dynamic batch axis is rejected. Normalization parameters and Clip bounds must be
-compile-time constants, and BatchNormalization training mode is rejected. `Gemm` attributes
+Concatenating or reducing the dynamic batch axis is rejected. Every reduction is local to one sample, so generated
+code uses an in-kernel scalar or `TwoHalf` accumulator without atomics or an additional launch. Inference `Dropout`
+is removed; training-mode Dropout is rejected. Normalization parameters and Clip bounds must be compile-time
+constants, and BatchNormalization training mode is rejected. `Gemm` attributes
 `transA`, `transB`, `alpha`, and `beta` are interpreted explicitly; unsupported `transA` data layouts are rejected.
 Weights are normalized to canonical `(num_outputs, num_inputs)` order before serialization, so inference never
 transposes weights.
 
-The importer accepts compatible modern opsets produced by the installed PyTorch, Keras, and tf2onnx exporters rather
-than pinning an obsolete opset. It accepts only nodes in the standard `ai.onnx` domain. Operators are checked by
+The packed `TwoHalf` path evaluates transcendental operations independently in two FP32 lanes through Kokkos device
+math and rounds each result back to FP16. It preserves ONNX operator semantics, including ties-to-even `Round` and
+NaN-preserving `Sign`; FP16 quantization and backend math approximations can still differ numerically from ONNX
+Runtime.
+
+The importer accepts the reviewed IR/opset envelope stated above rather than trusting whatever version happens to be
+installed. It accepts only nodes in the standard `ai.onnx` domain. Operators are checked by resolved schema and
 semantics, not by framework-assigned names.
 
 Exactly one floating-point input and output are currently supported. Both are logically rank two:
@@ -170,17 +217,19 @@ ONNX validation and independent static-shape checks still validate the graph. Th
 every non-batch dimension must be positive and static. The canonical IR removes the batch dimension and describes one
 sample. Moving only the batch axis, flattening, and same-element-count reshapes disappear at compile time.
 
-The compiler rejects loops, conditions, sequences, strings, sparse tensors, random/stateful/training operations,
-custom domains, runtime-dependent shapes, nonconstant dense weights, multiple dynamic dimensions, and arbitrary
-broadcasting. Elementwise broadcasting is limited to exact per-sample shapes and scalar constants. Reshape and
-Flatten cannot move batch from first to last or place it between static dimensions because that would change sample
-grouping rather than merely change metadata. Diagnostics name the offending node, operator, shape, or attribute
-whenever available.
+The compiler rejects loops, graph-level conditions, sequences, strings, sparse tensors, random/stateful/training
+operations, custom domains, runtime-dependent shape values, nonconstant dense weights, multiple dynamic dimensions,
+and arbitrary broadcasting. Shape expressions are accepted only when their selected dimensions are independent of
+runtime batch size. Elementwise broadcasting is limited to exact per-sample shapes and scalar constants. Layout
+operations cannot move batch from first to last or place it between static dimensions because that would change
+sample grouping rather than merely change metadata. Diagnostics name the offending node, operator, shape, or
+attribute whenever available.
 
 ## Canonical IR and optimization
 
-`TensorValue`, `Node`, `Graph`, and `ConstantTensor` form a small dataclass IR independent of ONNX protobufs. A JSON
-snapshot is emitted as `canonical_ir.json`. The fixed deterministic pass order is:
+`TensorValue`, `Node`, `Graph`, and `ConstantTensor` form a small typed dataclass IR independent of ONNX protobufs.
+Floating tensors retain their source precision and Boolean tensors use the distinct `bool` dtype; a JSON snapshot is
+emitted as `canonical_ir.json`. The fixed deterministic pass order is:
 
 1. topological scheduling;
 2. constant folding;
@@ -192,8 +241,9 @@ snapshot is emitted as `canonical_ir.json`. The fixed deterministic pass order i
 8. sigmoid-multiply to SiLU fusion;
 9. dense+bias+activation fusion;
 10. residual-add+activation fusion;
-11. elementwise-chain fusion;
-12. dead-code cleanup and final scheduling.
+11. sole-consumer comparison-to-`Where` fusion;
+12. elementwise-chain fusion;
+13. dead-code cleanup and final scheduling.
 
 Use `python -m kokkos_nn list-passes` for exact names and `--disable-pass NAME[,NAME]` to test a pass independently.
 Fusion never silently crosses a multiply-consumed value. Such values are retained unless the explicit bounded-cost
@@ -203,12 +253,15 @@ chains reassign one scalar so a step such as `Pow` is not recomputed by later `M
 shifted/exponential values in its planned output slot before scalar normalization. LayerNorm retains only scalar
 Welford statistics, avoiding a tensor temporary and cancellation in `E[x^2] - E[x]^2`.
 
-The storage planner computes producer/last-consumer intervals and reuses non-overlapping offsets in one fixed local
-array. Model inputs and outputs are external, constants reside in the persistent weight view, and fused temporaries
-have no slot. `optimization_report.json` lists node counts, operations, fusion rejections, reused tensors, local stack
-bytes, scratch bytes, external workspace bytes, and per-dense half2 accumulator selections. `--max-stack-bytes`
-rejects a model whose estimate exceeds the explicit threshold. Local arrays may spill on GPUs; the report does not
-claim register residency.
+The storage planner computes producer/last-consumer intervals and reuses non-overlapping offsets. Floating
+intermediates occupy the existing scalar workspace; Boolean intermediates occupy a separate byte-per-element mask
+workspace, so adding masks does not inflate floating storage or disturb its reuse. Model inputs and outputs are
+external, constants reside in the persistent weight view, and fused temporaries have no slot. A comparison used only
+as a `Where` condition becomes canonical `CompareSelect`, eliminating even that mask allocation.
+`optimization_report.json` lists both storage plans and their byte totals along with node counts, operations, fusion
+rejections, external workspace bytes, and per-dense half2 accumulator selections. `--max-stack-bytes` rejects a model
+whose combined estimate exceeds the explicit threshold. Local arrays may spill on GPUs; the report does not claim
+register residency.
 
 The deterministic dense-chain scheduler considers every legal `DenseBiasActivation -> Dense` edge whose consumer has
 at most `--streaming-output-threshold` scalar accumulators (8 by default). On each linear chain it uses a
@@ -303,7 +356,13 @@ generated float/double View API. `load_weights()` creates one additional
 persistent scalar-FP16 weight View, and each weight is splatted into both batch lanes in the dense loop—weights are
 not duplicated as half2 values. Dense operations use packed FP16 multiply-add with FP16 accumulation, while
 activations unpack to float for the Kokkos math function and repack afterward. `infer_batch_half2` uses one dependent
-accumulation chain; this policy is reported as accumulator count 0. The generator retains a power-user heuristic that
+accumulation chain; this policy is reported as accumulator count 0.
+
+Boolean lanes use the one-byte `ponni::TwoMask`: bit 0 corresponds to the low sample and bit 1 to the high sample.
+Comparisons and logical operations stay packed, `Where` selects the two FP16 lanes independently, and
+Boolean-to-floating `Cast` produces packed `0.0`/`1.0` lanes.
+
+The generator retains a power-user heuristic that
 selects a count independently for every dense dot product: 0 below length 2, 2 through length 24, 4 through length
 80, and 16 above length 80, but it no longer emits a public heuristic method. A nonzero count creates that many
 independent FP16 FMA chains. Their low and high lanes, plus the bias,
@@ -410,9 +469,12 @@ diagnostic build choice, not part of generated portable code.
 
 ## Extension points
 
-To add an ONNX operator, add it to `SUPPORTED_OPS`, parse all semantic attributes in `importer.py`, define its precise
-shape/broadcast restrictions, implement it in the unfused interpreter and C++ emitter, then add positive and rejection
-tests. Do not pass an unvalidated protobuf node into code generation.
+To add an ONNX operator or schema revision, add its reviewed `since_version` to `SUPPORTED_OPERATOR_SCHEMAS`, define
+its canonical attributes and precise shape/broadcast restrictions in `importer.py`, implement it in the unfused
+interpreter and C++ emitter, then add direct ONNX positive/rejection fixtures and an ONNX Runtime oracle comparison.
+Expand the global IR/opset envelope only after all schemas reached by existing supported operators have been reviewed.
+Then rerun `examples/probe_onnx_versions.py` to cover real framework decompositions. Do not pass an unvalidated
+protobuf node into code generation.
 
 To add a fusion rule, write a deterministic `Graph -> bool` function in `passes.py`, register it in `PASS_PIPELINE`,
 require single-consumer/liveness conditions explicitly, add interpreter/emitter support for the new canonical op, and

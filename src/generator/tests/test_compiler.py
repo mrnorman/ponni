@@ -94,11 +94,18 @@ class CompilerTests(unittest.TestCase):
             original, optimized, _ = load_and_optimize(exported.model_path)
             operations = {node.op for node in optimized.nodes}
             required = {
-                "Abs", "BatchNormalization", "Clip", "Elu", "Exp", "Gelu", "HardSigmoid", "HardSwish",
-                "LayerNormalization", "LeakyRelu", "Log", "LogSoftmax", "Mish", "Neg", "ReduceMean",
-                "ReduceSum", "Silu", "Softmax", "Softplus", "Sqrt",
+                "Abs", "Acos", "Acosh", "And", "Asin", "Asinh", "Atan", "Atanh", "BatchNormalization", "Cast",
+                "Ceil", "Celu", "Clip", "CompareSelect", "Cos", "Cosh", "Elu", "Equal", "Erf", "Exp", "Floor",
+                "Gather", "Gelu", "Greater", "GreaterOrEqual", "HardSigmoid", "HardSwish", "IsInf", "IsNaN",
+                "LayerNormalization", "LeakyRelu", "Less", "LessOrEqual", "Log", "LogSoftmax", "LpNormalization",
+                "Mean", "Mish", "Neg", "Not", "Or", "PRelu", "ReduceL1", "ReduceL2", "ReduceLogSum",
+                "ReduceLogSumExp", "ReduceMax", "ReduceMean", "ReduceMin", "ReduceProd", "ReduceSum",
+                "ReduceSumSquare", "Round", "Selu", "Sign", "Silu", "Sin", "Sinh", "Softmax", "Softplus",
+                "Softsign", "Sqrt", "Sum", "Tan", "ThresholdedRelu", "Where", "Xor",
             }
             self.assertTrue(required <= operations)
+            original_only = {"CastLike", "Dropout", "Shape", "Size", "Squeeze", "Unsqueeze"}
+            self.assertTrue(original_only <= set(original.metadata["operator_counts"]))
             self.assertNotIn("Sigmoid", operations)
             values = np.random.default_rng(44).standard_normal((8, 13)).astype(np.float32)
             reference = ort.InferenceSession(
@@ -113,13 +120,75 @@ class CompilerTests(unittest.TestCase):
             self.assertIn("Scalar exponential_sum", generated)
             self.assertIn("Scalar second_moment", generated)
             self.assertIn("ponni::TwoHalf exponential_sum", generated)
+            self.assertIn("ponni::TwoMask mask_workspace", generated)
+            self.assertIn("ponni::TwoHalf::select", generated)
             self.assertIn("TeamThreadRange(team, active_batch)", generated)
             self.assertNotIn("preactivation", generated)
             self.assertEqual(report["storage"]["external_workspace_bytes"], 0)
-            self.assertEqual(report["learned_parameter_count"], 32)
-            self.assertEqual(manifest["learned_parameter_count"], 32)
+            self.assertGreater(report["sample_local_storage"]["mask_workspace_elements"], 0)
+            self.assertEqual(report["onnx_opsets"]["ai.onnx"], 22)
+            self.assertIn("Gelu:20", report["onnx_operator_schema_counts"])
+            self.assertEqual(report["learned_parameter_count"], 33)
+            self.assertEqual(manifest["learned_parameter_count"], 33)
             learned_names = {entry["name"] for entry in manifest["tensors"] if entry["learned"]}
-            self.assertEqual(learned_names, {"bn_scale", "bn_bias", "ln_scale", "ln_bias"})
+            self.assertEqual(learned_names, {"bn_scale", "bn_bias", "ln_scale", "ln_bias", "prelu_slope"})
+
+    def test_comparison_where_fusion_eliminates_mask_storage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            nodes = [
+                helper.make_node("Transpose", ["input"], ["x"], perm=[1, 0]),
+                helper.make_node("Greater", ["x", "zero"], ["condition"]),
+                helper.make_node("Neg", ["x"], ["negative"]),
+                helper.make_node("Where", ["condition", "x", "negative"], ["selected"]),
+                helper.make_node("Transpose", ["selected"], ["output"], perm=[1, 0]),
+            ]
+            model = _save_model(
+                root / "compare_select.onnx",
+                nodes,
+                [numpy_helper.from_array(np.array(0, dtype=np.float32), "zero")],
+                output_shape=(4, "batch"),
+            )
+            fused = compile_model(model, root / "fused", model_name="CompareSelectModel")
+            unfused = compile_model(
+                model,
+                root / "unfused",
+                model_name="WhereModel",
+                disabled_passes={"comparison-where-fusion"},
+            )
+            self.assertIn("CompareSelect", fused["optimized_operations"])
+            self.assertEqual(fused["sample_local_storage"]["mask_workspace_elements"], 0)
+            self.assertEqual(unfused["sample_local_storage"]["mask_workspace_elements"], 4)
+            self.assertIn("Where", unfused["optimized_operations"])
+            generated = (root / "fused" / "CompareSelectModel.hpp").read_text()
+            self.assertIn("ponni::TwoHalf::select(ponni::TwoHalf::greater", generated)
+
+    def test_training_dropout_and_runtime_shape_values_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            training = numpy_helper.from_array(np.array(True, dtype=np.bool_), "training")
+            dropout = _save_model(
+                root / "training_dropout.onnx",
+                [helper.make_node("Dropout", ["input", "", "training"], ["output"])],
+                [training],
+                input_shape=(4, "batch"),
+                output_shape=(4, "batch"),
+            )
+            with self.assertRaisesRegex(CompilerError, "supports only inference mode"):
+                compile_model(dropout, root / "dropout_out")
+
+            runtime_shape = _save_model(
+                root / "runtime_shape.onnx",
+                [
+                    helper.make_node("Shape", ["input"], ["runtime_shape"]),
+                    helper.make_node("Identity", ["input"], ["output"]),
+                ],
+                [],
+                input_shape=(4, "batch"),
+                output_shape=(4, "batch"),
+            )
+            with self.assertRaisesRegex(CompilerError, "depends on the runtime batch size"):
+                compile_model(runtime_shape, root / "shape_out")
 
     def test_activation_attributes_survive_dense_fusion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -601,9 +670,13 @@ class CompilerTests(unittest.TestCase):
 
     def test_rejects_unsupported_operator(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "sin.onnx"
-            _save_model(path, [helper.make_node("Sin", ["input"], ["output"])], [], output_shape=(4, "batch"))
-            with self.assertRaisesRegex(CompilerError, "unsupported operator 'Sin'"):
+            path = Path(directory) / "mod.onnx"
+            divisor = numpy_helper.from_array(np.array(2.0, dtype=np.float32), "divisor")
+            _save_model(
+                path, [helper.make_node("Mod", ["input", "divisor"], ["output"])], [divisor],
+                output_shape=(4, "batch")
+            )
+            with self.assertRaisesRegex(CompilerError, "unsupported operator 'Mod'"):
                 validate_model(path)
 
     def test_rejects_unsupported_broadcast(self) -> None:

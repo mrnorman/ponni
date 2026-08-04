@@ -70,6 +70,12 @@ def main() -> None:
     required = {
         "BatchNormalization", "LayerNormalization", "Softmax", "LogSoftmax", "ReduceMean", "ReduceSum",
         "LeakyRelu", "Elu", "Gelu", "Softplus", "HardSigmoid", "HardSwish", "Mish", "Silu", "Clip",
+        "Acos", "Acosh", "Asin", "Asinh", "Atan", "Atanh", "Ceil", "Cos", "Cosh", "Erf", "Floor", "Round",
+        "Sign", "Sin", "Sinh", "Tan",
+        "And", "Cast", "CompareSelect", "Equal", "Greater", "GreaterOrEqual", "Less", "LessOrEqual", "Not", "Or",
+        "Where", "Xor", "Celu", "Gather", "IsInf", "IsNaN", "LpNormalization", "Mean", "PRelu", "ReduceL1",
+        "ReduceL2", "ReduceLogSum", "ReduceLogSumExp", "ReduceMax", "ReduceMin", "ReduceProd", "ReduceSumSquare",
+        "Selu", "Softsign", "Sum", "ThresholdedRelu",
     }
     missing = required - zoo_operations
     if missing:

@@ -2,6 +2,8 @@
 
 #include <Kokkos_Core.hpp>
 
+#include "ponni_TwoMask.h"
+
 namespace ponni {
 
 // Two independent FP16 batch lanes. CUDA and HIP builds use the vendors'
@@ -12,6 +14,23 @@ public:
   using half_type = Kokkos::Experimental::half_t;
 
 private:
+  KOKKOS_INLINE_FUNCTION static float round_to_nearest_even(float value) {
+    if (!Kokkos::isfinite(value) || value == 0.0f) return value;
+    float const lower = Kokkos::floor(value);
+    float const fraction = value - lower;
+    if (fraction < 0.5f) return lower;
+    if (fraction > 0.5f) return lower + 1.0f;
+    float const half_lower = lower * 0.5f;
+    return Kokkos::floor(half_lower) == half_lower ? lower : lower + 1.0f;
+  }
+
+  KOKKOS_INLINE_FUNCTION static float sign_value(float value) {
+    if (Kokkos::isnan(value)) return value;
+    if (value > 0.0f) return 1.0f;
+    if (value < 0.0f) return -1.0f;
+    return 0.0f;
+  }
+
 #if defined(KOKKOS_ENABLE_CUDA) || defined(KOKKOS_ENABLE_HIP)
   __half2 value_;
 
@@ -121,8 +140,52 @@ public:
     return from_floats(Kokkos::abs(value.low()), Kokkos::abs(value.high()));
   }
 
+  KOKKOS_INLINE_FUNCTION static TwoHalf acos(TwoHalf value) {
+    return from_floats(Kokkos::acos(value.low()), Kokkos::acos(value.high()));
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf acosh(TwoHalf value) {
+    return from_floats(Kokkos::acosh(value.low()), Kokkos::acosh(value.high()));
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf asin(TwoHalf value) {
+    return from_floats(Kokkos::asin(value.low()), Kokkos::asin(value.high()));
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf asinh(TwoHalf value) {
+    return from_floats(Kokkos::asinh(value.low()), Kokkos::asinh(value.high()));
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf atan(TwoHalf value) {
+    return from_floats(Kokkos::atan(value.low()), Kokkos::atan(value.high()));
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf atanh(TwoHalf value) {
+    return from_floats(Kokkos::atanh(value.low()), Kokkos::atanh(value.high()));
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf ceil(TwoHalf value) {
+    return from_floats(Kokkos::ceil(value.low()), Kokkos::ceil(value.high()));
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf cos(TwoHalf value) {
+    return from_floats(Kokkos::cos(value.low()), Kokkos::cos(value.high()));
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf cosh(TwoHalf value) {
+    return from_floats(Kokkos::cosh(value.low()), Kokkos::cosh(value.high()));
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf erf(TwoHalf value) {
+    return from_floats(Kokkos::erf(value.low()), Kokkos::erf(value.high()));
+  }
+
   KOKKOS_INLINE_FUNCTION static TwoHalf exp(TwoHalf value) {
     return from_floats(Kokkos::exp(value.low()), Kokkos::exp(value.high()));
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf floor(TwoHalf value) {
+    return from_floats(Kokkos::floor(value.low()), Kokkos::floor(value.high()));
   }
 
   KOKKOS_INLINE_FUNCTION static TwoHalf log(TwoHalf value) {
@@ -135,6 +198,26 @@ public:
 
   KOKKOS_INLINE_FUNCTION static TwoHalf reciprocal(TwoHalf value) {
     return from_floats(1.0f / value.low(), 1.0f / value.high());
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf round(TwoHalf value) {
+    return from_floats(round_to_nearest_even(value.low()), round_to_nearest_even(value.high()));
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf sign(TwoHalf value) {
+    return from_floats(sign_value(value.low()), sign_value(value.high()));
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf sin(TwoHalf value) {
+    return from_floats(Kokkos::sin(value.low()), Kokkos::sin(value.high()));
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf sinh(TwoHalf value) {
+    return from_floats(Kokkos::sinh(value.low()), Kokkos::sinh(value.high()));
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf tan(TwoHalf value) {
+    return from_floats(Kokkos::tan(value.low()), Kokkos::tan(value.high()));
   }
 
   KOKKOS_INLINE_FUNCTION static TwoHalf pow(TwoHalf base, TwoHalf exponent) {
@@ -151,6 +234,31 @@ public:
                        left.high() > right.high() ? left.high() : right.high());
   }
 
+  KOKKOS_INLINE_FUNCTION static TwoMask equal(TwoHalf left, TwoHalf right) {
+    return TwoMask::from_bools(left.low() == right.low(), left.high() == right.high());
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoMask greater(TwoHalf left, TwoHalf right) {
+    return TwoMask::from_bools(left.low() > right.low(), left.high() > right.high());
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoMask greater_or_equal(TwoHalf left, TwoHalf right) {
+    return TwoMask::from_bools(left.low() >= right.low(), left.high() >= right.high());
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoMask less(TwoHalf left, TwoHalf right) {
+    return TwoMask::from_bools(left.low() < right.low(), left.high() < right.high());
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoMask less_or_equal(TwoHalf left, TwoHalf right) {
+    return TwoMask::from_bools(left.low() <= right.low(), left.high() <= right.high());
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf select(TwoMask condition, TwoHalf when_true, TwoHalf when_false) {
+    return from_floats(condition.low() ? when_true.low() : when_false.low(),
+                       condition.high() ? when_true.high() : when_false.high());
+  }
+
   KOKKOS_INLINE_FUNCTION static TwoHalf leaky_relu(TwoHalf value, float alpha) {
     float const low = value.low();
     float const high = value.high();
@@ -162,6 +270,51 @@ public:
     float const high = value.high();
     return from_floats(low >= 0.0f ? low : alpha * (Kokkos::exp(low) - 1.0f),
                        high >= 0.0f ? high : alpha * (Kokkos::exp(high) - 1.0f));
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf celu(TwoHalf value, float alpha) {
+    float const low  = value.low();
+    float const high = value.high();
+    return from_floats(low > 0.0f ? low : alpha * (Kokkos::exp(low / alpha) - 1.0f),
+                       high > 0.0f ? high : alpha * (Kokkos::exp(high / alpha) - 1.0f));
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf selu(TwoHalf value, float alpha, float gamma) {
+    float const low  = value.low();
+    float const high = value.high();
+    return from_floats(gamma * (low > 0.0f ? low : alpha * (Kokkos::exp(low) - 1.0f)),
+                       gamma * (high > 0.0f ? high : alpha * (Kokkos::exp(high) - 1.0f)));
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf softsign(TwoHalf value) {
+    float const low  = value.low();
+    float const high = value.high();
+    return from_floats(low / (1.0f + Kokkos::abs(low)), high / (1.0f + Kokkos::abs(high)));
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf thresholded_relu(TwoHalf value, float alpha) {
+    float const low  = value.low();
+    float const high = value.high();
+    return from_floats(low > alpha ? low : 0.0f, high > alpha ? high : 0.0f);
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoHalf prelu(TwoHalf value, TwoHalf slope) {
+    float const low  = value.low();
+    float const high = value.high();
+    return from_floats(low >= 0.0f ? low : low * slope.low(),
+                       high >= 0.0f ? high : high * slope.high());
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoMask is_nan(TwoHalf value) {
+    return TwoMask::from_bools(Kokkos::isnan(value.low()), Kokkos::isnan(value.high()));
+  }
+
+  KOKKOS_INLINE_FUNCTION static TwoMask is_inf(TwoHalf value, bool detect_negative, bool detect_positive) {
+    float const low  = value.low();
+    float const high = value.high();
+    bool const low_match  = Kokkos::isinf(low)  && ((low < 0.0f && detect_negative)  || (low > 0.0f && detect_positive));
+    bool const high_match = Kokkos::isinf(high) && ((high < 0.0f && detect_negative) || (high > 0.0f && detect_positive));
+    return TwoMask::from_bools(low_match, high_match);
   }
 
   KOKKOS_INLINE_FUNCTION static TwoHalf gelu(TwoHalf value, bool approximate) {
