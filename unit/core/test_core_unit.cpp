@@ -244,6 +244,58 @@ int main(int argc, char** argv) {
       }
     }
 
+    // A cross-feature barrier must end one fused region without disabling
+    // fusion later in the tuple. This model plans two dense/pointwise blocks
+    // around an in-place Softmax and needs only tmp1 for the materialized state.
+    {
+      real2d w1("mixed_w1", 2, 3);
+      real2d w2("mixed_w2", 3, 2);
+      real1d b1("mixed_b1", 3);
+      real1d b2("mixed_b2", 2);
+      Kokkos::deep_copy(w1, 1.0f);
+      Kokkos::deep_copy(w2, 1.0f);
+      auto b1_h = Kokkos::create_mirror_view(b1);
+      auto b2_h = Kokkos::create_mirror_view(b2);
+      b1_h(0) = 0.0f; b1_h(1) = 1.0f; b1_h(2) = 2.0f;
+      b2_h(0) = 0.0f; b2_h(1) = -1.0f;
+      Kokkos::deep_copy(b1, b1_h);
+      Kokkos::deep_copy(b2, b2_h);
+
+      auto mixed_model = ponni::create_inference_model(
+          ponni::Matvec<float>(w1), ponni::Bias<float>(b1), ponni::Relu<float>(3),
+          ponni::Softmax<float>(3),
+          ponni::Matvec<float>(w2), ponni::Bias<float>(b2), ponni::Tanh<float>(2));
+      using MixedModel = decltype(mixed_model);
+      static_assert(MixedModel::get_num_fused_dense_blocks() == 2,
+                    "The planner should discover fused blocks on both sides of a barrier");
+
+      real2d mixed_input("mixed_input", 2, 2);
+      Kokkos::deep_copy(mixed_input, 0.5f);
+      auto mixed_output = mixed_model.forward_batch_parallel(mixed_input);
+      auto mixed_output_h = ponni::create_host_copy(mixed_output);
+      real2d mixed_output_in_kernel("mixed_output_in_kernel", 2, 2);
+      auto const mixed_params = mixed_model.params;
+      Kokkos::parallel_for(PONNI_AUTO_LABEL(), 2, KOKKOS_LAMBDA(int ibatch) {
+        MixedModel::forward_batch_parallel_in_kernel(mixed_input, mixed_output_in_kernel,
+                                                     mixed_params, ibatch);
+      });
+      auto mixed_output_in_kernel_h = ponni::create_host_copy(mixed_output_in_kernel);
+      require_true(mixed_model.params.tmp1.extent(0) == 3 &&
+                   mixed_model.params.tmp1.extent(1) == 2,
+                   "Mixed planning should materialize the pre-barrier state in tmp1");
+      require_true(!mixed_model.params.tmp2.is_allocated(),
+                   "A final fused block should not allocate a second temporary View");
+      for (int ibatch = 0; ibatch < 2; ibatch++) {
+        require_true(nearly_equal(mixed_output_h(0,ibatch), std::tanh(1.0f), 1e-5f),
+                     "Mixed fused/barrier output 0 is incorrect");
+        require_true(nearly_equal(mixed_output_h(1,ibatch), 0.0f, 1e-5f),
+                     "Mixed fused/barrier output 1 is incorrect");
+        require_true(nearly_equal(mixed_output_in_kernel_h(0,ibatch), std::tanh(1.0f), 1e-5f) &&
+                     nearly_equal(mixed_output_in_kernel_h(1,ibatch), 0.0f, 1e-5f),
+                     "Intra-kernel mixed fused/barrier output is incorrect");
+      }
+    }
+
     // The factory is the only place where users select execution and memory.
     // It rebinds all supplied layers, including their learned parameters.
     using HostExecutionSpace = Kokkos::DefaultHostExecutionSpace;
