@@ -84,12 +84,13 @@ assert "CPUExecutionProvider" in ort.get_available_providers()'
 # Keep a reused build-local environment within PONNI's reviewed ONNX Runtime
 # envelope without reinstalling the larger framework packages.
 if ! "${venv_python}" -c "${onnxruntime_check}" >/dev/null 2>&1; then
-  "${uv_bin}" pip install --python "${venv_python}" --upgrade 'numpy<2' "${onnxruntime_requirement}"
+  "${uv_bin}" pip install --python "${venv_python}" --upgrade 'numpy>=2.0.2' "${onnxruntime_requirement}"
 fi
 
 frameworks_ready=false
 if "${venv_python}" -c \
-     'import keras, tf2onnx, h5py, numpy, onnx, onnxruntime, onnxscript' >/dev/null 2>&1 && \
+     'import flax, jax, keras, sklearn, tf2onnx, numpy, onnx, onnxruntime, onnxscript, safetensors' \
+     >/dev/null 2>&1 && \
    "${venv_python}" -c "${backend_check}" >/dev/null 2>&1 && \
    "${venv_python}" -c "${onnxruntime_check}" >/dev/null 2>&1 && \
    "${uv_bin}" pip check --python "${venv_python}" >/dev/null 2>&1; then
@@ -101,12 +102,16 @@ if [[ "${frameworks_ready}" != "true" ]]; then
   "${uv_bin}" pip install --python "${venv_python}" \
     --index-url https://download.pytorch.org/whl/cpu torch
 
-  common_requirements=('numpy<2' h5py keras tf2onnx "${onnxruntime_requirement}" onnx onnxscript)
+  common_requirements=(
+    'numpy>=2.0.2' flax jax keras scikit-learn tf2onnx
+    "${onnxruntime_requirement}" onnx onnxscript safetensors
+  )
   "${uv_bin}" pip install --python "${venv_python}" "${common_requirements[@]}"
 fi
 
 if ! "${venv_python}" -c \
-       'import keras, tf2onnx, h5py, numpy, onnx, onnxruntime, onnxscript' >/dev/null 2>&1 || \
+       'import flax, jax, keras, sklearn, tf2onnx, numpy, onnx, onnxruntime, onnxscript, safetensors' \
+       >/dev/null 2>&1 || \
    ! "${venv_python}" -c "${backend_check}" >/dev/null 2>&1 || \
    ! "${venv_python}" -c "${onnxruntime_check}" >/dev/null 2>&1 || \
    ! "${uv_bin}" pip check --python "${venv_python}" >/dev/null 2>&1; then

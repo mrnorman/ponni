@@ -5,15 +5,16 @@ import sys
 os.environ.setdefault("KERAS_BACKEND", "torch")
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 
-import h5py
 import keras
 import numpy as np
 from keras import layers
 
+from kokkos_nn.weights import write_ponni_file
+
 
 def main() -> None:
     if len(sys.argv) != 2:
-        raise SystemExit(f"Usage: {sys.argv[0]} <output.h5>")
+        raise SystemExit(f"Usage: {sys.argv[0]} <output.ponni>")
 
     out_file = sys.argv[1]
     rng = np.random.default_rng(1234)
@@ -36,18 +37,19 @@ def main() -> None:
     else:
         y_test = np.asarray(y_pred, dtype=np.float32)
 
-    with h5py.File(out_file, "w") as h5:
-        g0 = h5.require_group("dense/dense")
-        g0.create_dataset("kernel:0", data=model.get_layer("dense").get_weights()[0])
-        g0.create_dataset("bias:0", data=model.get_layer("dense").get_weights()[1])
-
-        g1 = h5.require_group("dense_1/dense_1")
-        g1.create_dataset("kernel:0", data=model.get_layer("dense_1").get_weights()[0])
-        g1.create_dataset("bias:0", data=model.get_layer("dense_1").get_weights()[1])
-
-        gt = h5.require_group("test")
-        gt.create_dataset("input", data=x_test.T)
-        gt.create_dataset("output", data=y_test.T)
+    write_ponni_file(
+        {
+            "dense.kernel": model.get_layer("dense").get_weights()[0],
+            "dense.bias": model.get_layer("dense").get_weights()[1],
+            "dense_1.kernel": model.get_layer("dense_1").get_weights()[0],
+            "dense_1.bias": model.get_layer("dense_1").get_weights()[1],
+            "test.input": x_test.T,
+            "test.output": y_test.T,
+        },
+        out_file,
+        source_framework="keras",
+        target="test-fixture",
+    )
 
 
 if __name__ == "__main__":

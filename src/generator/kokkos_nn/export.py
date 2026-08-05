@@ -265,12 +265,17 @@ def make_functionality_models():
             tail = torch.tanh(self.tail(chain + joined2 + joined3))
             return self.output(tail)
 
+    class Identity(torch.nn.Module):
+        def forward(self, value):
+            return value
+
     return {
         "deep10": (DeepTen().eval(), 9),
         "resnet10": (ResNetTen().eval(), 10),
         "densenet": (DenseNet().eval(), 8),
         "branching": (Branching().eval(), 11),
         "workspace_levels": (WorkspaceLevels().eval(), 12),
+        "identity": (Identity().eval(), 4),
     }
 
 

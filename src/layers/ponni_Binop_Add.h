@@ -8,7 +8,6 @@ namespace ponni {
   struct Binop_Add {
     using memory_space = MemorySpace;
     template <class NewMemorySpace> using rebind_memory_space = Binop_Add<ISAVE,real,N,NewMemorySpace>;
-    typedef Kokkos::View<double * ,Kokkos::LayoutRight,Kokkos::HostSpace > doubleHost1d;
     typedef Kokkos::View<real   * ,Kokkos::LayoutRight,MemorySpace> real1d;
     typedef Kokkos::View<real   **,Kokkos::LayoutRight,MemorySpace> real2d;
     
@@ -41,13 +40,19 @@ namespace ponni {
       params.num_outputs = num_inputs;
     }
 
+    // Model creation may rebind a layer to another memory space. Layers
+    // without Views only need to preserve their scalar configuration.
+    template <class NewMemorySpace>
+    auto copy_to_memory_space(NewMemorySpace const & = NewMemorySpace()) const {
+      return rebind_memory_space<NewMemorySpace>(params.num_inputs);
+    }
+
     char const * get_label() const { return "Binop_Add"; }
     KOKKOS_INLINE_FUNCTION static int get_num_inputs (Params const &params_in) { return params_in.num_inputs ; }
     KOKKOS_INLINE_FUNCTION static int get_num_outputs(Params const &params_in) { return params_in.num_outputs; }
     int    get_num_inputs               () const { return params.num_inputs ; }
     int    get_num_outputs              () const { return params.num_outputs; }
     int    get_num_trainable_parameters () const { return 0; }
-    int    get_array_representation_size() const { return 2; }
 
     template <class InputView1, class InputView2, class OutputView>
     KOKKOS_INLINE_FUNCTION static void compute_all_outputs( InputView1 const & input1    ,
@@ -55,6 +60,7 @@ namespace ponni {
                                                             OutputView const & output    ,
                                                             int            ibatch    ,
                                                             Params const & params_in ) {
+      ponni::require_layout_right_views<InputView1,InputView2,OutputView>();
       int num_outputs = params_in.num_outputs;
       for (int irow = 0; irow < num_outputs; irow++) {
         output(irow,ibatch) = input1(irow,ibatch) + input2(irow,ibatch);
@@ -71,18 +77,6 @@ namespace ponni {
     void set_trainable_parameters(real1d const &in) { }
 
     real1d get_trainable_parameters() const { return real1d(); }
-
-    doubleHost1d to_array() const {
-      doubleHost1d data("Binary_Add_params",get_array_representation_size());
-      data(0) = get_num_inputs();
-      data(1) = ISAVE;
-      return data;
-    }
-
-    void from_array(doubleHost1d const &data) {
-      if (data(1) != ISAVE) Kokkos::abort("ERROR: Binop_Add saved state index incompatible with data from file");
-      init( static_cast<int>(data(0)) );
-    }
 
     void validate(int saved_layer_num_inputs) const {
       if (params.num_inputs <= 0 || params.num_outputs != params.num_inputs) {

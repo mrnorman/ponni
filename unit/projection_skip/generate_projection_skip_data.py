@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 import sys
 
-import h5py
 import numpy as np
 import torch
 import torch.nn as nn
+
+from kokkos_nn.weights import write_ponni_file
 
 
 class ProjectionSkipNet(nn.Module):
@@ -19,7 +20,7 @@ class ProjectionSkipNet(nn.Module):
 
 def main() -> None:
     if len(sys.argv) != 2:
-        raise SystemExit(f"Usage: {sys.argv[0]} <output.h5>")
+        raise SystemExit(f"Usage: {sys.argv[0]} <output.ponni>")
 
     out_file = sys.argv[1]
 
@@ -34,16 +35,20 @@ def main() -> None:
     y = model(x).detach().cpu().numpy().astype(np.float32)
     x_np = x.detach().cpu().numpy().astype(np.float32)
 
-    with h5py.File(out_file, "w") as h5:
-        # Matvec expects [num_inputs, num_outputs]
-        h5.create_dataset("w_main", data=model.main.weight.detach().cpu().numpy().T.astype(np.float32))
-        h5.create_dataset("b_main", data=model.main.bias.detach().cpu().numpy().astype(np.float32))
-        h5.create_dataset("w_skip", data=model.skip.weight.detach().cpu().numpy().T.astype(np.float32))
-        h5.create_dataset("b_skip", data=model.skip.bias.detach().cpu().numpy().astype(np.float32))
-
-        gt = h5.require_group("test")
-        gt.create_dataset("input", data=x_np.T)
-        gt.create_dataset("output", data=y.T)
+    write_ponni_file(
+        {
+            # Matvec expects [num_inputs, num_outputs].
+            "w_main": model.main.weight.detach().cpu().numpy().T.astype(np.float32),
+            "b_main": model.main.bias.detach().cpu().numpy().astype(np.float32),
+            "w_skip": model.skip.weight.detach().cpu().numpy().T.astype(np.float32),
+            "b_skip": model.skip.bias.detach().cpu().numpy().astype(np.float32),
+            "test.input": x_np.T,
+            "test.output": y.T,
+        },
+        out_file,
+        source_framework="pytorch",
+        target="test-fixture",
+    )
 
 
 if __name__ == "__main__":

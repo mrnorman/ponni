@@ -3,6 +3,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <iostream>
 #include <limits>
@@ -24,6 +25,52 @@ bool is_ieee_nan(float value) {
   std::uint32_t const bits = std::bit_cast<std::uint32_t>(value);
   return (bits & 0x7f800000u) == 0x7f800000u &&
          (bits & 0x007fffffu) != 0;
+}
+
+struct SampleStats {
+  double mean;
+  double variance;
+  double minimum;
+  double maximum;
+};
+
+template <class ViewType>
+SampleStats sample_stats(ViewType const & values) {
+  auto const host = ponni::create_host_copy(values);
+  double sum = 0;
+  double square_sum = 0;
+  double minimum = std::numeric_limits<double>::infinity();
+  double maximum = -std::numeric_limits<double>::infinity();
+  for (std::size_t i = 0; i < host.size(); i++) {
+    double const value = static_cast<double>(host.data()[i]);
+    sum += value;
+    square_sum += value * value;
+    minimum = value < minimum ? value : minimum;
+    maximum = value > maximum ? value : maximum;
+  }
+  double const mean = sum / static_cast<double>(host.size());
+  return {mean, square_sum / static_cast<double>(host.size()) - mean * mean, minimum, maximum};
+}
+
+template <class ViewType>
+bool exactly_equal(ViewType const & left, ViewType const & right) {
+  auto const left_host = ponni::create_host_copy(left);
+  auto const right_host = ponni::create_host_copy(right);
+  if (left_host.size() != right_host.size()) return false;
+  for (std::size_t i = 0; i < left_host.size(); i++) {
+    if (left_host.data()[i] != right_host.data()[i]) return false;
+  }
+  return true;
+}
+
+template <class Function>
+bool throws_invalid_argument(Function const & function) {
+  try {
+    function();
+  } catch (std::invalid_argument const &) {
+    return true;
+  }
+  return false;
 }
 
 template <class Layer>
@@ -115,6 +162,22 @@ int main(int argc, char** argv) {
     using real1d = Kokkos::View<float*, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
     using real2d = Kokkos::View<float**, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
 
+    // The host-only JSON parser is intentionally tiny, but still implements
+    // nested values, Unicode escapes, padded headers, and duplicate rejection.
+    {
+      std::string const json = R"json({"name":"PONNI \u03c0","shape":[2,3],"valid":true}   )json";
+      ponni::detail::JsonValue value;
+      ponni::detail::JsonParser parser(json.data(),json.size());
+      std::string error;
+      require_true(parser.parse(value,error) && value.find("shape") != nullptr,
+                   "PONNI JSON parser rejected a valid padded header: " + error);
+
+      std::string const duplicate = R"({"tensor":1,"tensor":2})";
+      ponni::detail::JsonParser duplicate_parser(duplicate.data(),duplicate.size());
+      require_true(!duplicate_parser.parse(value,error) && error.find("duplicate") != std::string::npos,
+                   "PONNI JSON parser should reject duplicate object keys");
+    }
+
     // Verify Initializer_None performs no write.
     real1d unchanged("unchanged", 8);
     Kokkos::deep_copy(unchanged, 3.0f);
@@ -156,6 +219,24 @@ int main(int argc, char** argv) {
     require_true(nearly_equal(out_host(1, 0), 4.0f), "Model output(1,0) should be 4.0");
     require_true(!model.params.tmp1.is_allocated() && !model.params.tmp2.is_allocated(),
                  "A single fused dense block should write directly to output without scratch Views");
+
+    // The tuple-derived fingerprint binds template weights to this precise
+    // sequence of layer dimensions. Saving and loading use the same augmented
+    // Safetensors contract as generated models, without involving ONNX.
+    {
+      std::string const path = "core_template_weights.ponni";
+      std::string error;
+      require_true(model.save_weights(path,&error), "Template weight save failed: " + error);
+      real1d zero_parameters("zero_parameters", model.get_num_trainable_parameters());
+      Kokkos::deep_copy(zero_parameters,0.0f);
+      model.set_trainable_parameters(zero_parameters);
+      require_true(model.load_weights(path,&error), "Template weight load failed: " + error);
+      auto restored_output = ponni::create_host_copy(
+          model.forward_batch_parallel(ponni::create_device_copy(in_host)));
+      require_true(nearly_equal(restored_output(0,0),4.0f) && nearly_equal(restored_output(1,0),4.0f),
+                   "Template PONNI-file round trip did not restore learned parameters");
+      std::remove(path.c_str());
+    }
 
     // The default model starts without batch scratch, grows on demand, keeps
     // larger capacity for reuse, and permits an explicit exact shrink.
@@ -312,10 +393,10 @@ int main(int argc, char** argv) {
         typename std::tuple_element_t<0,decltype(host_model.params.layers)>::memory_space,
         HostMemorySpace>);
 
-    // LayoutLeft deliberately differs from the model's internal LayoutRight
-    // Views, proving that public inputs and outputs are generic accessible Views.
-    Kokkos::View<float**, Kokkos::LayoutLeft, HostMemorySpace> host_input("host_input", 2, 1);
-    Kokkos::View<float**, Kokkos::LayoutLeft, HostMemorySpace> host_output("host_output", 2, 1);
+    // Public Views retain the LayoutRight contract even when inference is
+    // rebound to a host execution and memory space.
+    Kokkos::View<float**, Kokkos::LayoutRight, HostMemorySpace> host_input("host_input", 2, 1);
+    Kokkos::View<float**, Kokkos::LayoutRight, HostMemorySpace> host_output("host_output", 2, 1);
     host_input(0,0) = 1.0f;
     host_input(1,0) = 2.0f;
     host_model.forward_batch_parallel(host_input, host_output);
@@ -380,14 +461,7 @@ int main(int argc, char** argv) {
       require_true(concat_layer.get_num_trainable_parameters() == 0 &&
                    !concat_layer.get_trainable_parameters().is_allocated(),
                    "Binop_Concatenate trainable API is incorrect");
-      auto concat_arr = concat_layer.to_array();
-      ConcatLayer concat_reload;
-      concat_reload.from_array(concat_arr);
-      require_true(concat_reload.params.after == false,
-           "Binop_Concatenate to_array/from_array should preserve after option");
-      concat_reload.validate(2);
-      require_true(concat_arr.extent(0) == concat_layer.get_array_representation_size(),
-                   "Binop_Concatenate serialized size is incorrect");
+      concat_layer.validate(2);
 
       real2d left_view("concat_left", 2, 1);
       real2d right_view("concat_right", 2, 1);
@@ -431,16 +505,10 @@ int main(int argc, char** argv) {
       require_true(save_layer.get_num_trainable_parameters() == 0 &&
                    !save_layer.get_trainable_parameters().is_allocated(),
                    "Save_State trainable API is incorrect");
-      auto save_arr = save_layer.to_array();
-      SaveLayer save_reload;
-      save_reload.from_array(save_arr);
-      save_reload.validate();
-      require_true(save_reload.get_num_inputs() == 3, "Save_State to_array/from_array roundtrip failed");
-      require_true(save_arr.extent(0) == save_layer.get_array_representation_size(),
-                   "Save_State serialized size is incorrect");
+      save_layer.validate();
     }
 
-    // Cover layer-level API options: trainable flags, to_array/from_array, and set/get trainable parameters.
+    // Cover layer-level API options, including trainable flags and parameter updates.
     {
       using real1d = Kokkos::View<float*, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
       using real2d = Kokkos::View<float**, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
@@ -469,14 +537,7 @@ int main(int argc, char** argv) {
       require_true(nearly_equal(mv_got(0), 10.0f) && nearly_equal(mv_got(5), 15.0f),
                    "Matvec set/get trainable parameters failed");
 
-      auto mv_arr = mv.to_array();
-      ponni::Matvec<float> mv_reload;
-      mv_reload.from_array(mv_arr);
-      mv_reload.validate();
-      require_true(mv_reload.get_num_inputs() == 2 && mv_reload.get_num_outputs() == 3,
-                   "Matvec to_array/from_array roundtrip failed");
-      require_true(mv_arr.extent(0) == mv.get_array_representation_size(),
-                   "Matvec serialized size is incorrect");
+      mv.validate();
 
       using StaticMatvec = ponni::Matvec<float,2,3>;
       StaticMatvec static_mv(mv_w, true);
@@ -518,13 +579,7 @@ int main(int argc, char** argv) {
       require_true(nearly_equal(b_got(0), -1.0f) && nearly_equal(b_got(2), -3.0f),
                    "Bias set/get trainable parameters failed");
 
-      auto bias_arr = bias.to_array();
-      ponni::Bias<float> bias_reload;
-      bias_reload.from_array(bias_arr);
-      bias_reload.validate();
-      require_true(bias_reload.get_num_inputs() == 3, "Bias to_array/from_array roundtrip failed");
-      require_true(bias_arr.extent(0) == bias.get_array_representation_size(),
-                   "Bias serialized size is incorrect");
+      bias.validate();
 
       using StaticBias = ponni::Bias<float,3>;
       StaticBias static_bias(b_w, true);
@@ -554,13 +609,7 @@ int main(int argc, char** argv) {
       require_true(add_layer.get_num_trainable_parameters() == 0 &&
                    !add_layer.get_trainable_parameters().is_allocated(),
                    "Binop_Add trainable API is incorrect");
-      auto add_arr = add_layer.to_array();
-      AddLayer add_reload;
-      add_reload.from_array(add_arr);
-      add_reload.validate(3);
-      require_true(add_reload.get_num_outputs() == 3, "Binop_Add to_array/from_array roundtrip failed");
-      require_true(add_arr.extent(0) == add_layer.get_array_representation_size(),
-                   "Binop_Add serialized size is incorrect");
+      add_layer.validate(3);
 
       using Proj = ponni::Binop_Projection_Add<0, float, 3, 2>;
       real2d proj_w_nt("proj_w_nt", 2, 3);
@@ -572,12 +621,7 @@ int main(int argc, char** argv) {
                    "Projection skip non-trainable option should disable trainable parameters");
       require_true(!proj_nt.get_trainable_parameters().is_allocated(),
                    "Projection skip non-trainable get_trainable_parameters should be empty");
-      auto proj_nt_arr = proj_nt.to_array();
-      Proj proj_nt_reload;
-      proj_nt_reload.from_array(proj_nt_arr);
-      proj_nt_reload.validate(2);
-      require_true(proj_nt_reload.get_num_trainable_parameters() == 0,
-                   "Projection skip to_array/from_array should preserve non-trainable option");
+      proj_nt.validate(2);
     }
 
     // Cover every activation's host API plus its SArray and default Kokkos memory-space compute paths.
@@ -600,18 +644,6 @@ int main(int argc, char** argv) {
         layer.set_trainable_parameters(no_parameters);
         require_true(!layer.get_trainable_parameters().is_allocated(),
                      name + " get_trainable_parameters should be empty");
-
-        auto data = layer.to_array();
-        require_true(data.extent(0) == layer.get_array_representation_size(),
-                     name + " serialized size is incorrect");
-        Layer reloaded;
-        reloaded.from_array(data);
-        reloaded.validate();
-        auto reloaded_data = reloaded.to_array();
-        require_true(reloaded_data.extent(0) == data.extent(0), name + " roundtrip size changed");
-        for (int i = 0; i < data.extent(0); i++) {
-          require_true(nearly_equal(reloaded_data(i), data(i)), name + " roundtrip data changed");
-        }
 
         ponni::SArray<float,3> input_s;
         ponni::SArray<float,3> output_s;
@@ -721,13 +753,7 @@ int main(int argc, char** argv) {
       require_true(nearly_equal(got_ln_params_h(0), 2.0f), "LayerNorm set/get trainable parameters failed");
       require_true(nearly_equal(got_ln_params_h(4), 0.5f), "LayerNorm set/get trainable parameters failed for beta");
 
-      auto ln_arr = ln.to_array();
-      ponni::LayerNorm<float> ln_reload;
-      ln_reload.from_array(ln_arr);
-      ln_reload.validate();
-      require_true(ln_reload.get_num_inputs() == 4, "LayerNorm to_array/from_array roundtrip failed");
-      require_true(ln_arr.extent(0) == ln.get_array_representation_size(),
-                   "LayerNorm serialized size is incorrect");
+      ln.validate();
 
       ponni::LayerNorm<float> initialized_ln(4);
       initialized_ln.validate();
@@ -744,7 +770,7 @@ int main(int argc, char** argv) {
                    "LayerNorm non-trainable get_trainable_parameters should be empty");
     }
 
-    // Cover MinMaxNorm forward path and serialization.
+    // Cover the MinMaxNorm forward paths.
     {
       using real2d = Kokkos::View<float**, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
       ponni::MinMaxNorm<float> mm(3, -1.0f, 1.0f);
@@ -782,16 +808,10 @@ int main(int argc, char** argv) {
       require_true(nearly_equal(mm_output_s(0), -1.0f) && nearly_equal(mm_output_s(2), 1.0f),
                    "MinMaxNorm SArray output is incorrect");
 
-      auto mm_arr = mm.to_array();
-      ponni::MinMaxNorm<float> mm_reload;
-      mm_reload.from_array(mm_arr);
-      mm_reload.validate();
-      require_true(mm_reload.get_num_inputs() == 3, "MinMaxNorm to_array/from_array roundtrip failed");
-      require_true(mm_arr.extent(0) == mm.get_array_representation_size(),
-                   "MinMaxNorm serialized size is incorrect");
+      mm.validate();
     }
 
-    // Cover projection skip layer including trainable parameters and serialization.
+    // Cover the projection skip layer, including trainable parameters.
     {
       using real1d = Kokkos::View<float*, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
       using real2d = Kokkos::View<float**, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
@@ -840,13 +860,7 @@ int main(int argc, char** argv) {
       require_true(proj_trainable.extent(0) == 9, "Projection skip trainable parameter count incorrect");
       proj.set_trainable_parameters(proj_trainable);
 
-      auto proj_arr = proj.to_array();
-      Proj proj_reload;
-      proj_reload.from_array(proj_arr);
-      proj_reload.validate(2);
-      require_true(proj_reload.get_num_outputs() == 3, "Projection skip to_array/from_array roundtrip failed");
-      require_true(proj_arr.extent(0) == proj.get_array_representation_size(),
-                   "Projection skip serialized size is incorrect");
+      proj.validate(2);
 
       Proj initialized_proj(3, 2, true, ponni::Initializer_Constant<float>(0.25f));
       initialized_proj.validate(2);
@@ -857,49 +871,155 @@ int main(int argc, char** argv) {
                    "Projection skip initializer constructor failed");
     }
 
-    // Cover advanced initializer suite with simple sanity checks.
+    // Exercise the initializer formulas on a large enough sample that the
+    // statistical checks are stable while remaining inexpensive on a GPU.
     {
-      using real2d = Kokkos::View<float**, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
-      real2d x("init_x", 8, 6);
+      using real2d = Kokkos::View<float**, Kokkos::LayoutRight,
+                                  typename Kokkos::DefaultExecutionSpace::memory_space>;
+      int constexpr fan_in = 512;
+      int constexpr fan_out = 384;
+      real2d values("initializer_values", fan_in, fan_out);
+      real2d repeated("initializer_repeated", fan_in, fan_out);
 
-      ponni::Initializer_Zeros<float>().fill(x);
-      auto x_h = ponni::create_host_copy(x);
-      require_true(nearly_equal(x_h(0,0), 0.0f), "Initializer_Zeros failed");
+      auto check_variance = [&](SampleStats const & stats, double expected, std::string const & name) {
+        double const relative_error = std::abs(stats.variance - expected) / expected;
+        require_true(relative_error < 0.05, name + " variance does not match its documented formula");
+      };
 
-      ponni::Initializer_Ones<float>().fill(x);
-      x_h = ponni::create_host_copy(x);
-      require_true(nearly_equal(x_h(0,0), 1.0f), "Initializer_Ones failed");
+      auto fill_twice = [&]<class Initializer>(Initializer const & initializer, std::string const & name) {
+        initializer.fill(values);
+        initializer.fill(repeated);
+        require_true(exactly_equal(values,repeated), name + " is not deterministic for a nonzero seed");
+        return sample_stats(values);
+      };
 
-      ponni::Initializer_Constant<float>(2.5f).fill(x);
-      x_h = ponni::create_host_copy(x);
-      require_true(nearly_equal(x_h(3,4), 2.5f), "Initializer_Constant failed");
+      ponni::Initializer_Zeros<float>().fill(values);
+      auto stats = sample_stats(values);
+      require_true(stats.minimum == 0.0 && stats.maximum == 0.0, "Initializer_Zeros failed");
 
-      ponni::Initializer_Random_Normal<float>(0.0f, 0.2f, 111).fill(x);
-      x_h = ponni::create_host_copy(x);
-      require_true(std::isfinite(x_h(2,2)), "Initializer_Random_Normal produced non-finite value");
+      ponni::Initializer_Ones<float>().fill(values);
+      stats = sample_stats(values);
+      require_true(stats.minimum == 1.0 && stats.maximum == 1.0, "Initializer_Ones failed");
 
-      ponni::Initializer_Truncated_Normal<float>(0.0f, 0.1f, 222).fill(x);
-      x_h = ponni::create_host_copy(x);
-      require_true(std::abs(x_h(1,1)) < 1.0f, "Initializer_Truncated_Normal produced outlier value");
+      ponni::Initializer_Constant<float>(2.5f).fill(values);
+      stats = sample_stats(values);
+      require_true(stats.minimum == 2.5 && stats.maximum == 2.5, "Initializer_Constant failed");
 
-      ponni::Initializer_Xavier_Uniform<float>(333).fill(x);
-      ponni::Initializer_Xavier_Normal<float>(444).fill(x);
-      ponni::Initializer_He_Uniform<float>(555).fill(x);
-      ponni::Initializer_He_Normal<float>(666).fill(x);
-      ponni::Initializer_Lecun_Uniform<float>(777).fill(x);
-      ponni::Initializer_Lecun_Normal<float>(888).fill(x);
-      ponni::Initializer_Random_Uniform<float>(-0.5f, 0.5f, 4321).fill(x);
-      x_h = ponni::create_host_copy(x);
-      require_true(std::isfinite(x_h(0,1)) && std::isfinite(x_h(7,5)), "Variance-scaled initializer produced non-finite value");
+      stats = fill_twice(ponni::Initializer_Random_Uniform<float>(-0.2f,0.3f,111), "Random uniform");
+      require_true(stats.minimum >= -0.2 && stats.maximum < 0.3,
+                   "Initializer_Random_Uniform violated its complete bounds");
+      require_true(std::abs(stats.mean - 0.05) < 0.005,
+                   "Initializer_Random_Uniform mean does not match its interval");
+      check_variance(stats, 0.5 * 0.5 / 12.0, "Initializer_Random_Uniform");
 
-      ponni::Initializer_Orthogonal<float>(1.0f, 999).fill(x);
-      x_h = ponni::create_host_copy(x);
-      require_true(std::isfinite(x_h(0,0)), "Initializer_Orthogonal produced non-finite value");
+      stats = fill_twice(ponni::Initializer_Random_Normal<float>(0.35f,0.4f,222), "Random normal");
+      require_true(std::abs(stats.mean - 0.35) < 0.01,
+                   "Initializer_Random_Normal mean does not match its parameter");
+      check_variance(stats, 0.4 * 0.4, "Initializer_Random_Normal");
+
+      stats = fill_twice(ponni::Initializer_Truncated_Normal<float>(-0.2f,0.3f,333), "Truncated normal");
+      require_true(stats.minimum >= -0.8 && stats.maximum <= 0.4,
+                   "Initializer_Truncated_Normal violated its two-sigma bounds");
+      require_true(std::abs(stats.mean + 0.2) < 0.01,
+                   "Initializer_Truncated_Normal mean does not match its parameter");
+      // A standard normal truncated symmetrically at two sigma has variance
+      // 1 - 4*phi(2)/(2*Phi(2)-1), approximately 0.7737413.
+      check_variance(stats, 0.3 * 0.3 * 0.7737413, "Initializer_Truncated_Normal");
+
+      double const xavier_variance = 2.0 / static_cast<double>(fan_in + fan_out);
+      double const he_variance = 2.0 / static_cast<double>(fan_in);
+      double const lecun_variance = 1.0 / static_cast<double>(fan_in);
+
+      stats = fill_twice(ponni::Initializer_Xavier_Uniform<float>(444), "Xavier uniform");
+      double const xavier_limit = std::sqrt(6.0 / static_cast<double>(fan_in + fan_out));
+      require_true(stats.minimum >= -xavier_limit && stats.maximum < xavier_limit,
+                   "Initializer_Xavier_Uniform violated its calculated bounds");
+      check_variance(stats, xavier_variance, "Initializer_Xavier_Uniform");
+
+      stats = fill_twice(ponni::Initializer_Xavier_Normal<float>(555), "Xavier normal");
+      check_variance(stats, xavier_variance, "Initializer_Xavier_Normal");
+
+      stats = fill_twice(ponni::Initializer_He_Uniform<float>(666), "He uniform");
+      double const he_limit = std::sqrt(6.0 / static_cast<double>(fan_in));
+      require_true(stats.minimum >= -he_limit && stats.maximum < he_limit,
+                   "Initializer_He_Uniform violated its calculated bounds");
+      check_variance(stats, he_variance, "Initializer_He_Uniform");
+
+      stats = fill_twice(ponni::Initializer_He_Normal<float>(777), "He normal");
+      check_variance(stats, he_variance, "Initializer_He_Normal");
+
+      stats = fill_twice(ponni::Initializer_Lecun_Uniform<float>(888), "Lecun uniform");
+      double const lecun_limit = std::sqrt(3.0 / static_cast<double>(fan_in));
+      require_true(stats.minimum >= -lecun_limit && stats.maximum < lecun_limit,
+                   "Initializer_Lecun_Uniform violated its calculated bounds");
+      check_variance(stats, lecun_variance, "Initializer_Lecun_Uniform");
+
+      stats = fill_twice(ponni::Initializer_Lecun_Normal<float>(999), "Lecun normal");
+      check_variance(stats, lecun_variance, "Initializer_Lecun_Normal");
+
+      // Zero-length Views are valid no-op targets for every initializer,
+      // including fan-based formulas that would otherwise divide by zero.
+      real2d empty("initializer_empty", 0, fan_out);
+      ponni::Initializer_None<float>().fill(empty);
+      ponni::Initializer_Zeros<float>().fill(empty);
+      ponni::Initializer_Ones<float>().fill(empty);
+      ponni::Initializer_Constant<float>(2.5f).fill(empty);
+      ponni::Initializer_Random_Uniform<float>(-1.0f,1.0f,1).fill(empty);
+      ponni::Initializer_Random_Normal<float>(0.0f,1.0f,2).fill(empty);
+      ponni::Initializer_Truncated_Normal<float>(0.0f,1.0f,3).fill(empty);
+      ponni::Initializer_Xavier_Uniform<float>(4).fill(empty);
+      ponni::Initializer_Xavier_Normal<float>(5).fill(empty);
+      ponni::Initializer_He_Uniform<float>(6).fill(empty);
+      ponni::Initializer_He_Normal<float>(7).fill(empty);
+      ponni::Initializer_Lecun_Uniform<float>(8).fill(empty);
+      ponni::Initializer_Lecun_Normal<float>(9).fill(empty);
+      ponni::Initializer_Orthogonal<float>(1.0f,10).fill(empty);
+      require_true(empty.size() == 0, "Initializers changed a zero-sized View");
+
+      // Degenerate, but valid, distributions should fill their exact value.
+      ponni::Initializer_Random_Uniform<float>(0.75f,0.75f,11).fill(values);
+      stats = sample_stats(values);
+      require_true(stats.minimum == 0.75 && stats.maximum == 0.75,
+                   "Equal Random_Uniform bounds should produce a constant");
+      ponni::Initializer_Random_Normal<float>(-0.5f,0.0f,12).fill(values);
+      stats = sample_stats(values);
+      require_true(stats.minimum == -0.5 && stats.maximum == -0.5,
+                   "Zero Random_Normal deviation should produce its mean");
+      ponni::Initializer_Truncated_Normal<float>(0.25f,0.0f,13).fill(values);
+      stats = sample_stats(values);
+      require_true(stats.minimum == 0.25 && stats.maximum == 0.25,
+                   "Zero Truncated_Normal deviation should produce its mean");
+
+      float const infinity = std::numeric_limits<float>::infinity();
+      float const nan = std::numeric_limits<float>::quiet_NaN();
+      require_true(throws_invalid_argument([] { ponni::Initializer_Random_Uniform<float>(1.0f,-1.0f,1); }),
+                   "Random_Uniform should reject reversed bounds");
+      require_true(throws_invalid_argument([&] { ponni::Initializer_Random_Uniform<float>(nan,1.0f,1); }),
+                   "Random_Uniform should reject a non-finite lower bound");
+      require_true(throws_invalid_argument([&] { ponni::Initializer_Random_Uniform<float>(0.0f,infinity,1); }),
+                   "Random_Uniform should reject a non-finite upper bound");
+      require_true(throws_invalid_argument([] { ponni::Initializer_Random_Normal<float>(0.0f,-1.0f,1); }),
+                   "Random_Normal should reject a negative standard deviation");
+      require_true(throws_invalid_argument([&] { ponni::Initializer_Random_Normal<float>(nan,1.0f,1); }),
+                   "Random_Normal should reject a non-finite mean");
+      require_true(throws_invalid_argument([&] { ponni::Initializer_Random_Normal<float>(0.0f,infinity,1); }),
+                   "Random_Normal should reject a non-finite standard deviation");
+      require_true(throws_invalid_argument([] { ponni::Initializer_Truncated_Normal<float>(0.0f,-1.0f,1); }),
+                   "Truncated_Normal should reject a negative standard deviation");
+      require_true(throws_invalid_argument([&] { ponni::Initializer_Truncated_Normal<float>(nan,1.0f,1); }),
+                   "Truncated_Normal should reject a non-finite mean");
+      require_true(throws_invalid_argument([&] { ponni::Initializer_Truncated_Normal<float>(0.0f,infinity,1); }),
+                   "Truncated_Normal should reject a non-finite standard deviation");
+      require_true(throws_invalid_argument([&] { ponni::Initializer_Orthogonal<float>(infinity,1); }),
+                   "Orthogonal should reject a non-finite gain");
+      require_true(throws_invalid_argument([&] { ponni::Initializer_Orthogonal<float>(nan,1); }),
+                   "Orthogonal should reject a NaN gain");
     }
 
     // Exercise both lanes and the packed multiply-add on the active device backend.
     {
-      Kokkos::View<float*,typename Kokkos::DefaultExecutionSpace::memory_space> result("two_half_result", 16);
+      Kokkos::View<float*,Kokkos::LayoutRight,typename Kokkos::DefaultExecutionSpace::memory_space>
+          result("two_half_result", 16);
       Kokkos::parallel_for(PONNI_AUTO_LABEL(), 1, KOKKOS_LAMBDA(int) {
         ponni::TwoHalf const left = ponni::TwoHalf::from_floats(2.0f, -3.0f);
         ponni::TwoHalf const right = ponni::TwoHalf::from_floats(4.0f, 5.0f);

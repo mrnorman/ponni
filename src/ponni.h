@@ -46,5 +46,6 @@ namespace ponni {
 #include "layers/ponni_Binop_Add.h"
 #include "layers/ponni_Binop_Concatenate.h"
 #include "layers/ponni_Binop_Projection_Add.h"
+#include "utils/ponni_safetensors.h"
 #include "ponni_Inference.h"
 #include "ponni_create_model.h"

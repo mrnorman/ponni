@@ -19,10 +19,12 @@ PONNI supports two complementary workflows:
    This is the simplest option when the architecture is naturally expressed in C++ or the application already owns
    the weights.
 2. **Ahead-of-time generator mode:** export a model to ONNX, then generate a specialized Kokkos model struct and a
-   versioned weight blob. This supports a broader graph of dense, residual, branched, normalization, reduction,
+   validated PONNI Safetensors file. This supports a broader graph of dense, residual, branched, normalization, reduction,
    activation, and elementwise operations.
 
-Both modes use feature-major arrays: the first dimension is the feature index and the second is the batch index.
+Both modes use nonempty, feature-major arrays: the first dimension is the feature index and the second is the batch
+index. Every View passed to PONNI must declare `Kokkos::LayoutRight`. `LayoutLeft` and `LayoutStride` are rejected at
+compile time; applications must copy data into a `LayoutRight` View before inference.
 
 ## Mode 1: construct a model with C++ templates
 
@@ -34,6 +36,7 @@ network and evaluates a large batch with one Kokkos iteration per sample.
 #include "ponni.h"
 
 #include <iostream>
+#include <stdexcept>
 
 int main(int argc, char ** argv) {
   Kokkos::initialize(argc, argv);
@@ -78,8 +81,19 @@ int main(int argc, char ** argv) {
 ```
 
 Template mode also provides layers for residual and concatenation graphs, normalization, and common activation
-functions. Layer parameters can be serialized, restored, and updated through the model API. PONNI has no custom
-allocator or pool lifecycle; model-owned parameters, saved states, and temporary Views use ordinary Kokkos memory.
+functions. Layer parameters can be serialized, restored, and updated through the model API. `save_weights()` writes
+one flattened `parameters` tensor and `load_weights()` requires the exact tuple-derived layer fingerprint, dtype, and
+parameter count before modifying the model:
+
+```cpp
+std::string error;
+if (!model.save_weights("template_model.ponni", &error)) throw std::runtime_error(error);
+if (!model.load_weights("template_model.ponni", &error)) throw std::runtime_error(error);
+```
+
+This template file contract intentionally validates the explicit C++ layer tuple; ONNX compatibility is validated
+only by the generator workflow. Model-owned parameters, saved states, and temporary Views use the model's selected
+Kokkos memory space.
 
 To select a different execution instance and accessible memory space, pass them before the layers. The factory
 rebinds every layer and its parameters, so the policy is specified once:
@@ -102,6 +116,15 @@ instance, preserving custom streams, and launches its `RangePolicy` on that inst
 only when a larger batch arrives; `reallocate_internal_state(batch_size)` performs an exact resize when an application
 wants to shrink retained capacity or prepare the View-based intra-kernel path.
 
+A custom layer that participates in factory rebinding must provide both
+`rebind_memory_space<NewMemorySpace>` and `copy_to_memory_space(NewMemorySpace const&)`. The copy operation returns the
+rebound layer, preserves scalar configuration, and copies every layer-owned View with
+`ponni::create_memory_space_copy`. This is a direct layer copy; weight persistence is handled separately by the
+validated `.ponni` APIs.
+
+Inference requires `batch_size > 0`. Passing a zero-column input is an error. A zero value remains valid for
+`reallocate_internal_state(0)`, which explicitly releases retained internal storage without launching inference.
+
 ## Mode 2: generate a specialized Kokkos model from ONNX
 
 Install the generator from the repository root, validate the ONNX contract, and generate the C++ model:
@@ -119,12 +142,15 @@ python -m kokkos_nn compile model.onnx \
 The output directory contains:
 
 - `MyModel.hpp`: the specialized Kokkos model class;
-- `weights.bin`: learned parameters with version, size, scalar-type, and checksum metadata;
+- `weights.ponni`: named Safetensors plus PONNI graph/schema fingerprints and a payload checksum;
 - `weights.json`: a readable parameter manifest;
 - `canonical_ir.json`: the optimized compiler graph;
 - `optimization_report.json`: passes, fusions, storage, scheduling decisions, and verification results.
 
 Generated C++ depends only on PONNI and Kokkos. Python, ONNX, and the source framework are build-time tools.
+The C++ loader uses PONNI's dependency-free JSON reader, checks every expected tensor name/dtype/shape and byte range,
+requires the exact generated-graph fingerprint, and verifies the payload checksum before copying parameters to the
+selected Kokkos memory space. Standard Safetensors tools can inspect the same `.ponni` file.
 
 ### Use the generated model inside an existing kernel
 
@@ -143,7 +169,7 @@ int constexpr batch_size = 1000000;
 
 Model model;
 std::string error;
-if (!model.load_weights("generated/weights.bin", &error)) {
+if (!model.load_weights("generated/weights.ponni", &error)) {
   throw std::runtime_error(error);
 }
 
@@ -193,7 +219,7 @@ int constexpr batch_size = 1000000;
 
 Model model;
 std::string error;
-if (!model.load_weights("generated/weights.bin", &error)) {
+if (!model.load_weights("generated/weights.ponni", &error)) {
   throw std::runtime_error(error);
 }
 

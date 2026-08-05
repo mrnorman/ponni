@@ -3,25 +3,23 @@
 namespace ponni {
 namespace detail {
 
-  // Convert a layer descriptor to the model-selected memory space. Stateless
-  // layers serialize only their configuration; parameterized layers copy their
-  // parameter values through the existing host representation.
+  // Convert a layer descriptor to the model-selected memory space. A layer in
+  // another space performs its explicit semantic copy; no file or flattened
+  // representation is involved in model construction.
   template <class MemorySpace, class Layer>
-  inline auto rebind_layer_memory_space(Layer const & layer) {
+  inline auto rebind_layer_memory_space(Layer const & layer, MemorySpace const & memory_space) {
     using ReboundLayer = typename Layer::template rebind_memory_space<MemorySpace>;
     if constexpr (std::is_same_v<typename Layer::memory_space,MemorySpace>) {
       return ReboundLayer(layer);
     } else {
-      ReboundLayer rebound;
-      rebound.from_array(layer.to_array());
-      return rebound;
+      return layer.template copy_to_memory_space<MemorySpace>(memory_space);
     }
   }
 
 
   template <class Real, class ExecutionSpace, class MemorySpace, class... Layers>
   inline auto create_model(ExecutionSpace const & execution_space,
-                           MemorySpace const &,
+                           MemorySpace const & memory_space,
                            Layers const &... layers) {
     static_assert(Kokkos::is_execution_space_v<ExecutionSpace>,
                   "create_inference_model requires a Kokkos execution space");
@@ -30,7 +28,7 @@ namespace detail {
     static_assert(Kokkos::SpaceAccessibility<ExecutionSpace,MemorySpace>::accessible,
                   "create_inference_model execution space cannot access its memory space");
 
-    auto rebound_layers = std::make_tuple(rebind_layer_memory_space<MemorySpace>(layers)...);
+    auto rebound_layers = std::make_tuple(rebind_layer_memory_space<MemorySpace>(layers, memory_space)...);
     using LayerTuple = decltype(rebound_layers);
     return Inference<LayerTuple,Real,ExecutionSpace,MemorySpace>(rebound_layers, execution_space);
   }

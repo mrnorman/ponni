@@ -1,6 +1,5 @@
 
 #include "ponni.h"
-#include "ponni_load_h5_weights.h"
 
 int main( int argc , char **argv ) {
   Kokkos::initialize( argc , argv );
@@ -13,24 +12,26 @@ int main( int argc , char **argv ) {
     using ponni::Binop_Add;
 
     if (argc == 1) {
-      std::cerr << "Usage: " << argv[0] << " <weights.h5>" << std::endl;
+      std::cerr << "Usage: " << argv[0] << " <weights.ponni>" << std::endl;
       return -1;
     }
 
     std::string fname = argv[1];
+    ponni::PonniFile file;
+    std::string error;
+    if (!file.load(fname,&error)) throw std::runtime_error(error);
 
     // Create layers & load weights
-    bool transpose = true;
-    ponni::Matvec<float> matvec_1( ponni::load_h5_weights<2>( fname , "/" , "0.0.0.0.1.weight"            , transpose ) );
-    ponni::Bias  <float> bias_1  ( ponni::load_h5_weights<1>( fname , "/" , "0.0.0.0.1.bias"              , transpose ) );
-    ponni::Matvec<float> matvec_2( ponni::load_h5_weights<2>( fname , "/" , "0.0.0.2.sequential.0.weight" , transpose ) );
-    ponni::Bias  <float> bias_2  ( ponni::load_h5_weights<1>( fname , "/" , "0.0.0.2.sequential.0.bias"   , transpose ) );
-    ponni::Matvec<float> matvec_3( ponni::load_h5_weights<2>( fname , "/" , "0.0.2.sequential.0.weight"   , transpose ) );
-    ponni::Bias  <float> bias_3  ( ponni::load_h5_weights<1>( fname , "/" , "0.0.2.sequential.0.bias"     , transpose ) );
-    ponni::Matvec<float> matvec_4( ponni::load_h5_weights<2>( fname , "/" , "0.2.sequential.0.weight"     , transpose ) );
-    ponni::Bias  <float> bias_4  ( ponni::load_h5_weights<1>( fname , "/" , "0.2.sequential.0.bias"       , transpose ) );
-    ponni::Matvec<float> matvec_5( ponni::load_h5_weights<2>( fname , "/" , "2.weight"                    , transpose ) );
-    ponni::Bias  <float> bias_5  ( ponni::load_h5_weights<1>( fname , "/" , "2.bias"                      , transpose ) );
+    ponni::Matvec<float> matvec_1(ponni::load_ponni_tensor<2>(file,"fc1.weight"));
+    ponni::Bias  <float> bias_1  (ponni::load_ponni_tensor<1>(file,"fc1.bias"));
+    ponni::Matvec<float> matvec_2(ponni::load_ponni_tensor<2>(file,"fc2.weight"));
+    ponni::Bias  <float> bias_2  (ponni::load_ponni_tensor<1>(file,"fc2.bias"));
+    ponni::Matvec<float> matvec_3(ponni::load_ponni_tensor<2>(file,"fc3.weight"));
+    ponni::Bias  <float> bias_3  (ponni::load_ponni_tensor<1>(file,"fc3.bias"));
+    ponni::Matvec<float> matvec_4(ponni::load_ponni_tensor<2>(file,"fc4.weight"));
+    ponni::Bias  <float> bias_4  (ponni::load_ponni_tensor<1>(file,"fc4.bias"));
+    ponni::Matvec<float> matvec_5(ponni::load_ponni_tensor<2>(file,"fc5.weight"));
+    ponni::Bias  <float> bias_5  (ponni::load_ponni_tensor<1>(file,"fc5.bias"));
 
     // Create an inference model to perform batched forward predictions
     auto inference = create_inference_model( matvec_1                       ,
@@ -57,8 +58,8 @@ int main( int argc , char **argv ) {
     inference.validate();
     inference.print();
 
-    auto inputs   = ponni::load_h5_weights<2>( fname , "/test" , "input"  );
-    auto expected = ponni::load_h5_weights<2>( fname , "/test" , "output" );
+    auto inputs   = ponni::load_ponni_tensor<2>(file,"test.input");
+    auto expected = ponni::load_ponni_tensor<2>(file,"test.output");
     auto outputs  = inference.forward_batch_parallel( inputs );
 
     auto out_host = ponni::create_host_copy(outputs);

@@ -9,8 +9,6 @@ namespace ponni {
   struct LayerNorm {
     using memory_space = MemorySpace;
     template <class NewMemorySpace> using rebind_memory_space = LayerNorm<real,N,NewMemorySpace>;
-    typedef Kokkos::View<double * ,Kokkos::LayoutRight,Kokkos::HostSpace > doubleHost1d;
-    typedef Kokkos::View<real   * ,Kokkos::LayoutRight,Kokkos::HostSpace > realHost1d;
     typedef Kokkos::View<real   * ,Kokkos::LayoutRight,MemorySpace> real1d;
     typedef Kokkos::View<real   **,Kokkos::LayoutRight,MemorySpace> real2d;
 
@@ -59,19 +57,28 @@ namespace ponni {
       params.trainable = trainable;
     }
 
+    // Rebinding copies all owned parameter Views and preserves scalar
+    // configuration. This is the extension contract for custom layers too.
+    template <class NewMemorySpace>
+    auto copy_to_memory_space(NewMemorySpace const & memory_space = NewMemorySpace()) const {
+      return rebind_memory_space<NewMemorySpace>(
+          ponni::create_memory_space_copy(params.gamma, memory_space),
+          ponni::create_memory_space_copy(params.beta, memory_space), params.epsilon, params.trainable);
+    }
+
     char const * get_label() const { return "LayerNorm"; }
     KOKKOS_INLINE_FUNCTION static int get_num_inputs(Params const & params_in) { return params_in.gamma.extent(0); }
     KOKKOS_INLINE_FUNCTION static int get_num_outputs(Params const & params_in) { return params_in.gamma.extent(0); }
     int get_num_inputs() const { return params.gamma.extent(0); }
     int get_num_outputs() const { return params.gamma.extent(0); }
     int get_num_trainable_parameters() const { return params.trainable ? 2 * params.gamma.size() : 0; }
-    int get_array_representation_size() const { return 3 + 2 * params.gamma.size(); }
 
     template <class InputView, class OutputView>
     KOKKOS_INLINE_FUNCTION static void compute_all_outputs(InputView const & input,
                                                            OutputView const & output,
                                                            int ibatch,
                                                            Params const & params_in) {
+      ponni::require_layout_right_views<InputView,OutputView>();
       int n = get_num_outputs(params_in);
       real mean = static_cast<real>(0);
       for (int i = 0; i < n; i++) mean += input(i,ibatch);
@@ -129,31 +136,6 @@ namespace ponni {
       Kokkos::deep_copy(Kokkos::subview(out, std::pair<int,int>(0, n)), params.gamma);
       Kokkos::deep_copy(Kokkos::subview(out, std::pair<int,int>(n, 2 * n)), params.beta);
       return out;
-    }
-
-    doubleHost1d to_array() const {
-      doubleHost1d data("LayerNorm_array", get_array_representation_size());
-      int n = params.gamma.extent(0);
-      data(0) = n;
-      data(1) = params.trainable ? 1 : 0;
-      data(2) = params.epsilon;
-      auto gamma_h = ponni::create_host_copy(params.gamma);
-      auto beta_h = ponni::create_host_copy(params.beta);
-      for (int i = 0; i < n; i++) data(3 + i) = gamma_h(i);
-      for (int i = 0; i < n; i++) data(3 + n + i) = beta_h(i);
-      return data;
-    }
-
-    void from_array(doubleHost1d const & data) {
-      int n = static_cast<int>(data(0));
-      bool trainable = data(1) == 1;
-      real eps = static_cast<real>(data(2));
-      realHost1d gamma_h("LayerNorm_gamma_h", n);
-      realHost1d beta_h("LayerNorm_beta_h", n);
-      for (int i = 0; i < n; i++) gamma_h(i) = static_cast<real>(data(3 + i));
-      for (int i = 0; i < n; i++) beta_h(i) = static_cast<real>(data(3 + n + i));
-      init(ponni::create_memory_space_copy(gamma_h, MemorySpace()),
-           ponni::create_memory_space_copy(beta_h, MemorySpace()), eps, trainable);
     }
 
     void validate() const {

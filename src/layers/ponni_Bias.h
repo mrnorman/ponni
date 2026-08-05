@@ -9,8 +9,6 @@ namespace ponni {
   struct Bias {
     using memory_space = MemorySpace;
     template <class NewMemorySpace> using rebind_memory_space = Bias<real,N,NewMemorySpace>;
-    typedef Kokkos::View<double * ,Kokkos::LayoutRight,Kokkos::HostSpace > doubleHost1d;
-    typedef Kokkos::View<real   * ,Kokkos::LayoutRight,Kokkos::HostSpace > realHost1d;
     typedef Kokkos::View<real   * ,Kokkos::LayoutRight,MemorySpace> real1d;
     typedef Kokkos::View<real   **,Kokkos::LayoutRight,MemorySpace> real2d;
     
@@ -49,13 +47,21 @@ namespace ponni {
       params.trainable = trainable;
     }
 
+    // Factory rebinding is an explicit semantic copy, not serialization.
+    // Custom layers owning Views should provide the same operation and copy
+    // each View into the requested memory space.
+    template <class NewMemorySpace>
+    auto copy_to_memory_space(NewMemorySpace const & memory_space = NewMemorySpace()) const {
+      return rebind_memory_space<NewMemorySpace>(
+          ponni::create_memory_space_copy(params.weights, memory_space), params.trainable);
+    }
+
     char const * get_label() const { return "Bias"; }
     KOKKOS_INLINE_FUNCTION static int get_num_inputs (Params const &params_in) { return params_in.weights.extent(0); }
     KOKKOS_INLINE_FUNCTION static int get_num_outputs(Params const &params_in) { return params_in.weights.extent(0); }
     int get_num_inputs               () const { return params.weights.extent(0); }
     int get_num_outputs              () const { return params.weights.extent(0); }
     int get_num_trainable_parameters () const { return params.trainable ? params.weights.size() : 0; }
-    int get_array_representation_size() const { return params.weights.size() + 2; }
 
     KOKKOS_INLINE_FUNCTION static real apply_fused(real value, int feature, Params const & params_in) {
       return value + params_in.weights(feature);
@@ -66,6 +72,7 @@ namespace ponni {
                                                             OutputView const & output    ,
                                                             int            ibatch    ,
                                                             Params const & params_in ) {
+      ponni::require_layout_right_views<InputView,OutputView>();
       int num_outputs = get_num_outputs(params_in);
       for (int irow = 0; irow < num_outputs; irow++) {
         output(irow,ibatch) = apply_fused(input(irow,ibatch), irow, params_in);
@@ -89,23 +96,6 @@ namespace ponni {
     real1d get_trainable_parameters() const {
       if (params.trainable) return params.weights;
       return real1d();
-    }
-
-    doubleHost1d to_array() const {
-      doubleHost1d data("Bias_weights",get_array_representation_size());
-      data(0) = get_num_inputs   ();
-      data(1) = params.trainable ? 1 : 0;
-      auto weights = ponni::flatten(ponni::create_host_copy(params.weights));
-      for (int i=0; i < weights.size(); i++) { data(2+i) = weights(i); }
-      return data;
-    }
-
-    void from_array(doubleHost1d const & data) {
-      int  num_inputs    = data(0);
-      bool trainable     = data(1) == 1;
-      realHost1d weights("Bias_weights",num_inputs);
-      for (int i=0; i < num_inputs; i++) { weights(i) = data(2+i); }
-      init( ponni::create_memory_space_copy(weights, MemorySpace()) , trainable );
     }
 
     void validate() const {

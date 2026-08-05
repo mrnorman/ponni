@@ -7,6 +7,7 @@ Mode-specific accessors keep their storage differences explicit.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 
@@ -14,6 +15,7 @@ from .errors import CompilerError
 from .ir import DType, Graph, Node
 from .planner import StoragePlan
 from .scheduler import DenseChainSchedule
+from .weights import graph_fingerprint
 
 
 def _identifier(value: str) -> str:
@@ -1432,6 +1434,19 @@ class CppEmitter:
             if tensor.is_constant and tensor.constant_name is not None and
             self.graph.constants[tensor.constant_name].learned
         ]
+        stored_dtype = "F32" if payload_scalar_code == 1 else "F64"
+        weight_spec_lines = []
+        for tensor in sorted(
+            (value for value in self.graph.tensors.values() if value.is_constant),
+            key=lambda value: value.name,
+        ):
+            constant = self.graph.constants[tensor.constant_name]
+            shape = ",".join(str(int(dimension)) for dimension in constant.values.shape)
+            weight_spec_lines.append(
+                f"      {{{json.dumps(tensor.name)},\"{stored_dtype}\",{{{shape}}},{self.weight_offsets[tensor.id]}}},"
+            )
+        weight_specs = "\n".join(weight_spec_lines)
+        model_fingerprint = graph_fingerprint(self.graph)
         learned_ranges: list[tuple[int, int, int]] = []
         learned_offset = 0
         for tensor in learned_tensors:
@@ -1603,6 +1618,15 @@ public:
 private:
   ParameterView parameters_;
   HalfParameterView half_parameters_;
+  bool weights_loaded_ = storage_parameter_elements == 0;
+
+  static std::vector<ponni::PonniTensorSpec> weight_specs() {{
+    return {{
+{weight_specs}
+    }};
+  }}
+
+  static std::string model_fingerprint() {{ return {json.dumps(model_fingerprint)}; }}
 
   KOKKOS_INLINE_FUNCTION
   static int parameter_storage_index(int index) {{
@@ -1690,70 +1714,40 @@ private:
     return value * Kokkos::tanh(apply_softplus(value));
   }}
 
-  static std::uint64_t checksum(unsigned char const * data, std::size_t size) {{
-    std::uint64_t value = UINT64_C(14695981039346656037);
-    for (std::size_t i = 0; i < size; i++) {{
-      value ^= data[i];
-      value *= UINT64_C(1099511628211);
-    }}
-    return value;
-  }}
-
 public:
   {self.model_name}() = default;
 
   static constexpr int get_num_parameters() {{ return learned_parameter_elements; }}
 
-  bool weights_loaded() const {{ return parameters_.is_allocated() && half_parameters_.is_allocated(); }}
+  bool weights_loaded() const {{ return weights_loaded_; }}
 
   bool load_weights(std::string const & path, std::string * error = nullptr) {{
-    auto fail = [&](std::string const & message) {{
-      if (error != nullptr) *error = message;
-      return false;
-    }};
-    std::ifstream stream(path, std::ios::binary | std::ios::ate);
-    if (!stream) return fail(\"cannot open weight file: \" + path);
-    std::streamsize const file_size = stream.tellg();
-    if (file_size < 0) return fail(\"cannot determine weight-file size: \" + path);
-    stream.seekg(0, std::ios::beg);
-    std::vector<unsigned char> bytes(static_cast<std::size_t>(file_size));
-    if (!stream.read(reinterpret_cast<char *>(bytes.data()), file_size)) return fail(\"cannot read weight file: \" + path);
-    int constexpr header_size = 32;
-    if (bytes.size() < header_size) return fail(\"weight file is shorter than its header\");
-    unsigned char const expected_magic[8] = {{'P', 'N', 'N', 'W', 'G', 'T', '1', 0}};
-    if (std::memcmp(bytes.data(), expected_magic, 8) != 0) return fail(\"invalid weight-file magic\");
-    std::uint16_t const endian_probe = 1;
-    if (*reinterpret_cast<unsigned char const *>(&endian_probe) != 1) return fail(\"little-endian host required\");
-    std::uint32_t version = 0;
-    std::uint32_t scalar_code = 0;
-    std::uint64_t payload_bytes = 0;
-    std::uint64_t expected_checksum = 0;
-    std::memcpy(&version, bytes.data() + 8, sizeof(version));
-    std::memcpy(&scalar_code, bytes.data() + 12, sizeof(scalar_code));
-    std::memcpy(&payload_bytes, bytes.data() + 16, sizeof(payload_bytes));
-    std::memcpy(&expected_checksum, bytes.data() + 24, sizeof(expected_checksum));
-    if (version != 1) return fail(\"unsupported weight-file version\");
-    if (scalar_code != {payload_scalar_code}) return fail(\"weight-file scalar metadata does not match generated model\");
-    if (bytes.size() != header_size + payload_bytes) return fail(\"weight-file payload size mismatch\");
-    unsigned char const * payload = bytes.data() + header_size;
-    if (checksum(payload, payload_bytes) != expected_checksum) return fail(\"weight-file checksum mismatch\");
-    if (payload_bytes != static_cast<std::uint64_t>(storage_parameter_elements) * stored_scalar_bytes) {{
-      return fail(\"weight-file element count does not match generated model\");
-    }}
+    ponni::PonniFile file;
+    if (!file.load(path,error)) return false;
+    auto const specs = weight_specs();
+    if (!file.validate(specs,model_fingerprint(),error)) return false;
     Kokkos::View<Scalar*,Kokkos::LayoutRight,Kokkos::HostSpace>
-        host_parameters(\"generated_parameters_host\", storage_parameter_elements);
+        host_parameters(\"generated_parameters_host\",storage_parameter_elements);
     Kokkos::View<Kokkos::Experimental::half_t*,Kokkos::LayoutRight,Kokkos::HostSpace>
-        host_half_parameters(\"generated_half_parameters_host\", storage_parameter_elements);
-    for (int i = 0; i < storage_parameter_elements; i++) {{
-      {'float' if payload_scalar_code == 1 else 'double'} stored_value;
-      std::memcpy(&stored_value, payload + static_cast<std::size_t>(i) * stored_scalar_bytes, stored_scalar_bytes);
-      host_parameters(i) = static_cast<Scalar>(stored_value);
-      host_half_parameters(i) = Kokkos::Experimental::cast_to_half(static_cast<float>(stored_value));
+        host_half_parameters(\"generated_half_parameters_host\",storage_parameter_elements);
+    for (auto const & spec : specs) {{
+      auto const * tensor = file.find(spec.name);
+      std::size_t elements = 1;
+      for (std::size_t dimension : spec.shape) elements *= dimension;
+      unsigned char const * bytes = file.tensor_data(*tensor);
+      for (std::size_t i = 0; i < elements; i++) {{
+        auto const stored_value = ponni::detail::read_scalar<{'float' if payload_scalar_code == 1 else 'double'}>(
+            bytes + i * stored_scalar_bytes);
+        std::size_t const target = spec.source_element_offset + i;
+        host_parameters(target) = static_cast<Scalar>(stored_value);
+        host_half_parameters(target) = Kokkos::Experimental::cast_to_half(static_cast<float>(stored_value));
+      }}
     }}
     parameters_ = ParameterView(\"generated_parameters\", storage_parameter_elements);
     half_parameters_ = HalfParameterView(\"generated_half_parameters\", storage_parameter_elements);
     Kokkos::deep_copy(parameters_, host_parameters);
     Kokkos::deep_copy(half_parameters_, host_half_parameters);
+    weights_loaded_ = true;
     return true;
   }}
 
@@ -1764,30 +1758,11 @@ public:
     }};
     if (!weights_loaded()) return fail("generated model parameters are not loaded");
     auto const host_parameters = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), parameters_);
-    int constexpr header_size = 32;
-    std::uint64_t const payload_bytes =
-        static_cast<std::uint64_t>(storage_parameter_elements) * stored_scalar_bytes;
-    std::vector<unsigned char> bytes(header_size + static_cast<std::size_t>(payload_bytes));
-    unsigned char const magic[8] = {{'P', 'N', 'N', 'W', 'G', 'T', '1', 0}};
-    std::memcpy(bytes.data(), magic, sizeof(magic));
-    std::uint32_t const version = 1;
-    std::uint32_t const scalar_code = stored_scalar_code;
-    std::memcpy(bytes.data() + 8, &version, sizeof(version));
-    std::memcpy(bytes.data() + 12, &scalar_code, sizeof(scalar_code));
-    std::memcpy(bytes.data() + 16, &payload_bytes, sizeof(payload_bytes));
+    std::vector<{'float' if payload_scalar_code == 1 else 'double'}> stored(storage_parameter_elements);
     for (int i = 0; i < storage_parameter_elements; i++) {{
-      {'float' if payload_scalar_code == 1 else 'double'} const stored_value =
-          static_cast<{'float' if payload_scalar_code == 1 else 'double'}>(host_parameters(i));
-      std::memcpy(bytes.data() + header_size + static_cast<std::size_t>(i) * stored_scalar_bytes,
-                  &stored_value, stored_scalar_bytes);
+      stored[i] = static_cast<{'float' if payload_scalar_code == 1 else 'double'}>(host_parameters(i));
     }}
-    std::uint64_t const payload_checksum = checksum(bytes.data() + header_size, payload_bytes);
-    std::memcpy(bytes.data() + 24, &payload_checksum, sizeof(payload_checksum));
-    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
-    if (!stream) return fail("cannot open parameter file for writing: " + path);
-    stream.write(reinterpret_cast<char const *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-    if (!stream) return fail("cannot write parameter file: " + path);
-    return true;
+    return ponni::write_ponni_file(path,weight_specs(),model_fingerprint(),stored.data(),error,"generated");
   }}
 
   template <class RefreshExecutionSpace = execution_space>
@@ -1796,7 +1771,7 @@ public:
                   "refresh_half_parameters requires a Kokkos execution space");
     static_assert(Kokkos::SpaceAccessibility<RefreshExecutionSpace,MemorySpace>::accessible,
                   "refresh_half_parameters execution space cannot access the model parameter memory space");
-    if (!parameters_.is_allocated() || !half_parameters_.is_allocated()) {{
+    if (!weights_loaded()) {{
       Kokkos::abort("GeneratedModel::refresh_half_parameters called before load_weights");
     }}
     ParameterView const parameters = parameters_;
@@ -1813,6 +1788,8 @@ public:
   void get_parameters(ParameterViewType const & destination) const {{
     static_assert(Kokkos::is_view_v<ParameterViewType>, "get_parameters requires a Kokkos::View");
     static_assert(ParameterViewType::rank == 1, "get_parameters requires a rank-one Kokkos::View");
+    static_assert(ponni::is_layout_right_view_v<ParameterViewType>,
+                  "GeneratedModel parameter Views must use Kokkos::LayoutRight");
     using ParameterScalar = typename ParameterViewType::non_const_value_type;
     using DestinationMemorySpace = typename ParameterViewType::memory_space;
     using DestinationExecutionSpace = typename DestinationMemorySpace::execution_space;
@@ -1852,6 +1829,8 @@ public:
                       SourceExecutionSpace const & execution = SourceExecutionSpace()) {{
     static_assert(Kokkos::is_view_v<ParameterViewType>, "set_parameters requires a Kokkos::View");
     static_assert(ParameterViewType::rank == 1, "set_parameters requires a rank-one Kokkos::View");
+    static_assert(ponni::is_layout_right_view_v<ParameterViewType>,
+                  "GeneratedModel parameter Views must use Kokkos::LayoutRight");
     using ParameterScalar = typename ParameterViewType::non_const_value_type;
     using SourceMemorySpace = typename ParameterViewType::memory_space;
     static_assert(std::is_same_v<ParameterScalar,float> || std::is_same_v<ParameterScalar,double>,
@@ -1927,6 +1906,9 @@ public:
                   "GeneratedModel input must be a rank-two Kokkos::View");
     static_assert(Kokkos::is_view_v<OutputViewType> && OutputViewType::rank == 2,
                   "GeneratedModel output must be a rank-two Kokkos::View");
+    static_assert(ponni::is_layout_right_view_v<InputViewType> &&
+                  ponni::is_layout_right_view_v<OutputViewType>,
+                  "GeneratedModel inference Views must use Kokkos::LayoutRight");
     static_assert(!std::is_const_v<typename OutputViewType::value_type>,
                   "GeneratedModel output View must be writable");
     static_assert(Kokkos::SpaceAccessibility<execution_space,typename InputViewType::memory_space>::accessible,
@@ -1940,6 +1922,7 @@ public:
     if (inputs.extent(1) != outputs.extent(1)) Kokkos::abort(\"GeneratedModel batch extents differ\");
 #endif
     int const batch_size = checked_batch_size(inputs);
+    if (batch_size == 0) Kokkos::abort("GeneratedModel::infer_batch requires a nonzero batch size");
 {batch_launch}
   }}
 
@@ -1949,6 +1932,9 @@ public:
                   "GeneratedModel input must be a rank-two Kokkos::View");
     static_assert(Kokkos::is_view_v<OutputViewType> && OutputViewType::rank == 2,
                   "GeneratedModel output must be a rank-two Kokkos::View");
+    static_assert(ponni::is_layout_right_view_v<InputViewType> &&
+                  ponni::is_layout_right_view_v<OutputViewType>,
+                  "GeneratedModel inference Views must use Kokkos::LayoutRight");
     static_assert(!std::is_const_v<typename OutputViewType::value_type>,
                   "GeneratedModel output View must be writable");
     static_assert(Kokkos::SpaceAccessibility<execution_space,typename InputViewType::memory_space>::accessible,
@@ -1962,7 +1948,7 @@ public:
     if (inputs.extent(1) != outputs.extent(1)) Kokkos::abort("GeneratedModel batch extents differ");
 #endif
     int const batch_size = checked_batch_size(inputs);
-    if (batch_size == 0) return;
+    if (batch_size == 0) Kokkos::abort("GeneratedModel::infer_batch_half2 requires a nonzero batch size");
 {half_launch}
   }}
 }};

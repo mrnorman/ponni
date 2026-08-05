@@ -34,14 +34,21 @@ All tests are registered with CTest except `performance_benchmark`, which is bui
 - `Relu`, `LeakyRelu`, `Elu`, `Selu`, `Gelu` (exact and approximate), `Silu`, `Sigmoid`, and `Tanh`
 - `Softmax`, `LogSoftmax`, `Softplus`, `HardSigmoid`, `HardSwish`, and `Mish`
 
-For each activation, the test covers validation and metadata, the zero-trainable-parameter API, `to_array()` and
-`from_array()` round trips, fixed-size `SArray` evaluation, and ordinary default-memory `Kokkos::View` evaluation.
+For each activation, the test covers validation and metadata, the zero-trainable-parameter API, fixed-size `SArray`
+evaluation, and ordinary default-memory `Kokkos::View` evaluation.
 The core test also verifies factory-selected host execution/memory, automatic scratch growth and reuse, and explicit
 scratch shrinking. The GPU debug profile remains useful for detecting accidental host access to GPU memory.
 
+`template_coverage_test` complements the broad layer test by forcing less commonly used templates to instantiate and
+execute. It checks complete-model and single-layer `SArray` inference, every remaining `SArray` API, float/double/FP16/
+BF16 factories and PONNI-file round trips, execution-space-only memory inference, rank-one through rank-four tensor
+loading, both matrix orientations and the fallback path of the orthogonal initializer, and test-only custom dense,
+indexed-pointwise, and conservative-barrier layers. The custom layers live only in the test source and verify both the
+documented fusion-trait contract and the explicit `copy_to_memory_space` rebinding contract.
+
 ## Python-generated test data (Keras/PyTorch tests)
 
-The following tests generate their HDF5 data at build time via Python scripts:
+The following tests generate PONNI-profile Safetensors files at build time via Python scripts:
 
 - `keras_sequential_test`
 - `keras_resnet_test`
@@ -53,9 +60,11 @@ Build-time behavior:
 - `uv` is resolved during the **make phase**.
 - If `uv` is missing, it is installed in the build tree at `unit/build/uv_env`.
 - A unified CPU-only venv is created in `unit/build/python_cpu_env`, independently of the configured Kokkos backend.
-- Python dependencies are installed into that venv: `torch`, `keras`, `tensorflow`, `tf2onnx`, `numpy`, `h5py`,
-  `onnx`, `onnxruntime`, and `onnxscript`.
-- Generator scripts produce HDF5 files in each test's build directory.
+- Python dependencies are installed into that venv: `torch`, `keras`, `tensorflow`, `tf2onnx`, `JAX`, `Flax`,
+  `scikit-learn`, `numpy`, `safetensors`, `onnx`, `onnxruntime`, and `onnxscript`. PaddlePaddle remains optional and is
+  covered by its adapter contract test rather than being installed in the shared environment.
+- Generator scripts produce `.ponni` files in each test's build directory. The ordinary Safetensors tensor table is
+  augmented with exact PONNI model/schema fingerprints and a payload checksum.
 
 The environment uses Python 3.11 or newer, CPU PyTorch and TensorFlow, and `onnxruntime>=1.25,<2`. Frameworks only
 export and validate backend-neutral ONNX; CUDA/HIP correctness is exercised separately by the generated Kokkos C++.

@@ -72,20 +72,13 @@ add_custom_target(ponni_python_env DEPENDS ${PONNI_TEST_PYTHON_ENV_DIR}/.ready)
 add_dependencies(ponni_python_env ponni_uv_tool)
 
 set(PONNI_TEST_PYTHON_COMMAND ${CMAKE_COMMAND} -E env
-    PYTHONHOME= PYTHONNOUSERSITE=1
+    PYTHONHOME= PYTHONNOUSERSITE=1 PYTHONPATH=${CMAKE_SOURCE_DIR}/../src/generator
     "PYTHONWARNINGS=ignore::FutureWarning:copyreg,ignore::FutureWarning:keras.src.export.tf2onnx_lib")
 if (NOT Kokkos_ENABLE_CUDA)
 	list(APPEND PONNI_TEST_PYTHON_COMMAND
 	     CUDA_VISIBLE_DEVICES=-1 JAX_PLATFORMS=cpu TF_CPP_MIN_LOG_LEVEL=3)
 endif()
 list(APPEND PONNI_TEST_PYTHON_COMMAND ${PONNI_TEST_PYTHON_EXECUTABLE})
-
-# The legacy C++ tests read HDF5 fixtures directly. Generator tests use ONNX and
-# their build-local Python environment, but share this top-level configuration.
-include(FindHDF5)
-find_package(HDF5 REQUIRED)
-include_directories(${HDF5_INCLUDE_DIRS})
-link_directories(${HDF5_LIBRARY_DIRS})
 
 # Test suites. Keep the generator last because it consumes the Python target
 # and produces the largest set of generated build artifacts.

@@ -1,31 +1,32 @@
 
 #include "ponni.h"
-#include "ponni_load_h5_weights.h"
 
 int main( int argc , char **argv ) {
   Kokkos::initialize( argc , argv );
   {
     if (argc == 1) {
-      std::cerr << "Usage: " << argv[0] << " <weights.h5>" << std::endl;
+      std::cerr << "Usage: " << argv[0] << " <weights.ponni>" << std::endl;
       return -1;
     }
 
-    // This is the file with the saved tensorflow weights
     std::string fname = argv[1];
+    ponni::PonniFile file;
+    std::string error;
+    if (!file.load(fname,&error)) throw std::runtime_error(error);
 
     // Create the layers that will form the model
-    ponni::Matvec<float> matvec_1( ponni::load_h5_weights<2>( fname , "/dense/dense"     , "kernel:0" ) );
-    ponni::Bias  <float> bias_1  ( ponni::load_h5_weights<1>( fname , "/dense/dense"     , "bias:0"   ) );
+    ponni::Matvec<float> matvec_1(ponni::load_ponni_tensor<2>(file,"dense.kernel"));
+    ponni::Bias  <float> bias_1  (ponni::load_ponni_tensor<1>(file,"dense.bias"));
     ponni::Tanh<float> act_1(10);
-    ponni::Matvec<float> matvec_2( ponni::load_h5_weights<2>( fname , "/dense_1/dense_1" , "kernel:0" ) );
-    ponni::Bias  <float> bias_2  ( ponni::load_h5_weights<1>( fname , "/dense_1/dense_1" , "bias:0"   ) );
+    ponni::Matvec<float> matvec_2(ponni::load_ponni_tensor<2>(file,"dense_1.kernel"));
+    ponni::Bias  <float> bias_2  (ponni::load_ponni_tensor<1>(file,"dense_1.bias"));
 
     // Create an inference model to perform batched forward predictions
     auto inference = ponni::create_inference_model( matvec_1 , bias_1 , act_1 , matvec_2 , bias_2 );
     inference.print();
 
-    auto inputs   = ponni::load_h5_weights<2>( fname , "/test" , "input"  );
-    auto expected = ponni::load_h5_weights<2>( fname , "/test" , "output" );
+    auto inputs   = ponni::load_ponni_tensor<2>(file,"test.input");
+    auto expected = ponni::load_ponni_tensor<2>(file,"test.output");
     auto outputs  = inference.forward_batch_parallel( inputs );
 
     auto out_host = ponni::create_host_copy(outputs);

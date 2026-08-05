@@ -1,5 +1,4 @@
 #include "ponni.h"
-#include "ponni_load_h5_weights.h"
 
 #include <cmath>
 #include <iostream>
@@ -10,19 +9,20 @@ int main(int argc, char** argv) {
   bool ok = true;
 
   {
-    using ponni::load_h5_weights;
-
     if (argc == 1) {
-      std::cerr << "Usage: " << argv[0] << " <weights.h5>" << std::endl;
+      std::cerr << "Usage: " << argv[0] << " <weights.ponni>" << std::endl;
       return -1;
     }
 
     std::string fname = argv[1];
+    ponni::PonniFile file;
+    std::string error;
+    if (!file.load(fname,&error)) throw std::runtime_error(error);
 
-    auto w_main = load_h5_weights<2>(fname, "/", "w_main");
-    auto b_main = load_h5_weights<1>(fname, "/", "b_main");
-    auto w_skip = load_h5_weights<2>(fname, "/", "w_skip");
-    auto b_skip = load_h5_weights<1>(fname, "/", "b_skip");
+    auto w_main = ponni::load_ponni_tensor<2>(file,"w_main");
+    auto b_main = ponni::load_ponni_tensor<1>(file,"b_main");
+    auto w_skip = ponni::load_ponni_tensor<2>(file,"w_skip");
+    auto b_skip = ponni::load_ponni_tensor<1>(file,"b_skip");
 
     auto model = ponni::create_inference_model(
       ponni::Relu<float>(2),
@@ -34,8 +34,8 @@ int main(int argc, char** argv) {
 
     model.validate();
 
-    auto in = load_h5_weights<2>(fname, "/test", "input");
-    auto expected = load_h5_weights<2>(fname, "/test", "output");
+    auto in = ponni::load_ponni_tensor<2>(file,"test.input");
+    auto expected = ponni::load_ponni_tensor<2>(file,"test.output");
     auto out = model.forward_batch_parallel(in);
     auto out_h = ponni::create_host_copy(out);
     auto exp_h = ponni::create_host_copy(expected);

@@ -48,7 +48,7 @@ def _parser() -> argparse.ArgumentParser:
     validate = subparsers.add_parser("validate", help="validate, canonicalize, and report a model")
     _add_pipeline_options(validate)
 
-    compile_command = subparsers.add_parser("compile", help="generate Kokkos C++ and a weight blob")
+    compile_command = subparsers.add_parser("compile", help="generate Kokkos C++ and PONNI Safetensors weights")
     _add_pipeline_options(compile_command)
     compile_command.add_argument("--output-dir", type=Path, required=True)
     compile_command.add_argument("--model-name", default="GeneratedModel")
@@ -56,7 +56,7 @@ def _parser() -> argparse.ArgumentParser:
     passes = subparsers.add_parser("list-passes", help="list deterministic optimization pass names")
     passes.set_defaults(list_passes=True)
 
-    weights = subparsers.add_parser("validate-weights", help="validate a generated binary weight blob")
+    weights = subparsers.add_parser("validate-weights", help="validate a PONNI Safetensors weight file")
     weights.add_argument("weights", type=Path)
     weights.add_argument("--manifest", type=Path)
     return parser

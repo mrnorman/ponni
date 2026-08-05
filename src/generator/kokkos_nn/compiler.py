@@ -291,7 +291,7 @@ def compile_model(model_path: str | Path, output_dir: str | Path,
         original, optimized, pass_report, sample_plan, sample_mask_plan, schedule, scalar_bytes, oracle,
     )
     report["generated_header"] = header.name
-    report["weights"] = "weights.bin"
+    report["weights"] = "weights.ponni"
     report["manifest"] = "weights.json"
 
     # Compare source and optimized IRs before committing the report. The fixed

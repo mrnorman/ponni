@@ -12,7 +12,6 @@ namespace ponni {
   struct Binop_Concatenate {
     using memory_space = MemorySpace;
     template <class NewMemorySpace> using rebind_memory_space = Binop_Concatenate<ISAVE,real,N1,N2,NewMemorySpace>;
-    typedef Kokkos::View<double * ,Kokkos::LayoutRight,Kokkos::HostSpace > doubleHost1d;
     typedef Kokkos::View<real   * ,Kokkos::LayoutRight,MemorySpace> real1d;
     typedef Kokkos::View<real   **,Kokkos::LayoutRight,MemorySpace> real2d;
     
@@ -47,13 +46,19 @@ namespace ponni {
       params.after       = after;
     }
 
+    // Model creation may rebind a layer to another memory space. Layers
+    // without Views only need to preserve their scalar configuration.
+    template <class NewMemorySpace>
+    auto copy_to_memory_space(NewMemorySpace const & = NewMemorySpace()) const {
+      return rebind_memory_space<NewMemorySpace>(params.num_inputs, params.num_outputs, params.after);
+    }
+
     char const * get_label() const { return "Binop_Concatenate"; }
     KOKKOS_INLINE_FUNCTION static int get_num_inputs (Params const &params_in) { return params_in.num_inputs ; }
     KOKKOS_INLINE_FUNCTION static int get_num_outputs(Params const &params_in) { return params_in.num_outputs; }
     int    get_num_inputs               () const { return params.num_inputs ; }
     int    get_num_outputs              () const { return params.num_outputs; }
     int    get_num_trainable_parameters () const { return 0; }
-    int    get_array_representation_size() const { return 4; }
 
     template <class InputView1, class InputView2, class OutputView>
     KOKKOS_INLINE_FUNCTION static void compute_all_outputs( InputView1 const & input1    ,
@@ -61,14 +66,18 @@ namespace ponni {
                                                             OutputView const & output    ,
                                                             int            ibatch    ,
                                                             Params const & params_in ) {
+      ponni::require_layout_right_views<InputView1,InputView2,OutputView>();
       if (params_in.after) {
-        int num_inputs_1 = input1.extent(0);
+        // Temporary Views are capacity-sized and may be wider than the active
+        // state. The layer metadata, rather than the allocation extent, defines
+        // how many current-branch values participate in this concatenation.
+        int num_inputs_1 = params_in.num_inputs;
         int num_outputs = params_in.num_outputs;
         for (int irow = 0; irow < num_outputs; irow++) {
           output(irow,ibatch) = irow < num_inputs_1 ? input1(irow,ibatch) : input2(irow - num_inputs_1,ibatch);
         }
       } else {
-        int num_inputs_2 = input2.extent(0);
+        int num_inputs_2 = params_in.num_outputs - params_in.num_inputs;
         int num_outputs = params_in.num_outputs;
         for (int irow = 0; irow < num_outputs; irow++) {
           output(irow,ibatch) = irow < num_inputs_2 ? input2(irow,ibatch) : input1(irow - num_inputs_2,ibatch);
@@ -90,20 +99,6 @@ namespace ponni {
     void set_trainable_parameters(real1d const &in) { }
 
     real1d get_trainable_parameters() const { return real1d(); }
-
-    doubleHost1d to_array() const {
-      doubleHost1d data("Binop_Concatenate_params",get_array_representation_size());
-      data(0) = get_num_inputs ();
-      data(1) = get_num_outputs();
-      data(2) = params.after ? 1 : 0;
-      data(3) = ISAVE;
-      return data;
-    }
-
-    void from_array(doubleHost1d const &data) {
-      if (data(3) != ISAVE) Kokkos::abort("ERROR: Binop_Concatenate saved state index incompatible with data from file");
-      init( static_cast<int>(data(0)) , static_cast<int>(data(1)) , data(2) == 1 );
-    }
 
     void validate(int saved_layer_num_inputs) const {
       if (params.num_inputs <= 0 || saved_layer_num_inputs <= 0) {

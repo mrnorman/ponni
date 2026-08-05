@@ -5,10 +5,11 @@ import sys
 os.environ.setdefault("KERAS_BACKEND", "torch")
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 
-import h5py
 import keras
 import numpy as np
 from keras import layers
+
+from kokkos_nn.weights import write_ponni_file
 
 
 def build_model() -> keras.Model:
@@ -31,7 +32,7 @@ def build_model() -> keras.Model:
 
 def main() -> None:
     if len(sys.argv) != 2:
-        raise SystemExit(f"Usage: {sys.argv[0]} <output.h5>")
+        raise SystemExit(f"Usage: {sys.argv[0]} <output.ponni>")
 
     out_file = sys.argv[1]
     rng = np.random.default_rng(5678)
@@ -51,16 +52,12 @@ def main() -> None:
     else:
         y_test = np.asarray(y_pred, dtype=np.float32)
 
-    with h5py.File(out_file, "w") as h5:
-        for layer_name, _, _ in dense_shapes:
-            grp = h5.require_group(f"{layer_name}/{layer_name}")
-            w, b = model.get_layer(layer_name).get_weights()
-            grp.create_dataset("kernel:0", data=w)
-            grp.create_dataset("bias:0", data=b)
-
-        gt = h5.require_group("test")
-        gt.create_dataset("input", data=x_test.T)
-        gt.create_dataset("output", data=y_test.T)
+    tensors = {"test.input": x_test.T, "test.output": y_test.T}
+    for layer_name, _, _ in dense_shapes:
+        weights, bias = model.get_layer(layer_name).get_weights()
+        tensors[f"{layer_name}.kernel"] = weights
+        tensors[f"{layer_name}.bias"] = bias
+    write_ponni_file(tensors, out_file, source_framework="keras", target="test-fixture")
 
 
 if __name__ == "__main__":

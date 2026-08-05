@@ -51,7 +51,7 @@ class FrameworkExportTests(unittest.TestCase):
         self.assertEqual(report["storage"]["external_workspace_bytes"], 0)
         self.assertLessEqual(report["ir_optimization_max_absolute_error"], 2.e-6)
         self.assertTrue((output_dir / f"{model_name}.hpp").is_file())
-        self.assertTrue((output_dir / "weights.bin").is_file())
+        self.assertTrue((output_dir / "weights.ponni").is_file())
         return report
 
     def test_keras_and_tensorflow_models_export_import_fuse_and_generate(self) -> None:

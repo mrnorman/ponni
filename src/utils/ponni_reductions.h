@@ -14,6 +14,7 @@ namespace ponni {
 
     template <class ViewType> requires Kokkos::is_view_v<ViewType>
     inline typename ViewType::non_const_value_type sum(ViewType const & view) {
+      ponni::require_layout_right_views<ViewType>();
       using value_type = typename ViewType::non_const_value_type;
       auto c = ponni::flatten(view);
       value_type result;

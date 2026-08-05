@@ -9,7 +9,6 @@ namespace ponni {
   struct Softplus {
     using memory_space = MemorySpace;
     template <class NewMemorySpace> using rebind_memory_space = Softplus<real,N,NewMemorySpace>;
-    typedef Kokkos::View<double *, Kokkos::LayoutRight, Kokkos::HostSpace> doubleHost1d;
     typedef Kokkos::View<real *, Kokkos::LayoutRight, MemorySpace> real1d;
     typedef Kokkos::View<real **, Kokkos::LayoutRight, MemorySpace> real2d;
     bool static constexpr overwrite_input = true;
@@ -29,13 +28,19 @@ namespace ponni {
     ~Softplus() = default;
     explicit Softplus(int num_inputs, real beta = static_cast<real>(1)) { init(num_inputs, beta); }
     void init(int num_inputs, real beta = static_cast<real>(1)) { params = {num_inputs, beta}; }
+
+    // Model creation may rebind a layer to another memory space. Layers
+    // without Views only need to preserve their scalar configuration.
+    template <class NewMemorySpace>
+    auto copy_to_memory_space(NewMemorySpace const & = NewMemorySpace()) const {
+      return rebind_memory_space<NewMemorySpace>(params.num_inputs, params.beta);
+    }
     char const * get_label() const { return "Softplus"; }
     KOKKOS_INLINE_FUNCTION static int get_num_inputs(Params const & p) { return p.num_inputs; }
     KOKKOS_INLINE_FUNCTION static int get_num_outputs(Params const & p) { return p.num_inputs; }
     int get_num_inputs() const { return params.num_inputs; }
     int get_num_outputs() const { return params.num_inputs; }
     int get_num_trainable_parameters() const { return 0; }
-    int get_array_representation_size() const { return 2; }
     KOKKOS_INLINE_FUNCTION static real apply(real x, Params const & p) {
       real const scaled_x = p.beta * x;
       if (scaled_x > static_cast<real>(0)) {
@@ -46,6 +51,7 @@ namespace ponni {
     template <class InputView, class OutputView>
     KOKKOS_INLINE_FUNCTION static void compute_all_outputs(InputView const & in, OutputView const & out,
                                                            int ibatch, Params const & p) {
+      ponni::require_layout_right_views<InputView,OutputView>();
       for (int i = 0; i < p.num_inputs; i++) out(i,ibatch) = apply(in(i,ibatch), p);
     }
     KOKKOS_INLINE_FUNCTION static void compute_all_outputs(ponni::SArray<real,N> const & in,
@@ -54,10 +60,6 @@ namespace ponni {
     }
     void set_trainable_parameters(real1d const &) { }
     real1d get_trainable_parameters() const { return real1d(); }
-    doubleHost1d to_array() const {
-      doubleHost1d data("Softplus_params", 2); data(0) = params.num_inputs; data(1) = params.beta; return data;
-    }
-    void from_array(doubleHost1d const & data) { init(static_cast<int>(data(0)), static_cast<real>(data(1))); }
     void validate() const {
       if (params.num_inputs <= 0) Kokkos::abort("ERROR: Softplus num_inputs must be > 0");
       if (params.beta <= static_cast<real>(0)) Kokkos::abort("ERROR: Softplus beta must be > 0");

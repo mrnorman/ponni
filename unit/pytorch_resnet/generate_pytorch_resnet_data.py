@@ -4,11 +4,12 @@ import sys
 
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 
-import h5py
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from kokkos_nn.weights import write_ponni_file
 
 
 class TinyResNet(nn.Module):
@@ -40,7 +41,7 @@ class TinyResNet(nn.Module):
 
 def main() -> None:
     if len(sys.argv) != 2:
-        raise SystemExit(f"Usage: {sys.argv[0]} <output.h5>")
+        raise SystemExit(f"Usage: {sys.argv[0]} <output.ponni>")
 
     out_file = sys.argv[1]
 
@@ -57,25 +58,16 @@ def main() -> None:
 
     state = model.state_dict()
 
-    with h5py.File(out_file, "w") as h5:
-        h5.create_dataset("0.0.0.0.1.weight", data=state["fc1.weight"].numpy())
-        h5.create_dataset("0.0.0.0.1.bias", data=state["fc1.bias"].numpy())
-
-        h5.create_dataset("0.0.0.2.sequential.0.weight", data=state["fc2.weight"].numpy())
-        h5.create_dataset("0.0.0.2.sequential.0.bias", data=state["fc2.bias"].numpy())
-
-        h5.create_dataset("0.0.2.sequential.0.weight", data=state["fc3.weight"].numpy())
-        h5.create_dataset("0.0.2.sequential.0.bias", data=state["fc3.bias"].numpy())
-
-        h5.create_dataset("0.2.sequential.0.weight", data=state["fc4.weight"].numpy())
-        h5.create_dataset("0.2.sequential.0.bias", data=state["fc4.bias"].numpy())
-
-        h5.create_dataset("2.weight", data=state["fc5.weight"].numpy())
-        h5.create_dataset("2.bias", data=state["fc5.bias"].numpy())
-
-        gt = h5.require_group("test")
-        gt.create_dataset("input", data=x_test_np.T)
-        gt.create_dataset("output", data=y_test.T)
+    tensors = {
+        "test.input": x_test_np.T,
+        "test.output": y_test.T,
+    }
+    for index in range(1, 6):
+        # Canonicalize torch.nn.Linear (output,input) into PONNI's
+        # Matvec (input,output) order before serialization.
+        tensors[f"fc{index}.weight"] = state[f"fc{index}.weight"].numpy().T
+        tensors[f"fc{index}.bias"] = state[f"fc{index}.bias"].numpy()
+    write_ponni_file(tensors, out_file, source_framework="pytorch", target="test-fixture")
 
 
 if __name__ == "__main__":

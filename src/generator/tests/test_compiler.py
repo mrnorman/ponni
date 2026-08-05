@@ -262,7 +262,7 @@ class CompilerTests(unittest.TestCase):
                 )
                 self.assertEqual(report["optimized_operations"], ["DenseBiasActivation"])
                 self.assertNotIn("autotuner_source", report)
-                validate_weight_blob(output / "weights.bin", json.loads((output / "weights.json").read_text()))
+                validate_weight_blob(output / "weights.ponni", json.loads((output / "weights.json").read_text()))
 
     def test_matmul_bias_residual_and_storage_plan(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -516,6 +516,10 @@ class CompilerTests(unittest.TestCase):
             self.assertEqual(report["sample_local_storage"]["workspace_elements"], 0)
             self.assertIn("outputs(i) = inputs(i);", generated)
             self.assertIn("output_view(i,ibatch) = outputs(i);", generated)
+            self.assertIn("bool weights_loaded_ = storage_parameter_elements == 0;", generated)
+            self.assertIn("GeneratedModel inference Views must use Kokkos::LayoutRight", generated)
+            self.assertIn("infer_batch requires a nonzero batch size", generated)
+            self.assertIn("infer_batch_half2 requires a nonzero batch size", generated)
 
     def test_static_feature_concat_imports_and_emits_for_all_portable_paths(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -930,7 +934,7 @@ class CompilerTests(unittest.TestCase):
             root = Path(directory)
             model = _gemm_model(root / "model.onnx")
             compile_model(model, root / "out")
-            blob = bytearray((root / "out" / "weights.bin").read_bytes())
+            blob = bytearray((root / "out" / "weights.ponni").read_bytes())
             blob[-1] ^= 0x80
             corrupt = root / "corrupt.bin"
             corrupt.write_bytes(blob)

@@ -1,9 +1,8 @@
 
 #include "ponni.h"
-#include "ponni_load_h5_weights.h"
 
 int main( int argc , char **argv ) {
-  using ponni::load_h5_weights;
+  using ponni::load_ponni_tensor;
   using ponni::Matvec;
   using ponni::Bias;
   using ponni::Silu;
@@ -12,85 +11,83 @@ int main( int argc , char **argv ) {
   Kokkos::initialize( argc , argv );
   {
     if (argc == 1) {
-      std::cerr << "Usage: " << argv[0] << " <weights.h5>" << std::endl;
+      std::cerr << "Usage: " << argv[0] << " <weights.ponni>" << std::endl;
       return -1;
     }
 
-    // This is the file with the saved tensorflow weights
-    std::string fname_h5 = argv[1];
+    std::string fname = argv[1];
+    ponni::PonniFile file;
+    std::string error;
+    if (!file.load(fname,&error)) throw std::runtime_error(error);
 
     int   neurons = 20;
     auto model = create_inference_model(
                     // Layer 1
-                    Matvec      <float>( load_h5_weights<2>( fname_h5 , "/dense/dense"     , "kernel:0" ) ) ,
-                    Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense/dense"     , "bias:0"   ) ) ,
+                    Matvec      <float>( load_ponni_tensor<2>(file,"dense.kernel") ) ,
+                    Bias        <float>( load_ponni_tensor<1>(file,"dense.bias") ) ,
                     Silu        <float>( neurons )                                                         ,
                     Save_State<0,float>( neurons )                                                          ,
                     // Layer 2
-                    Matvec      <float>( load_h5_weights<2>( fname_h5 , "/dense_1/dense_1" , "kernel:0" ) ) ,
-                    Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense_1/dense_1" , "bias:0"   ) ) ,
+                    Matvec      <float>( load_ponni_tensor<2>(file,"dense_1.kernel") ) ,
+                    Bias        <float>( load_ponni_tensor<1>(file,"dense_1.bias") ) ,
                     Silu        <float>( neurons )                                                         ,
                     Binop_Add <0,float>( neurons )                                                          ,
                     Save_State<0,float>( neurons )                                                          ,
                     // Layer 3
-                    Matvec      <float>( load_h5_weights<2>( fname_h5 , "/dense_2/dense_2" , "kernel:0" ) ) ,
-                    Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense_2/dense_2" , "bias:0"   ) ) ,
+                    Matvec      <float>( load_ponni_tensor<2>(file,"dense_2.kernel") ) ,
+                    Bias        <float>( load_ponni_tensor<1>(file,"dense_2.bias") ) ,
                     Silu        <float>( neurons )                                                         ,
                     Binop_Add <0,float>( neurons )                                                          ,
                     Save_State<0,float>( neurons )                                                          ,
                     // Layer 4
-                    Matvec      <float>( load_h5_weights<2>( fname_h5 , "/dense_3/dense_3" , "kernel:0" ) ) ,
-                    Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense_3/dense_3" , "bias:0"   ) ) ,
+                    Matvec      <float>( load_ponni_tensor<2>(file,"dense_3.kernel") ) ,
+                    Bias        <float>( load_ponni_tensor<1>(file,"dense_3.bias") ) ,
                     Silu        <float>( neurons )                                                         ,
                     Binop_Add <0,float>( neurons )                                                          ,
                     Save_State<0,float>( neurons )                                                          ,
                     // Layer 5
-                    Matvec      <float>( load_h5_weights<2>( fname_h5 , "/dense_4/dense_4" , "kernel:0" ) ) ,
-                    Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense_4/dense_4" , "bias:0"   ) ) ,
+                    Matvec      <float>( load_ponni_tensor<2>(file,"dense_4.kernel") ) ,
+                    Bias        <float>( load_ponni_tensor<1>(file,"dense_4.bias") ) ,
                     Silu        <float>( neurons )                                                         ,
                     Binop_Add <0,float>( neurons )                                                          ,
                     Save_State<0,float>( neurons )                                                          ,
                     // Layer 6
-                    Matvec      <float>( load_h5_weights<2>( fname_h5 , "/dense_5/dense_5" , "kernel:0" ) ) ,
-                    Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense_5/dense_5" , "bias:0"   ) ) ,
+                    Matvec      <float>( load_ponni_tensor<2>(file,"dense_5.kernel") ) ,
+                    Bias        <float>( load_ponni_tensor<1>(file,"dense_5.bias") ) ,
                     Silu        <float>( neurons )                                                         ,
                     Binop_Add <0,float>( neurons )                                                          ,
                     Save_State<0,float>( neurons )                                                          ,
                     // Layer 7
-                    Matvec      <float>( load_h5_weights<2>( fname_h5 , "/dense_6/dense_6" , "kernel:0" ) ) ,
-                    Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense_6/dense_6" , "bias:0"   ) ) ,
+                    Matvec      <float>( load_ponni_tensor<2>(file,"dense_6.kernel") ) ,
+                    Bias        <float>( load_ponni_tensor<1>(file,"dense_6.bias") ) ,
                     Silu        <float>( neurons )                                                         ,
                     Binop_Add <0>( neurons )                                                                ,
                     Save_State<0>( neurons )                                                                ,
                     // Layer 8
-                    Matvec      <float>( load_h5_weights<2>( fname_h5 , "/dense_7/dense_7" , "kernel:0" ) ) ,
-                    Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense_7/dense_7" , "bias:0"   ) ) ,
+                    Matvec      <float>( load_ponni_tensor<2>(file,"dense_7.kernel") ) ,
+                    Bias        <float>( load_ponni_tensor<1>(file,"dense_7.bias") ) ,
                     Silu        <float>( neurons )                                                         ,
                     Binop_Add <0,float>( neurons )                                                          ,
                     Save_State<0,float>( neurons )                                                          ,
                     // Layer 9
-                    Matvec      <float>( load_h5_weights<2>( fname_h5 , "/dense_8/dense_8" , "kernel:0" ) ) ,
-                    Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense_8/dense_8" , "bias:0"   ) ) ,
+                    Matvec      <float>( load_ponni_tensor<2>(file,"dense_8.kernel") ) ,
+                    Bias        <float>( load_ponni_tensor<1>(file,"dense_8.bias") ) ,
                     Silu        <float>( neurons )                                                         ,
                     Binop_Add <0,float>( neurons )                                                          ,
                     // Layer 10
-                    Matvec      <float>( load_h5_weights<2>( fname_h5 , "/dense_9/dense_9" , "kernel:0" ) ) ,
-                    Bias        <float>( load_h5_weights<1>( fname_h5 , "/dense_9/dense_9" , "bias:0"   ) ) );
+                    Matvec      <float>( load_ponni_tensor<2>(file,"dense_9.kernel") ) ,
+                    Bias        <float>( load_ponni_tensor<1>(file,"dense_9.bias") ) );
 
     model.validate();
     model.print();
-    auto model_as_array = model.represent_as_array();
-    model.set_layers_from_array_representation( model_as_array );
-    model.save_to_text_file("keras_resnet_save.txt");
-    model.load_from_text_file("keras_resnet_save.txt");
 
     auto &layer = model.get_layer<5>();
 
     std::cout << "*** TOTAL TRAINABLE PARAMETERS: " << model.get_num_trainable_parameters() << std::endl;
 
     {
-      auto inputs   = ponni::load_h5_weights<2>( fname_h5 , "/test" , "input"  );
-      auto expected = ponni::load_h5_weights<2>( fname_h5 , "/test" , "output" );
+      auto inputs   = load_ponni_tensor<2>(file,"test.input");
+      auto expected = load_ponni_tensor<2>(file,"test.output");
       auto outputs  = model.forward_batch_parallel( inputs );
 
       auto out_host = ponni::create_host_copy(outputs);
@@ -111,8 +108,8 @@ int main( int argc , char **argv ) {
 
 
     {
-      auto inputs = ponni::load_h5_weights<2>( fname_h5 , "/test" , "input" );
-      auto expected = ponni::load_h5_weights<2>( fname_h5 , "/test" , "output" );
+      auto inputs = load_ponni_tensor<2>(file,"test.input");
+      auto expected = load_ponni_tensor<2>(file,"test.output");
 
       model.reallocate_internal_state( inputs.extent(1) );
       Kokkos::View<float**,Kokkos::LayoutRight,typename Kokkos::DefaultExecutionSpace::memory_space> outputs("outputs",expected.extent(0),expected.extent(1));

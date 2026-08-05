@@ -11,8 +11,6 @@ namespace ponni {
   struct Binop_Projection_Add {
     using memory_space = MemorySpace;
     template <class NewMemorySpace> using rebind_memory_space = Binop_Projection_Add<ISAVE,real,NIN,NSAVE,NewMemorySpace>;
-    typedef Kokkos::View<double * ,Kokkos::LayoutRight,Kokkos::HostSpace > doubleHost1d;
-    typedef Kokkos::View<real   * ,Kokkos::LayoutRight,Kokkos::HostSpace > realHost1d;
     typedef Kokkos::View<real   * ,Kokkos::LayoutRight,MemorySpace> real1d;
     typedef Kokkos::View<real   **,Kokkos::LayoutRight,MemorySpace> real2d;
 
@@ -64,13 +62,21 @@ namespace ponni {
       params.trainable = trainable;
     }
 
+    // Copy both parameter Views when the model factory selects a new memory
+    // space. Configuration fields remain ordinary constructor arguments.
+    template <class NewMemorySpace>
+    auto copy_to_memory_space(NewMemorySpace const & memory_space = NewMemorySpace()) const {
+      return rebind_memory_space<NewMemorySpace>(
+          ponni::create_memory_space_copy(params.weights, memory_space),
+          ponni::create_memory_space_copy(params.bias, memory_space), params.trainable);
+    }
+
     char const * get_label() const { return "Binop_Projection_Add"; }
     KOKKOS_INLINE_FUNCTION static int get_num_inputs(Params const & params_in) { return params_in.weights.extent(1); }
     KOKKOS_INLINE_FUNCTION static int get_num_outputs(Params const & params_in) { return params_in.weights.extent(1); }
     int get_num_inputs() const { return params.weights.extent(1); }
     int get_num_outputs() const { return params.weights.extent(1); }
     int get_num_trainable_parameters() const { return params.trainable ? params.weights.size() + params.bias.size() : 0; }
-    int get_array_representation_size() const { return 4 + params.weights.size() + params.bias.size(); }
 
     template <class InputView1, class InputView2, class OutputView>
     KOKKOS_INLINE_FUNCTION static void compute_all_outputs(InputView1 const & input,
@@ -78,6 +84,7 @@ namespace ponni {
                                                            OutputView const & output,
                                                            int ibatch,
                                                            Params const & params_in) {
+      ponni::require_layout_right_views<InputView1,InputView2,OutputView>();
       int num_saved = params_in.weights.extent(0);
       int num_outputs = params_in.weights.extent(1);
       for (int i = 0; i < num_outputs; i++) {
@@ -118,38 +125,6 @@ namespace ponni {
       Kokkos::deep_copy(Kokkos::subview(out, std::pair<int,int>(0, nweights)), ponni::flatten(params.weights));
       Kokkos::deep_copy(Kokkos::subview(out, std::pair<int,int>(nweights, nweights + nbias)), params.bias);
       return out;
-    }
-
-    doubleHost1d to_array() const {
-      int num_saved = params.weights.extent(0);
-      int num_outputs = params.weights.extent(1);
-      auto weights_h = ponni::create_host_copy(params.weights);
-      auto bias_h = ponni::create_host_copy(params.bias);
-      auto weights_flat = ponni::flatten(weights_h);
-      doubleHost1d data("Projection_skip_array", get_array_representation_size());
-      data(0) = num_saved;
-      data(1) = num_outputs;
-      data(2) = params.trainable ? 1 : 0;
-      data(3) = ISAVE;
-      for (int i = 0; i < weights_flat.extent(0); i++) data(4 + i) = weights_flat(i);
-      for (int i = 0; i < bias_h.extent(0); i++) data(4 + weights_flat.extent(0) + i) = bias_h(i);
-      return data;
-    }
-
-    void from_array(doubleHost1d const & data) {
-      if (data(3) != ISAVE) Kokkos::abort("ERROR: Binop_Projection_Add saved state index incompatible with data from file");
-      int num_saved = static_cast<int>(data(0));
-      int num_outputs = static_cast<int>(data(1));
-      bool trainable = data(2) == 1;
-      real2d weights("Projection_skip_weights", num_saved, num_outputs);
-      real1d bias("Projection_skip_bias", num_outputs);
-      realHost1d weights_flat_h("Projection_skip_weights_h", num_saved * num_outputs);
-      realHost1d bias_h("Projection_skip_bias_h", num_outputs);
-      for (int i = 0; i < weights_flat_h.extent(0); i++) weights_flat_h(i) = static_cast<real>(data(4 + i));
-      for (int i = 0; i < bias_h.extent(0); i++) bias_h(i) = static_cast<real>(data(4 + weights_flat_h.extent(0) + i));
-      Kokkos::deep_copy(ponni::flatten(weights), ponni::create_memory_space_copy(weights_flat_h, MemorySpace()));
-      Kokkos::deep_copy(bias, ponni::create_memory_space_copy(bias_h, MemorySpace()));
-      init(weights, bias, trainable);
     }
 
     void validate(int saved_layer_num_inputs) const {

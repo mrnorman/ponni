@@ -7,7 +7,6 @@ namespace ponni {
   struct MinMaxNorm {
     using memory_space = MemorySpace;
     template <class NewMemorySpace> using rebind_memory_space = MinMaxNorm<real,N,NewMemorySpace>;
-    typedef Kokkos::View<double * ,Kokkos::LayoutRight,Kokkos::HostSpace > doubleHost1d;
     typedef Kokkos::View<real   * ,Kokkos::LayoutRight,MemorySpace> real1d;
     typedef Kokkos::View<real   **,Kokkos::LayoutRight,MemorySpace> real2d;
 
@@ -51,19 +50,26 @@ namespace ponni {
       params.epsilon = epsilon;
     }
 
+    // Model creation may rebind a layer to another memory space. Layers
+    // without Views only need to preserve their scalar configuration.
+    template <class NewMemorySpace>
+    auto copy_to_memory_space(NewMemorySpace const & = NewMemorySpace()) const {
+      return rebind_memory_space<NewMemorySpace>(params.num_inputs, params.out_min, params.out_max, params.epsilon);
+    }
+
     char const * get_label() const { return "MinMaxNorm"; }
     KOKKOS_INLINE_FUNCTION static int get_num_inputs(Params const & params_in) { return params_in.num_inputs; }
     KOKKOS_INLINE_FUNCTION static int get_num_outputs(Params const & params_in) { return params_in.num_inputs; }
     int get_num_inputs() const { return params.num_inputs; }
     int get_num_outputs() const { return params.num_inputs; }
     int get_num_trainable_parameters() const { return 0; }
-    int get_array_representation_size() const { return 4; }
 
     template <class InputView, class OutputView>
     KOKKOS_INLINE_FUNCTION static void compute_all_outputs(InputView const & input,
                                                            OutputView const & output,
                                                            int ibatch,
                                                            Params const & params_in) {
+      ponni::require_layout_right_views<InputView,OutputView>();
       int n = params_in.num_inputs;
       real min_v = input(0,ibatch);
       real max_v = input(0,ibatch);
@@ -95,19 +101,6 @@ namespace ponni {
 
     void set_trainable_parameters(real1d const & in) { }
     real1d get_trainable_parameters() const { return real1d(); }
-
-    doubleHost1d to_array() const {
-      doubleHost1d data("MinMaxNorm_array", get_array_representation_size());
-      data(0) = params.num_inputs;
-      data(1) = params.out_min;
-      data(2) = params.out_max;
-      data(3) = params.epsilon;
-      return data;
-    }
-
-    void from_array(doubleHost1d const & data) {
-      init(static_cast<int>(data(0)), static_cast<real>(data(1)), static_cast<real>(data(2)), static_cast<real>(data(3)));
-    }
 
     void validate() const {
       if (params.num_inputs <= 0) Kokkos::abort("ERROR: MinMaxNorm num_inputs must be > 0");

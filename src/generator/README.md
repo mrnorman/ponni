@@ -1,7 +1,8 @@
 # PONNI Kokkos neural-network generator
 
-PONNI compiles a constrained, fixed-feature ONNX inference graph into deterministic Kokkos C++ and a versioned
-weight blob. Python and ONNX are build-time dependencies only. Generated inference depends on PONNI and Kokkos.
+PONNI compiles a constrained, fixed-feature ONNX inference graph into deterministic Kokkos C++ and a validated
+PONNI-profile Safetensors file. Python and ONNX are build-time dependencies only. Generated inference depends on
+PONNI and Kokkos.
 
 The complete operator matrix is generated in [ONNX_OPERATOR_SUPPORT.md](ONNX_OPERATOR_SUPPORT.md). It records the
 reviewed ONNX schema range, supported restrictions, and unsupported operators.
@@ -14,7 +15,7 @@ planning, generated Kokkos APIs, testing strategy, and extension workflow, see
 
 The compiler imports ONNX into PONNI's canonical graph, validates it, applies deterministic folding and fusion passes,
 minimizes activation lifetimes, and assigns remaining floating-point and Boolean intermediates to reusable local
-slots. It writes a generated header, `weights.bin`, `weights.json`, `canonical_ir.json`, and
+slots. It writes a generated header, `weights.ponni`, `weights.json`, `canonical_ir.json`, and
 `optimization_report.json`.
 
 Legal dense pairs can be streamed instead of materialized, and the two highest workspace-reduction levels can
@@ -35,6 +36,139 @@ Install the build-time package in a Python environment containing NumPy and ONNX
 
 ```bash
 python -m pip install -e src/generator
+```
+
+### End-to-end trained-model example
+
+The following small PyTorch example defines and trains a network using ordinary sample-major framework tensors. Its
+`forward()` method transposes the boundary tensors so the exported ONNX model follows PONNI's `(features, batch)`
+contract. The standalone weight export is a portable, named-tensor checkpoint and also validates that the exported
+ONNX graph is supported by PONNI.
+
+```python
+import onnx
+import torch
+
+from kokkos_nn import export_pytorch_weights
+
+
+class SmallBatchNetwork(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.network = torch.nn.Sequential(
+            torch.nn.Linear(4, 8),
+            torch.nn.Tanh(),
+            torch.nn.Linear(8, 2),
+        )
+
+    def forward(self, feature_batch):
+        return self.network(feature_batch.transpose(0, 1)).transpose(0, 1)
+
+
+model = SmallBatchNetwork()
+optimizer = torch.optim.Adam(model.parameters(), lr=1.e-2)
+training_inputs = torch.randn(4, 64)
+training_targets = torch.stack((
+    training_inputs[0] + 0.5 * training_inputs[1],
+    torch.tanh(training_inputs[2] - training_inputs[3]),
+))
+for _ in range(200):
+    optimizer.zero_grad()
+    loss = torch.nn.functional.mse_loss(model(training_inputs), training_targets)
+    loss.backward()
+    optimizer.step()
+
+model.eval()
+example = torch.zeros(4, 3)
+batch_dimension = torch.export.Dim("batch", min=1, max=4096)
+torch.onnx.export(
+    model,
+    args=(example,),
+    f="small_batch.onnx",
+    dynamo=True,
+    optimize=True,
+    verify=True,
+    input_names=["features"],
+    output_names=["predictions"],
+    dynamic_shapes=({1: batch_dimension},),
+)
+
+# Record the feature-major boundary contract expected by the generator.
+onnx_model = onnx.load("small_batch.onnx")
+for key, value in {
+    "ponni.orientation": "features_batch",
+    "ponni.batch_symbol": "batch",
+}.items():
+    entry = onnx_model.metadata_props.add()
+    entry.key = key
+    entry.value = value
+onnx.save(onnx_model, "small_batch.onnx")
+
+export_pytorch_weights(
+    model,
+    "trained_weights.ponni",
+    onnx_path="small_batch.onnx",
+)
+```
+
+Compile the validated ONNX graph into a Kokkos struct and its exact, fingerprinted weight file:
+
+```bash
+python -m kokkos_nn compile small_batch.onnx \
+  --output-dir generated --model-name SmallBatchModel
+```
+
+The generated struct must load `generated/weights.ponni`. That file contains the same trained values as the ONNX
+initializers after PONNI has canonicalized their names, shapes, and layouts. The generic `trained_weights.ponni`
+checkpoint is useful for inspection and interchange, but it deliberately does not impersonate the generated graph's
+fingerprint.
+
+Use `infer_one` inside an existing device kernel, or use `infer_batch` when PONNI should own the batch launch:
+
+```cpp
+#include "generated/SmallBatchModel.hpp"
+
+#include <stdexcept>
+#include <string>
+
+int main(int argc, char ** argv) {
+  Kokkos::ScopeGuard guard(argc,argv);
+  using Model = ponni::generated::SmallBatchModel<float>;
+
+  Model model;
+  std::string error;
+  if (!model.load_weights("generated/weights.ponni",&error)) {
+    throw std::runtime_error("Unable to load PONNI weights: " + error);
+  }
+
+  int constexpr batch_size = 32;
+  Model::InputView inputs("inputs",Model::num_inputs,batch_size);
+  Model::OutputView batch_outputs("batch_outputs",Model::num_outputs,batch_size);
+  Model::OutputView inline_outputs("inline_outputs",Model::num_outputs,batch_size);
+
+  auto inputs_host = Kokkos::create_mirror_view(inputs);
+  for (int i = 0; i < Model::num_inputs; i++) {
+    for (int ibatch = 0; ibatch < batch_size; ibatch++) {
+      inputs_host(i,ibatch) = static_cast<float>(i + ibatch) / 32.f;
+    }
+  }
+  Kokkos::deep_copy(inputs,inputs_host);
+
+  // Standalone launch: PONNI parallelizes over the batch dimension.
+  model.infer_batch(inputs,batch_outputs);
+
+  // Intra-kernel use: each caller iteration owns one fixed-size sample.
+  auto const device_model = model;
+  Kokkos::parallel_for("application_kernel",batch_size,KOKKOS_LAMBDA(int ibatch) {
+    ponni::SArray<float,Model::num_inputs> sample_inputs;
+    ponni::SArray<float,Model::num_outputs> sample_outputs;
+    for (int i = 0; i < Model::num_inputs; i++) sample_inputs(i) = inputs(i,ibatch);
+    device_model.infer_one(sample_inputs,sample_outputs);
+    for (int i = 0; i < Model::num_outputs; i++) inline_outputs(i,ibatch) = sample_outputs(i);
+  });
+  Kokkos::fence();
+  return 0;
+}
 ```
 
 Compile an exported model:
@@ -143,6 +277,10 @@ Every generated model exposes exactly these inference APIs:
 `infer_batch_half2` packs two adjacent samples, uses one dependent FP16 accumulation chain for each dense dot product,
 and writes the valid lane when the batch size is odd. It has lower-precision semantics than the scalar APIs.
 
+Batch inputs, outputs, and parameter-transfer Views must explicitly use `Kokkos::LayoutRight`, and inference requires
+at least one batch sample. Generated code rejects `LayoutLeft` and `LayoutStride` at compile time and aborts a
+zero-sized batch. Copy external data into a nonempty `LayoutRight` View before calling a generated API.
+
 All three paths support the complete operator set described in `ONNX_OPERATOR_SUPPORT.md`. Boolean intermediates use
 compact byte or `TwoMask` local storage. No generated inference API requests Kokkos team scratch.
 
@@ -156,14 +294,38 @@ using Model = ponni::generated::MyModel<
     Kokkos::HostSpace>;
 ```
 
-PONNI uses ordinary Kokkos Views and does not require a custom allocator or pool initialization.
+Generated models store their parameters in ordinary `Kokkos::LayoutRight` Views in the selected memory space.
 
 ## Weights and learned parameters
 
-`weights.bin` has a fixed header with magic, version, scalar metadata, payload size, and checksum. `weights.json`
-describes tensor offsets and learned parameters. `load_weights()` validates the blob and creates persistent scalar and
-FP16 Views in the model's memory space. `get_parameters()`, `set_parameters()`, `save_parameters()`, and
+`weights.ponni` is an ordinary Safetensors container with a `.ponni` extension. Standard Safetensors tools can inspect
+its named tensors. PONNI adds string metadata for the profile version, exact generated-graph fingerprint, tensor-schema
+fingerprint, source framework, target, and an FNV-1a checksum of the complete payload. `weights.json` mirrors tensor
+offsets, shapes, canonical layouts, learned status, and validation metadata for humans and build tooling.
+
+`load_weights()` checks the JSON structure, complete and non-overlapping payload layout, dtype and shape of every
+expected tensor, graph and schema fingerprints, and payload checksum before creating persistent scalar and FP16 Views
+in the model's memory space. `get_parameters()`, `set_parameters()`, `save_parameters()`, and
 `refresh_half_parameters()` support online parameter updates while keeping both representations synchronized.
+
+The `kokkos_nn.weight_export` module also provides lazy, dependency-neutral adapters for Keras, TensorFlow, PyTorch,
+JAX/Flax, scikit-learn MLPs, and PaddlePaddle. In generator-oriented use, pass the exported ONNX path; the adapter runs
+PONNI's generator validator before writing and reports the failing PONNI rule, opsets, operator inventory, model
+boundaries, and named nodes when the graph is unsupported:
+
+```python
+from kokkos_nn import export_pytorch_weights
+
+report = export_pytorch_weights(
+    trained_model,
+    "model_weights.ponni",
+    onnx_path="model.onnx",
+)
+```
+
+These generic named-tensor exports do not replace `kokkos_nn compile`: the compiler remains responsible for
+canonicalizing ONNX tensor layouts and writing the exact `weights.ponni` accepted by its generated struct. Supplying a
+templated-model fingerprint is an explicit weight-only path and therefore does not claim ONNX compatibility.
 
 ## Verification
 

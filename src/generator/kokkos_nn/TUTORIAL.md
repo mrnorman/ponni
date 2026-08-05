@@ -56,7 +56,7 @@ PyTorch / Keras / TensorFlow
                         | C++ and weight emission
                         v
               GeneratedModel.hpp
-              weights.bin / weights.json
+              weights.ponni / weights.json
               canonical_ir.json
               optimization_report.json
 ```
@@ -134,7 +134,8 @@ The package is deliberately split by compiler responsibility:
 | [scheduler.py](scheduler.py) | Dense streaming and bounded-recomputation decisions |
 | [planner.py](planner.py) | Liveness analysis, in-place aliases, and local arena placement |
 | [emitter.py](emitter.py) | Generated Kokkos C++ rendering for all inference APIs |
-| [weights.py](weights.py) | Weight-blob serialization and validation |
+| [weights.py](weights.py) | PONNI-profile Safetensors serialization and validation |
+| [weight_export.py](weight_export.py) | Framework weight adapters and generator ONNX diagnostics |
 | [export.py](export.py) | Deterministic PyTorch fixtures and ONNX verification |
 | [framework_export.py](framework_export.py) | Keras and TensorFlow fixtures and verification |
 | [onnx_reference.py](onnx_reference.py) | CPU ONNX Runtime adapter used by exporters and tests |
@@ -177,8 +178,8 @@ python -m kokkos_nn validate model.onnx --disable-pass dense-epilogue-fusion
 # Compare native workspace placement with diagnostic alternatives.
 python -m kokkos_nn validate model.onnx --analyze-workspace
 
-# Validate a generated weight blob and optional manifest.
-python -m kokkos_nn validate-weights generated/weights.bin \
+# Validate a generated PONNI Safetensors file and optional manifest.
+python -m kokkos_nn validate-weights generated/weights.ponni \
   --manifest generated/weights.json
 ```
 
@@ -240,7 +241,7 @@ the exact number of values one generated inference invocation needs for that ten
 
 ONNX initializers and constant nodes become `ConstantTensor` objects. A constant records its values, dtype, canonical
 layout, and whether it is a learned parameter. Shape constants may be consumed entirely during import or folding;
-learned parameters are later written to `weights.bin`.
+learned parameters are later written to `weights.ponni`.
 
 ### 7.4 Static shape subgraphs
 
@@ -489,18 +490,22 @@ only that many local elements.
 
 ## 13. Phase eight: weights and parameter layout
 
-[weights.py](weights.py) serializes learned constants in deterministic tensor-ID order. It produces:
+[weights.py](weights.py) serializes constant tensors in deterministic lexical-name order. The emitter receives the
+corresponding flattened offsets, so physical file order never becomes an accidental code-generation assumption. It
+produces:
 
-`weights.bin`
-: A fixed little-endian header followed by the packed scalar payload. The header contains magic bytes, format version,
-  scalar code, payload size, and FNV-1a checksum.
+`weights.ponni`
+: A standard Safetensors JSON header and packed little-endian payload. PONNI metadata adds the profile version, exact
+  optimized-graph fingerprint, tensor-schema fingerprint, source/target labels, and an FNV-1a checksum over the entire
+  payload. Ordinary Safetensors readers can still enumerate and read every tensor.
 
 `weights.json`
 : A readable manifest of offsets, shapes, dtypes, learned status, payload size, and checksum.
 
-Generated C++ validates the header, scalar representation, length, and checksum before allocating parameter Views in
-the model's selected Kokkos memory space. It stores both model-scalar parameters and a synchronized FP16
-representation used by `infer_batch_half2`.
+Generated C++ uses the small dependency-free JSON parser in `src/utils/ponni_json.h`. Before allocating parameter
+Views, it validates the profile metadata, exact graph identity, all expected tensor names/dtypes/shapes, overflow-safe
+byte lengths, a packed payload with no holes or overlaps, the schema fingerprint, and the payload checksum. It then
+stores model-scalar parameters and a synchronized FP16 representation used by `infer_batch_half2`.
 
 The generated parameter API supports loading, saving, inspection, updates, and refreshing the packed-half copy.
 
@@ -511,7 +516,7 @@ CMake later compiles the header as part of the integration executable or the use
 
 The generated class has `Scalar`, `ExecutionSpace`, and `MemorySpace` template parameters. Execution defaults to
 `Kokkos::DefaultExecutionSpace`, and memory defaults to that execution space's native memory. The class checks that
-the pair is accessible. These are ordinary Kokkos types; generated models do not require a PONNI allocator or pool.
+the pair is accessible and stores parameters in ordinary Views in the selected memory space.
 
 The emitter maintains parallel access modes so the same optimized graph can target three APIs:
 
@@ -524,13 +529,14 @@ The emitter maintains parallel access modes so the same optimized graph can targ
 
 ### `infer_batch`
 
-- accepts feature-major Kokkos Views;
+- accepts nonempty, feature-major `Kokkos::LayoutRight` Views;
 - launches a `Kokkos::RangePolicy` over samples;
 - stages one sample into local storage;
 - performs model-scalar arithmetic.
 
 ### `infer_batch_half2`
 
+- accepts nonempty, feature-major `Kokkos::LayoutRight` Views;
 - launches over adjacent sample pairs;
 - uses `ponni::TwoHalf` and `ponni::TwoMask` values;
 - uses persistent FP16 parameters;
@@ -550,9 +556,9 @@ After compilation, inspect these files in this order:
 
 1. `optimization_report.json` — the easiest summary of what happened;
 2. `canonical_ir.json` — the complete optimized graph;
-3. `weights.json` — parameter names and binary offsets;
+3. `weights.json` — parameter names, Safetensors offsets, layouts, and validation metadata;
 4. `GeneratedModel.hpp` — the final executable implementation;
-5. `weights.bin` — opaque parameter payload validated through its manifest or CLI.
+5. `weights.ponni` — named tensors inspectable with Safetensors and validated directly or through the CLI.
 
 Useful report fields include:
 
@@ -691,7 +697,7 @@ high-water mark does not improve.
 
 ## 21. Adding a framework exporter
 
-Framework exporters are test/build conveniences around the ONNX contract. A new exporter should:
+Framework model exporters are test/build conveniences around the ONNX contract. A new model exporter should:
 
 1. force CPU-only export behavior before importing the framework;
 2. create deterministic parameters and inputs;
@@ -706,11 +712,21 @@ Framework exporters are test/build conveniences around the ONNX contract. A new 
 Exporter-specific workarounds should stay in exporter code. The importer should accept models based on ONNX semantics,
 not on producer identity.
 
+Separately, [weight_export.py](weight_export.py) contains small adapters for Keras, TensorFlow, PyTorch, JAX/Flax,
+scikit-learn MLPs, and PaddlePaddle. They use duck typing and lazy framework access, so importing the generator does not
+install or import every training framework. A generator-oriented adapter call must receive `onnx_path`; it invokes the
+same `validate_model()` compatibility boundary used by the CLI. A rejection includes the original PONNI diagnostic,
+IR/opset versions, operator counts, boundary shapes/types, and named node inputs/outputs. Keep this compatibility test
+in the generator suite: template mode consumes a narrow explicit layer tuple and cannot make a truthful claim about
+support for an ONNX graph.
+
 ## 22. Correctness rules worth preserving
 
 - ONNX schema version is part of an operation's identity.
 - Import establishes strong invariants; later phases should consume them.
 - Feature-major orientation and the symbolic batch axis must remain explicit.
+- Public PONNI Views use `Kokkos::LayoutRight`; callers copy unsupported layouts before inference.
+- Batch inference requires at least one sample.
 - A graph rewrite must preserve dependencies and evaluation order.
 - Producer/consumer links must be rebuilt after rewrites.
 - Host code must not directly access device Views.

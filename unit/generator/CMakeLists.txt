@@ -21,6 +21,7 @@ set(PONNI_GENERATOR_MODELS
     ${PONNI_GENERATOR_BUILD_DIR}/densenet.onnx
     ${PONNI_GENERATOR_BUILD_DIR}/branching.onnx
     ${PONNI_GENERATOR_BUILD_DIR}/workspace_levels.onnx
+    ${PONNI_GENERATOR_BUILD_DIR}/identity.onnx
     ${PONNI_GENERATOR_BUILD_DIR}/operator_zoo.onnx
     ${PONNI_GENERATOR_BUILD_DIR}/keras_mlp.onnx
     ${PONNI_GENERATOR_BUILD_DIR}/keras_normalization.onnx
@@ -32,6 +33,7 @@ set(PONNI_GENERATOR_MODELS
     ${PONNI_GENERATOR_BUILD_DIR}/densenet_reference.txt
     ${PONNI_GENERATOR_BUILD_DIR}/branching_reference.txt
     ${PONNI_GENERATOR_BUILD_DIR}/workspace_levels_reference.txt
+    ${PONNI_GENERATOR_BUILD_DIR}/identity_reference.txt
     ${PONNI_GENERATOR_BUILD_DIR}/operator_zoo_reference.txt
     ${PONNI_GENERATOR_BUILD_DIR}/keras_mlp_reference.txt
     ${PONNI_GENERATOR_BUILD_DIR}/keras_normalization_reference.txt
@@ -66,6 +68,7 @@ set(PONNI_RESNET10_DIR ${PONNI_GENERATOR_BUILD_DIR}/resnet10_generated)
 set(PONNI_DENSENET_DIR ${PONNI_GENERATOR_BUILD_DIR}/densenet_generated)
 set(PONNI_BRANCHING_DIR ${PONNI_GENERATOR_BUILD_DIR}/branching_generated)
 set(PONNI_OPERATOR_ZOO_DIR ${PONNI_GENERATOR_BUILD_DIR}/operator_zoo_generated)
+set(PONNI_IDENTITY_DIR ${PONNI_GENERATOR_BUILD_DIR}/identity_generated)
 set(PONNI_KERAS_DIR ${PONNI_GENERATOR_BUILD_DIR}/keras_generated)
 set(PONNI_KERAS_NORMALIZATION_DIR ${PONNI_GENERATOR_BUILD_DIR}/keras_normalization_generated)
 set(PONNI_TENSORFLOW_DIR ${PONNI_GENERATOR_BUILD_DIR}/tensorflow_generated)
@@ -77,7 +80,7 @@ foreach(PONNI_WORKSPACE_LEVEL RANGE 1 5)
   set(PONNI_WORKSPACE_LEVEL_DIR ${PONNI_WORKSPACE_LEVEL_ROOT}/level_${PONNI_WORKSPACE_LEVEL})
   list(APPEND PONNI_WORKSPACE_LEVEL_OUTPUTS
        ${PONNI_WORKSPACE_LEVEL_DIR}/WorkspaceLevel${PONNI_WORKSPACE_LEVEL}Model.hpp
-       ${PONNI_WORKSPACE_LEVEL_DIR}/weights.bin
+       ${PONNI_WORKSPACE_LEVEL_DIR}/weights.ponni
        ${PONNI_WORKSPACE_LEVEL_DIR}/optimization_report.json)
   list(APPEND PONNI_WORKSPACE_LEVEL_INCLUDE_DIRS ${PONNI_WORKSPACE_LEVEL_DIR})
   list(APPEND PONNI_WORKSPACE_LEVEL_COMPILE_COMMANDS
@@ -89,35 +92,38 @@ foreach(PONNI_WORKSPACE_LEVEL RANGE 1 5)
 endforeach()
 set(PONNI_GENERATED_OUTPUTS
     ${PONNI_MLP_DIR}/MlpModel.hpp
-    ${PONNI_MLP_DIR}/weights.bin
+    ${PONNI_MLP_DIR}/weights.ponni
     ${PONNI_MLP_DIR}/optimization_report.json
     ${PONNI_RESIDUAL_DIR}/ResidualModel.hpp
-    ${PONNI_RESIDUAL_DIR}/weights.bin
+    ${PONNI_RESIDUAL_DIR}/weights.ponni
     ${PONNI_RESIDUAL_DIR}/optimization_report.json
     ${PONNI_DEEP10_DIR}/Deep10Model.hpp
-    ${PONNI_DEEP10_DIR}/weights.bin
+    ${PONNI_DEEP10_DIR}/weights.ponni
     ${PONNI_DEEP10_DIR}/optimization_report.json
     ${PONNI_RESNET10_DIR}/ResNet10Model.hpp
-    ${PONNI_RESNET10_DIR}/weights.bin
+    ${PONNI_RESNET10_DIR}/weights.ponni
     ${PONNI_RESNET10_DIR}/optimization_report.json
     ${PONNI_DENSENET_DIR}/DenseNetModel.hpp
-    ${PONNI_DENSENET_DIR}/weights.bin
+    ${PONNI_DENSENET_DIR}/weights.ponni
     ${PONNI_DENSENET_DIR}/optimization_report.json
     ${PONNI_BRANCHING_DIR}/BranchingModel.hpp
-    ${PONNI_BRANCHING_DIR}/weights.bin
+    ${PONNI_BRANCHING_DIR}/weights.ponni
     ${PONNI_BRANCHING_DIR}/optimization_report.json)
 list(APPEND PONNI_GENERATED_OUTPUTS
+    ${PONNI_IDENTITY_DIR}/IdentityModel.hpp
+    ${PONNI_IDENTITY_DIR}/weights.ponni
+    ${PONNI_IDENTITY_DIR}/optimization_report.json
     ${PONNI_OPERATOR_ZOO_DIR}/OperatorZooModel.hpp
-    ${PONNI_OPERATOR_ZOO_DIR}/weights.bin
+    ${PONNI_OPERATOR_ZOO_DIR}/weights.ponni
     ${PONNI_OPERATOR_ZOO_DIR}/optimization_report.json
     ${PONNI_KERAS_DIR}/KerasModel.hpp
-    ${PONNI_KERAS_DIR}/weights.bin
+    ${PONNI_KERAS_DIR}/weights.ponni
     ${PONNI_KERAS_DIR}/optimization_report.json
     ${PONNI_KERAS_NORMALIZATION_DIR}/KerasNormalizationModel.hpp
-    ${PONNI_KERAS_NORMALIZATION_DIR}/weights.bin
+    ${PONNI_KERAS_NORMALIZATION_DIR}/weights.ponni
     ${PONNI_KERAS_NORMALIZATION_DIR}/optimization_report.json
     ${PONNI_TENSORFLOW_DIR}/TensorFlowModel.hpp
-    ${PONNI_TENSORFLOW_DIR}/weights.bin
+    ${PONNI_TENSORFLOW_DIR}/weights.ponni
     ${PONNI_TENSORFLOW_DIR}/optimization_report.json
     ${PONNI_WORKSPACE_LEVEL_OUTPUTS})
 
@@ -144,6 +150,9 @@ add_custom_command(
   COMMAND ${PONNI_GENERATOR_ENV} ${PONNI_TEST_PYTHON_EXECUTABLE} -m kokkos_nn compile
           ${PONNI_GENERATOR_BUILD_DIR}/operator_zoo.onnx --output-dir ${PONNI_OPERATOR_ZOO_DIR}
           --model-name OperatorZooModel --quiet
+  COMMAND ${PONNI_GENERATOR_ENV} ${PONNI_TEST_PYTHON_EXECUTABLE} -m kokkos_nn compile
+          ${PONNI_GENERATOR_BUILD_DIR}/identity.onnx --output-dir ${PONNI_IDENTITY_DIR}
+          --model-name IdentityModel --quiet
   COMMAND ${PONNI_GENERATOR_ENV} ${PONNI_TEST_PYTHON_EXECUTABLE} -m kokkos_nn compile
           ${PONNI_GENERATOR_BUILD_DIR}/keras_mlp.onnx --output-dir ${PONNI_KERAS_DIR}
           --model-name KerasModel --quiet
@@ -179,6 +188,7 @@ target_include_directories(generator_integration PRIVATE
   ${PONNI_GENERATOR_SOURCE_DIR}/tests
   ${PONNI_MLP_DIR} ${PONNI_RESIDUAL_DIR} ${PONNI_DEEP10_DIR} ${PONNI_RESNET10_DIR}
   ${PONNI_DENSENET_DIR} ${PONNI_BRANCHING_DIR} ${PONNI_OPERATOR_ZOO_DIR}
+  ${PONNI_IDENTITY_DIR}
   ${PONNI_WORKSPACE_LEVEL_INCLUDE_DIRS})
 target_link_libraries(generator_integration ponni Kokkos::kokkos ${PONNI_LINK_FLAGS})
 target_compile_options(generator_integration PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${PONNI_CXX_FLAGS}>)
@@ -190,19 +200,20 @@ add_test(
 add_test(
   NAME generator_integration_test
   COMMAND generator_integration
-          ${PONNI_MLP_DIR}/weights.bin ${PONNI_GENERATOR_BUILD_DIR}/mlp_reference.txt
-          ${PONNI_RESIDUAL_DIR}/weights.bin ${PONNI_GENERATOR_BUILD_DIR}/residual_reference.txt
-          ${PONNI_DEEP10_DIR}/weights.bin ${PONNI_GENERATOR_BUILD_DIR}/deep10_reference.txt
-          ${PONNI_RESNET10_DIR}/weights.bin ${PONNI_GENERATOR_BUILD_DIR}/resnet10_reference.txt
-          ${PONNI_DENSENET_DIR}/weights.bin ${PONNI_GENERATOR_BUILD_DIR}/densenet_reference.txt
-          ${PONNI_BRANCHING_DIR}/weights.bin ${PONNI_GENERATOR_BUILD_DIR}/branching_reference.txt
-          ${PONNI_OPERATOR_ZOO_DIR}/weights.bin ${PONNI_GENERATOR_BUILD_DIR}/operator_zoo_reference.txt
-          ${PONNI_WORKSPACE_LEVEL_ROOT}/level_1/weights.bin
-          ${PONNI_WORKSPACE_LEVEL_ROOT}/level_2/weights.bin
-          ${PONNI_WORKSPACE_LEVEL_ROOT}/level_3/weights.bin
-          ${PONNI_WORKSPACE_LEVEL_ROOT}/level_4/weights.bin
-          ${PONNI_WORKSPACE_LEVEL_ROOT}/level_5/weights.bin
-          ${PONNI_GENERATOR_BUILD_DIR}/workspace_levels_reference.txt)
+          ${PONNI_MLP_DIR}/weights.ponni ${PONNI_GENERATOR_BUILD_DIR}/mlp_reference.txt
+          ${PONNI_RESIDUAL_DIR}/weights.ponni ${PONNI_GENERATOR_BUILD_DIR}/residual_reference.txt
+          ${PONNI_DEEP10_DIR}/weights.ponni ${PONNI_GENERATOR_BUILD_DIR}/deep10_reference.txt
+          ${PONNI_RESNET10_DIR}/weights.ponni ${PONNI_GENERATOR_BUILD_DIR}/resnet10_reference.txt
+          ${PONNI_DENSENET_DIR}/weights.ponni ${PONNI_GENERATOR_BUILD_DIR}/densenet_reference.txt
+          ${PONNI_BRANCHING_DIR}/weights.ponni ${PONNI_GENERATOR_BUILD_DIR}/branching_reference.txt
+          ${PONNI_OPERATOR_ZOO_DIR}/weights.ponni ${PONNI_GENERATOR_BUILD_DIR}/operator_zoo_reference.txt
+          ${PONNI_WORKSPACE_LEVEL_ROOT}/level_1/weights.ponni
+          ${PONNI_WORKSPACE_LEVEL_ROOT}/level_2/weights.ponni
+          ${PONNI_WORKSPACE_LEVEL_ROOT}/level_3/weights.ponni
+          ${PONNI_WORKSPACE_LEVEL_ROOT}/level_4/weights.ponni
+          ${PONNI_WORKSPACE_LEVEL_ROOT}/level_5/weights.ponni
+          ${PONNI_GENERATOR_BUILD_DIR}/workspace_levels_reference.txt
+          ${PONNI_GENERATOR_BUILD_DIR}/identity_reference.txt)
 
 add_executable(generator_framework_integration ${PONNI_GENERATOR_SOURCE_DIR}/tests/test_framework_generated.cpp)
 add_dependencies(generator_framework_integration generator_model_generation)
@@ -214,10 +225,10 @@ target_compile_options(generator_framework_integration PUBLIC $<$<COMPILE_LANGUA
 add_test(
   NAME generator_framework_integration_test
   COMMAND generator_framework_integration
-          ${PONNI_KERAS_DIR}/weights.bin ${PONNI_GENERATOR_BUILD_DIR}/keras_mlp_reference.txt
-          ${PONNI_KERAS_NORMALIZATION_DIR}/weights.bin
+          ${PONNI_KERAS_DIR}/weights.ponni ${PONNI_GENERATOR_BUILD_DIR}/keras_mlp_reference.txt
+          ${PONNI_KERAS_NORMALIZATION_DIR}/weights.ponni
           ${PONNI_GENERATOR_BUILD_DIR}/keras_normalization_reference.txt
-          ${PONNI_TENSORFLOW_DIR}/weights.bin ${PONNI_GENERATOR_BUILD_DIR}/tensorflow_residual_reference.txt)
+          ${PONNI_TENSORFLOW_DIR}/weights.ponni ${PONNI_GENERATOR_BUILD_DIR}/tensorflow_residual_reference.txt)
 add_test(
   NAME generator_structure_test
   COMMAND ${PONNI_GENERATOR_ENV} ${PONNI_TEST_PYTHON_EXECUTABLE}

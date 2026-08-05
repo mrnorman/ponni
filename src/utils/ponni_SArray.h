@@ -11,8 +11,6 @@ namespace ponni {
     bool         static constexpr is_SArray    = true;
     unsigned int static constexpr rank         = sizeof...(DIMS);
     unsigned int static constexpr num_elements = (DIMS * ...);
-    bool         static constexpr is_cstyle    = true;
-    bool         static constexpr is_fstyle    = false;
     using value_type           = T;
     using const_value_type     = std::add_const_t<T>;
     using non_const_value_type = std::remove_cv_t<T>;
@@ -48,8 +46,6 @@ namespace ponni {
     KOKKOS_INLINE_FUNCTION T * begin() const { return my_data; }
     KOKKOS_INLINE_FUNCTION T * end  () const { return my_data + size(); }
     KOKKOS_INLINE_FUNCTION unsigned int static constexpr size() { return num_elements; }
-    KOKKOS_INLINE_FUNCTION bool         static constexpr span_is_contiguous() { return true; }
-    KOKKOS_INLINE_FUNCTION bool         static constexpr is_allocated() { return true; }
     KOKKOS_INLINE_FUNCTION unsigned int static           extent(std::integral auto i) {
       unsigned int constexpr dims[rank] = {DIMS...};
       if constexpr (kokkos_debug) {
@@ -79,35 +75,6 @@ namespace ponni {
       return ret;
     }
 
-    KOKKOS_INLINE_FUNCTION auto lbounds() const {
-      SArray<unsigned int,rank> ret;
-      for (int i=0; i < rank; i++) { ret(i) = 0; }
-      return ret;
-    }
-
-    KOKKOS_INLINE_FUNCTION auto ubounds() const {
-      unsigned int constexpr dims[rank] = {DIMS...};
-      SArray<unsigned int,rank> ret;
-      for (int i=0; i < rank; i++) { ret(i) = dims[i]-1; }
-      return ret;
-    }
-
-    KOKKOS_INLINE_FUNCTION auto unpack_global_index(std::integral auto iglob) const {
-      unsigned int constexpr dims[rank] = {DIMS...};
-      std::array<unsigned int,rank> constexpr offsets = [=] {
-        std::array<unsigned int,rank> result = {};
-        for (int i=0; i < static_cast<int>(rank); i++) {
-          result[i] = 1;
-          for (int j = i+1; j < static_cast<int>(rank); j++) result[i] *= dims[j];
-        }
-        return result;
-      }();
-      SArray<unsigned int,rank> ret;
-      for (int i=0; i < rank; i++) { ret(i) = iglob / offsets[i]; }
-      return ret;
-    }
-
-    template <class NEW> using TypeAs = SArray<NEW,DIMS...>;
   };
 
 }
