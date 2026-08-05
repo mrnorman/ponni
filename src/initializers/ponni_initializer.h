@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Kokkos_Random.hpp>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <ctime>
@@ -11,7 +12,8 @@ namespace ponni {
   namespace init_detail {
 
     inline void require_finite(double value, char const * message) {
-      if (!std::isfinite(value)) throw std::invalid_argument(message);
+      std::uint64_t const bits = std::bit_cast<std::uint64_t>(value);
+      if ((bits & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL) throw std::invalid_argument(message);
     }
 
     inline size_t effective_seed(size_t seed) {
