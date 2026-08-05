@@ -77,9 +77,10 @@ class FrameworkExportTests(unittest.TestCase):
                 "keras.Model.export",
             )
             self.assertEqual(keras_report["optimized_operations"].count("DenseBiasActivation"), 2)
-            self.assertIn("ResidualAddActivation", tensorflow_report["optimized_operations"])
-            self.assertIn("Reciprocal", normalization_report["optimized_operations"])
+            self.assertIn("DenseResidualActivation", tensorflow_report["optimized_operations"])
+            self.assertIn("PointwiseRegion", normalization_report["optimized_operations"])
             self.assertIn("Softmax", normalization_report["optimized_operations"])
+            self.assertLessEqual(normalization_report["sample_local_storage"]["workspace_elements"], 7)
 
     def test_keras_functional_branching_no_bias_concat_and_residual_spelling(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -105,8 +106,8 @@ class FrameworkExportTests(unittest.TestCase):
             self._assert_onnx_matches(model_path, values, expected)
 
             report = compile_model(model_path, root / "generated", model_name="KerasBranchModel")
-            self.assertIn("Concat", report["optimized_operations"])
-            self.assertIn("ResidualAddActivation", report["optimized_operations"])
+            self.assertNotIn("Concat", report["optimized_operations"])
+            self.assertIn("DenseResidualActivation", report["optimized_operations"])
             self.assertEqual(report["learned_parameter_count"], 65)
             self.assertGreaterEqual(report["dense_chain_schedule"]["decision_counts"]["retain"], 1)
 
@@ -133,7 +134,7 @@ class FrameworkExportTests(unittest.TestCase):
             leaky = next(node for node in graph.nodes if node.op == "LeakyRelu")
             self.assertAlmostEqual(float(leaky.attributes["alpha"]), 0.2, places=6)
             report = compile_model(model_path, root / "generated", model_name="KerasActivationModel")
-            self.assertEqual(report["optimized_operations"], ["LeakyRelu", "Softplus"])
+            self.assertEqual(report["optimized_operations"], ["ElementwiseChain"])
 
     def test_keras_elu_boolean_select_decomposition_compiles(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -156,7 +157,7 @@ class FrameworkExportTests(unittest.TestCase):
             self.assertIn("Cast", operations)
             report = compile_model(model_path, root / "generated", model_name="KerasEluModel")
             self.assertGreater(report["sample_local_storage"]["mask_workspace_elements"], 0)
-            self.assertIn("Cast", report["optimized_operations"])
+            self.assertIn("Cast", report["optimized_component_operations"])
 
     def test_tensorflow_transposed_weight_bias_add_reshape_and_shared_branches(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

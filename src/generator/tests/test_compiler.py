@@ -83,6 +83,15 @@ class CompilerTests(unittest.TestCase):
             exported = export_operator_zoo(root)
             original, optimized, _ = load_and_optimize(exported.model_path)
             operations = {node.op for node in optimized.nodes}
+
+            def record_steps(steps) -> None:
+                for step in steps:
+                    operations.add(step["op"])
+                    record_steps(step.get("attributes", {}).get("steps", []))
+
+            for node in optimized.nodes:
+                record_steps(node.attributes.get("steps", []))
+                record_steps(node.attributes.get("map_steps", []))
             required = {
                 "Abs", "Acos", "Acosh", "And", "Asin", "Asinh", "Atan", "Atanh", "BatchNormalization", "Cast",
                 "Ceil", "Celu", "Clip", "CompareSelect", "Cos", "Cosh", "Elu", "Equal", "Erf", "Exp", "Floor",
@@ -108,12 +117,12 @@ class CompilerTests(unittest.TestCase):
             self.assertIn("Scalar exponential_sum", generated)
             self.assertIn("Scalar second_moment", generated)
             self.assertIn("ponni::TwoHalf exponential_sum", generated)
-            self.assertIn("ponni::TwoMask mask_workspace", generated)
+            self.assertNotIn("ponni::TwoMask mask_workspace", generated)
             self.assertIn("ponni::TwoHalf::select", generated)
             self.assertNotIn("Kokkos::TeamPolicy", generated)
             self.assertNotIn("preactivation", generated)
             self.assertEqual(report["storage"]["external_workspace_bytes"], 0)
-            self.assertGreater(report["sample_local_storage"]["mask_workspace_elements"], 0)
+            self.assertEqual(report["sample_local_storage"]["mask_workspace_elements"], 0)
             self.assertEqual(report["onnx_opsets"]["ai.onnx"], 21)
             self.assertIn("Gelu:20", report["onnx_operator_schema_counts"])
             self.assertEqual(report["learned_parameter_count"], 33)
@@ -142,9 +151,10 @@ class CompilerTests(unittest.TestCase):
                 model,
                 root / "unfused",
                 model_name="WhereModel",
-                disabled_passes={"comparison-where-fusion"},
+                disabled_passes={"comparison-where-fusion", "pointwise-region-fusion"},
             )
-            self.assertIn("CompareSelect", fused["optimized_operations"])
+            self.assertEqual(fused["optimized_operations"], ["PointwiseRegion"])
+            self.assertIn("CompareSelect", fused["optimized_component_operations"])
             self.assertEqual(fused["sample_local_storage"]["mask_workspace_elements"], 0)
             self.assertEqual(unfused["sample_local_storage"]["mask_workspace_elements"], 4)
             self.assertIn("Where", unfused["optimized_operations"])
@@ -338,13 +348,65 @@ class CompilerTests(unittest.TestCase):
             schedules = [schedule_dense_chains(optimized, level) for level in range(1, 4)]
             self.assertEqual([len(schedule.pair_by_consumer) for schedule in schedules], [0, 1, 2])
             self.assertEqual(report["sample_local_storage"]["streamed_dense_pairs"], 2)
-            self.assertEqual(report["dense_chain_schedule"]["eliminated_elements"], 13)
-            self.assertEqual(report["sample_local_storage"]["workspace_elements"], 13)
+            self.assertEqual(report["dense_chain_schedule"]["eliminated_elements"], 15)
+            self.assertEqual(report["sample_local_storage"]["workspace_elements"], 11)
             self.assertEqual(
                 report["dense_chain_schedule"]["decision_counts"],
                 {"materialize": 2, "stream": 2, "retain": 0, "recompute": 0},
             )
-            self.assertIn("Scalar workspace[13]", generated)
+            self.assertIn("Scalar workspace[11]", generated)
+
+    def test_virtual_dense_input_is_not_misclassified_as_a_streaming_edge(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rng = np.random.default_rng(113)
+            initializers = [
+                numpy_helper.from_array(rng.standard_normal((4, 4)).astype(np.float32), "weight0"),
+                numpy_helper.from_array(rng.standard_normal(4).astype(np.float32), "bias0"),
+                numpy_helper.from_array(rng.standard_normal((8, 2)).astype(np.float32), "weight1"),
+                numpy_helper.from_array(rng.standard_normal(2).astype(np.float32), "bias1"),
+            ]
+            nodes = [
+                helper.make_node("Transpose", ["input"], ["x"], perm=[1, 0]),
+                helper.make_node("Gemm", ["x", "weight0", "bias0"], ["hidden0"]),
+                helper.make_node("Tanh", ["hidden0"], ["hidden"]),
+                helper.make_node("Concat", ["hidden", "x"], ["joined"], axis=1),
+                helper.make_node("Gemm", ["joined", "weight1", "bias1"], ["result"]),
+                helper.make_node("Transpose", ["result"], ["output"], perm=[1, 0]),
+            ]
+            model = _save_model(
+                root / "virtual_stream.onnx", nodes, initializers, output_shape=(2, "batch")
+            )
+            original, optimized, _ = load_and_optimize(model)
+            dense_consumer = optimized.nodes[1]
+            self.assertIn("input_map", dense_consumer.attributes)
+            schedule = schedule_dense_chains(optimized, 5)
+            self.assertEqual(schedule.pair_by_consumer, {})
+            values = rng.standard_normal((4, 7)).astype(np.float32)
+            np.testing.assert_allclose(run_graph(original, values), run_graph(optimized, values), rtol=2e-6, atol=2e-6)
+
+    def test_plain_linear_dense_pair_can_stream_without_an_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rng = np.random.default_rng(163)
+            initializers = [
+                numpy_helper.from_array(rng.standard_normal((4, 7)).astype(np.float32), "weight0"),
+                numpy_helper.from_array(rng.standard_normal(7).astype(np.float32), "bias0"),
+                numpy_helper.from_array(rng.standard_normal((7, 2)).astype(np.float32), "weight1"),
+                numpy_helper.from_array(rng.standard_normal(2).astype(np.float32), "bias1"),
+            ]
+            nodes = [
+                helper.make_node("Transpose", ["input"], ["x"], perm=[1, 0]),
+                helper.make_node("Gemm", ["x", "weight0", "bias0"], ["hidden"]),
+                helper.make_node("Gemm", ["hidden", "weight1", "bias1"], ["result"]),
+                helper.make_node("Transpose", ["result"], ["output"], perm=[1, 0]),
+            ]
+            model = _save_model(root / "linear_stream.onnx", nodes, initializers, output_shape=(2, "batch"))
+            _, optimized, _ = load_and_optimize(model)
+            schedule = schedule_dense_chains(optimized, 3)
+            self.assertEqual(len(schedule.pair_by_consumer), 1)
+            report = compile_model(model, root / "out", model_name="LinearStreamModel")
+            self.assertEqual(report["sample_local_storage"]["workspace_elements"], 0)
 
     def test_workspace_reduction_aggressiveness_rejects_values_outside_one_through_five(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -373,7 +435,9 @@ class CompilerTests(unittest.TestCase):
                 helper.make_node("Add", ["b", "c"], ["output"]),
             ]
             model = _save_model(root / "reuse.onnx", nodes, constants, output_shape=(4, "batch"))
-            _, optimized, _ = load_and_optimize(model, {"elementwise-chain-fusion"})
+            _, optimized, _ = load_and_optimize(
+                model, {"elementwise-chain-fusion", "pointwise-region-fusion"}
+            )
             plan = plan_storage(optimized)
             self.assertGreaterEqual(plan.reused_tensors, 1)
             offsets = [slot.offset for slot in plan.slots.values()]
@@ -460,14 +524,295 @@ class CompilerTests(unittest.TestCase):
             ]
             model = _save_model(root / "concat.onnx", nodes, [weight])
             original, optimized, _ = load_and_optimize(model)
-            self.assertEqual([node.op for node in optimized.nodes], ["Concat", "Dense"])
+            self.assertEqual([node.op for node in optimized.nodes], ["Dense"])
+            self.assertEqual(len(optimized.nodes[0].attributes["input_map"]), 8)
             values = np.arange(28, dtype=np.float32).reshape(4, 7) / 11
             np.testing.assert_allclose(run_graph(original, values), run_graph(optimized, values), rtol=1e-6, atol=1e-6)
             compile_model(model, root / "out", model_name="ConcatModel")
             generated = (root / "out" / "ConcatModel.hpp").read_text()
-            self.assertIn("workspace[0 + 0 + i] = inputs(i)", generated)
-            self.assertIn("ponni::TwoHalf workspace", generated)
-            self.assertIn("workspace[0 + 4 + i] = inputs(i)", generated)
+            self.assertNotIn("Scalar workspace[", generated)
+            self.assertNotIn("ponni::TwoHalf workspace[", generated)
+            self.assertIn("sum += parameters_", generated)
+            self.assertIn("* inputs(", generated)
+
+    def test_static_gather_feeds_dense_without_materializing_reordered_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            indices = numpy_helper.from_array(np.array([3, 1, 1], dtype=np.int64), "indices")
+            weight = numpy_helper.from_array(np.arange(6, dtype=np.float32).reshape(3, 2) / 7, "weight")
+            nodes = [
+                helper.make_node("Transpose", ["input"], ["x"], perm=[1, 0]),
+                helper.make_node("Gather", ["x", "indices"], ["picked"], axis=1),
+                helper.make_node("Gemm", ["picked", "weight"], ["dense"]),
+                helper.make_node("Transpose", ["dense"], ["output"], perm=[1, 0]),
+            ]
+            model = _save_model(root / "gather_dense.onnx", nodes, [indices, weight], output_shape=(2, "batch"))
+            original, optimized, _ = load_and_optimize(model)
+            self.assertEqual([node.op for node in optimized.nodes], ["Dense"])
+            self.assertEqual(
+                [entry["index"] for entry in optimized.nodes[0].attributes["input_map"]], [3, 1, 1]
+            )
+            values = np.random.default_rng(101).standard_normal((4, 5)).astype(np.float32)
+            np.testing.assert_allclose(run_graph(original, values), run_graph(optimized, values), rtol=0, atol=0)
+            report = compile_model(model, root / "out", model_name="GatherDenseModel")
+            self.assertEqual(report["sample_local_storage"]["workspace_elements"], 0)
+
+    def test_nested_concat_and_gather_maps_compose_before_dense(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            left_indices = numpy_helper.from_array(np.array([5, 1], dtype=np.int64), "left_indices")
+            right_indices = numpy_helper.from_array(np.array([3, 0], dtype=np.int64), "right_indices")
+            final_indices = numpy_helper.from_array(np.array([2, 1, 3], dtype=np.int64), "final_indices")
+            weight = numpy_helper.from_array(np.arange(9, dtype=np.float32).reshape(3, 3) / 13, "weight")
+            nodes = [
+                helper.make_node("Transpose", ["input"], ["x"], perm=[1, 0]),
+                helper.make_node("Gather", ["x", "left_indices"], ["left"], axis=1),
+                helper.make_node("Gather", ["x", "right_indices"], ["right"], axis=1),
+                helper.make_node("Concat", ["left", "right"], ["joined"], axis=1),
+                helper.make_node("Gather", ["joined", "final_indices"], ["picked"], axis=1),
+                helper.make_node("Gemm", ["picked", "weight"], ["dense"]),
+                helper.make_node("Transpose", ["dense"], ["output"], perm=[1, 0]),
+            ]
+            model = _save_model(
+                root / "nested_virtual.onnx", nodes,
+                [left_indices, right_indices, final_indices, weight],
+                input_shape=(6, "batch"), output_shape=(3, "batch"),
+            )
+            original, optimized, _ = load_and_optimize(model)
+            self.assertEqual([node.op for node in optimized.nodes], ["Dense"])
+            self.assertEqual(
+                [entry["index"] for entry in optimized.nodes[0].attributes["input_map"]], [3, 1, 0]
+            )
+            values = np.random.default_rng(127).standard_normal((6, 5)).astype(np.float32)
+            np.testing.assert_allclose(run_graph(original, values), run_graph(optimized, values), rtol=0, atol=0)
+
+    def test_gather_of_dense_output_prunes_weight_and_bias_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            indices = numpy_helper.from_array(np.array([3, 1, 1], dtype=np.int64), "indices")
+            weight_values = np.arange(16, dtype=np.float32).reshape(4, 4) / 17
+            bias_values = np.arange(4, dtype=np.float32) / 19
+            nodes = [
+                helper.make_node("Transpose", ["input"], ["x"], perm=[1, 0]),
+                helper.make_node("Gemm", ["x", "weight", "bias"], ["dense"], transB=1),
+                helper.make_node("Gather", ["dense", "indices"], ["picked"], axis=1),
+                helper.make_node("Transpose", ["picked"], ["output"], perm=[1, 0]),
+            ]
+            model = _save_model(
+                root / "dense_gather.onnx", nodes,
+                [numpy_helper.from_array(weight_values, "weight"),
+                 numpy_helper.from_array(bias_values, "bias"), indices],
+                output_shape=(3, "batch"),
+            )
+            original, optimized, _ = load_and_optimize(model)
+            self.assertEqual([node.op for node in optimized.nodes], ["Dense"])
+            dense = optimized.nodes[0]
+            np.testing.assert_array_equal(
+                optimized.constants[optimized.tensors[dense.attributes["weight"]].constant_name].values,
+                weight_values[[3, 1, 1], :],
+            )
+            values = np.random.default_rng(131).standard_normal((4, 6)).astype(np.float32)
+            np.testing.assert_allclose(run_graph(original, values), run_graph(optimized, values), rtol=0, atol=0)
+
+    def test_dense_residual_epilogue_eliminates_linear_temporary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rng = np.random.default_rng(103)
+            initializers = [
+                numpy_helper.from_array(rng.standard_normal((4, 6)).astype(np.float32), "weight0"),
+                numpy_helper.from_array(rng.standard_normal(6).astype(np.float32), "bias0"),
+                numpy_helper.from_array(rng.standard_normal((6, 4)).astype(np.float32), "weight1"),
+                numpy_helper.from_array(rng.standard_normal(4).astype(np.float32), "bias1"),
+            ]
+            nodes = [
+                helper.make_node("Transpose", ["input"], ["x"], perm=[1, 0]),
+                helper.make_node("Gemm", ["x", "weight0", "bias0"], ["dense0"]),
+                helper.make_node("Tanh", ["dense0"], ["hidden"]),
+                helper.make_node("Gemm", ["hidden", "weight1", "bias1"], ["linear"]),
+                helper.make_node("Add", ["linear", "x"], ["residual"]),
+                helper.make_node("Sigmoid", ["residual"], ["activated"]),
+                helper.make_node("Transpose", ["activated"], ["output"], perm=[1, 0]),
+            ]
+            model = _save_model(root / "dense_residual.onnx", nodes, initializers, output_shape=(4, "batch"))
+            original, optimized, _ = load_and_optimize(model)
+            self.assertEqual([node.op for node in optimized.nodes], ["DenseBiasActivation", "DenseResidualActivation"])
+            values = rng.standard_normal((4, 7)).astype(np.float32)
+            np.testing.assert_allclose(run_graph(original, values), run_graph(optimized, values), rtol=2e-6, atol=2e-6)
+            report = compile_model(model, root / "out", model_name="DenseResidualModel")
+            self.assertEqual(report["sample_local_storage"]["workspace_elements"], 0)
+            self.assertEqual(report["sample_local_storage"]["streamed_dense_pairs"], 1)
+
+    def test_ordered_dense_batchnorm_activation_epilogue_fuses_without_reassociation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rng = np.random.default_rng(133)
+            initializers = [
+                numpy_helper.from_array(rng.standard_normal((4, 4)).astype(np.float32), "weight"),
+                numpy_helper.from_array(rng.standard_normal(4).astype(np.float32), "bias"),
+                numpy_helper.from_array(rng.uniform(0.5, 1.5, 4).astype(np.float32), "scale"),
+                numpy_helper.from_array(rng.standard_normal(4).astype(np.float32), "bn_bias"),
+                numpy_helper.from_array(rng.standard_normal(4).astype(np.float32), "mean"),
+                numpy_helper.from_array(rng.uniform(0.5, 1.5, 4).astype(np.float32), "variance"),
+            ]
+            nodes = [
+                helper.make_node("Transpose", ["input"], ["x"], perm=[1, 0]),
+                helper.make_node("Gemm", ["x", "weight", "bias"], ["dense"]),
+                helper.make_node(
+                    "BatchNormalization", ["dense", "scale", "bn_bias", "mean", "variance"], ["normalized"]
+                ),
+                helper.make_node("Relu", ["normalized"], ["activated"]),
+                helper.make_node("Transpose", ["activated"], ["output"], perm=[1, 0]),
+            ]
+            model = _save_model(root / "dense_epilogue.onnx", nodes, initializers, output_shape=(4, "batch"))
+            original, optimized, _ = load_and_optimize(model)
+            self.assertEqual([node.op for node in optimized.nodes], ["DenseEpilogue"])
+            self.assertEqual(
+                [step["op"] for step in optimized.nodes[0].attributes["epilogue_steps"]],
+                ["BatchNormalization", "Relu"],
+            )
+            values = rng.standard_normal((4, 6)).astype(np.float32)
+            np.testing.assert_allclose(run_graph(original, values), run_graph(optimized, values), rtol=2e-6, atol=2e-6)
+            report = compile_model(model, root / "out", model_name="DenseEpilogueModel")
+            self.assertEqual(report["sample_local_storage"]["workspace_elements"], 0)
+
+    def test_pointwise_map_streams_into_reduction_and_reuses_last_consumer_storage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            offset = numpy_helper.from_array(np.array(0.25, dtype=np.float32), "offset")
+            axes = numpy_helper.from_array(np.array([0], dtype=np.int64), "axes")
+            nodes = [
+                helper.make_node("Sub", ["input", "offset"], ["centered"]),
+                helper.make_node("Mul", ["centered", "centered"], ["squared"]),
+                helper.make_node("ReduceMean", ["squared", "axes"], ["output"], keepdims=1),
+            ]
+            model = _save_model(root / "mapped_reduce.onnx", nodes, [offset, axes], output_shape=(1, "batch"))
+            original, optimized, _ = load_and_optimize(model)
+            self.assertEqual([node.op for node in optimized.nodes], ["ReduceMean"])
+            self.assertEqual([step["op"] for step in optimized.nodes[0].attributes["map_steps"]], ["Sub", "Mul"])
+            values = np.random.default_rng(107).standard_normal((4, 9)).astype(np.float32)
+            np.testing.assert_allclose(run_graph(original, values), run_graph(optimized, values), rtol=0, atol=0)
+            report = compile_model(model, root / "out", model_name="MappedReductionModel")
+            self.assertEqual(report["sample_local_storage"]["workspace_elements"], 0)
+
+    def test_reconverging_pointwise_region_streams_into_reduction(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            offset = numpy_helper.from_array(np.array(0.25, dtype=np.float32), "offset")
+            axes = numpy_helper.from_array(np.array([0], dtype=np.int64), "axes")
+            nodes = [
+                helper.make_node("Sub", ["input", "offset"], ["centered"]),
+                helper.make_node("Mul", ["centered", "centered"], ["squared"]),
+                helper.make_node("Abs", ["centered"], ["absolute"]),
+                helper.make_node("Add", ["squared", "absolute"], ["mapped"]),
+                helper.make_node("ReduceMean", ["mapped", "axes"], ["output"], keepdims=1),
+            ]
+            model = _save_model(root / "region_reduce.onnx", nodes, [offset, axes], output_shape=(1, "batch"))
+            original, optimized, _ = load_and_optimize(model)
+            self.assertEqual([node.op for node in optimized.nodes], ["ReduceMean"])
+            self.assertIn("map_region_steps", optimized.nodes[0].attributes)
+            values = np.random.default_rng(137).standard_normal((4, 9)).astype(np.float32)
+            np.testing.assert_allclose(run_graph(original, values), run_graph(optimized, values), rtol=0, atol=0)
+            report = compile_model(model, root / "out", model_name="RegionReductionModel")
+            self.assertEqual(report["sample_local_storage"]["workspace_elements"], 0)
+
+    def test_logical_predicate_where_and_activation_fuse_as_one_region(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            low = numpy_helper.from_array(np.array(-0.5, dtype=np.float32), "low")
+            high = numpy_helper.from_array(np.array(0.75, dtype=np.float32), "high")
+            zero = numpy_helper.from_array(np.array(0, dtype=np.float32), "zero")
+            nodes = [
+                helper.make_node("Greater", ["input", "low"], ["above"]),
+                helper.make_node("Less", ["input", "high"], ["below"]),
+                helper.make_node("And", ["above", "below"], ["inside"]),
+                helper.make_node("Where", ["inside", "input", "zero"], ["selected"]),
+                helper.make_node("Relu", ["selected"], ["output"]),
+            ]
+            model = _save_model(root / "predicate_region.onnx", nodes, [low, high, zero], output_shape=(4, "batch"))
+            original, optimized, _ = load_and_optimize(model)
+            self.assertEqual([node.op for node in optimized.nodes], ["PointwiseRegion"])
+            values = np.random.default_rng(139).standard_normal((4, 8)).astype(np.float32)
+            np.testing.assert_allclose(run_graph(original, values), run_graph(optimized, values), rtol=0, atol=0)
+            report = compile_model(model, root / "out", model_name="PredicateRegionModel")
+            self.assertEqual(report["sample_local_storage"]["mask_workspace_elements"], 0)
+
+    def test_stable_softmax_decomposition_canonicalizes_before_pointwise_fusion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            axes = numpy_helper.from_array(np.array([0], dtype=np.int64), "axes")
+            nodes = [
+                helper.make_node("ReduceMax", ["input", "axes"], ["maximum"], keepdims=1),
+                helper.make_node("Sub", ["input", "maximum"], ["shifted"]),
+                helper.make_node("Exp", ["shifted"], ["exponential"]),
+                helper.make_node("ReduceSum", ["exponential", "axes"], ["total"], keepdims=1),
+                helper.make_node("Div", ["exponential", "total"], ["output"]),
+            ]
+            model = _save_model(root / "decomposed_softmax.onnx", nodes, [axes], output_shape=(4, "batch"))
+            original, optimized, _ = load_and_optimize(model)
+            self.assertEqual([node.op for node in optimized.nodes], ["Softmax"])
+            values = np.random.default_rng(149).standard_normal((4, 7)).astype(np.float32)
+            np.testing.assert_allclose(run_graph(original, values), run_graph(optimized, values), rtol=2e-6, atol=2e-6)
+
+    def test_layernorm_decomposition_canonicalizes_before_region_fusion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            axes = numpy_helper.from_array(np.array([1], dtype=np.int64), "axes")
+            epsilon = numpy_helper.from_array(np.array(1e-5, dtype=np.float32), "epsilon")
+            scale = numpy_helper.from_array(np.array([1.1, 0.9, 1.2, 0.8], dtype=np.float32), "scale")
+            bias = numpy_helper.from_array(np.array([0.1, -0.2, 0.3, 0.0], dtype=np.float32), "bias")
+            nodes = [
+                helper.make_node("Transpose", ["input"], ["x"], perm=[1, 0]),
+                helper.make_node("ReduceMean", ["x", "axes"], ["mean"], keepdims=1),
+                helper.make_node("Sub", ["x", "mean"], ["centered"]),
+                helper.make_node("Mul", ["centered", "centered"], ["square"]),
+                helper.make_node("ReduceMean", ["square", "axes"], ["variance"], keepdims=1),
+                helper.make_node("Add", ["variance", "epsilon"], ["stabilized"]),
+                helper.make_node("Sqrt", ["stabilized"], ["deviation"]),
+                helper.make_node("Div", ["centered", "deviation"], ["normalized"]),
+                helper.make_node("Mul", ["normalized", "scale"], ["scaled"]),
+                helper.make_node("Add", ["scaled", "bias"], ["result"]),
+                helper.make_node("Transpose", ["result"], ["output"], perm=[1, 0]),
+            ]
+            model = _save_model(
+                root / "decomposed_layernorm.onnx", nodes, [axes, epsilon, scale, bias], output_shape=(4, "batch")
+            )
+            original, optimized, _ = load_and_optimize(model)
+            self.assertEqual([node.op for node in optimized.nodes], ["LayerNormalization"])
+            values = np.random.default_rng(151).standard_normal((4, 8)).astype(np.float32)
+            np.testing.assert_allclose(run_graph(original, values), run_graph(optimized, values), rtol=3e-6, atol=3e-6)
+
+    def test_mish_decomposition_canonicalizes_to_native_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            nodes = [
+                helper.make_node("Softplus", ["input"], ["softplus"]),
+                helper.make_node("Tanh", ["softplus"], ["tanh"]),
+                helper.make_node("Mul", ["input", "tanh"], ["output"]),
+            ]
+            model = _save_model(root / "decomposed_mish.onnx", nodes, [], output_shape=(4, "batch"))
+            original, optimized, _ = load_and_optimize(model)
+            self.assertEqual([node.op for node in optimized.nodes], ["Mish"])
+            values = np.random.default_rng(157).standard_normal((4, 5)).astype(np.float32)
+            np.testing.assert_allclose(run_graph(original, values), run_graph(optimized, values), rtol=2e-6, atol=2e-6)
+
+    def test_exact_gelu_decomposition_canonicalizes_to_native_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sqrt_two = numpy_helper.from_array(np.array(np.sqrt(2), dtype=np.float32), "sqrt_two")
+            one = numpy_helper.from_array(np.array(1, dtype=np.float32), "one")
+            half = numpy_helper.from_array(np.array(0.5, dtype=np.float32), "half")
+            nodes = [
+                helper.make_node("Div", ["input", "sqrt_two"], ["scaled"]),
+                helper.make_node("Erf", ["scaled"], ["erf"]),
+                helper.make_node("Add", ["erf", "one"], ["offset"]),
+                helper.make_node("Mul", ["input", "offset"], ["product"]),
+                helper.make_node("Mul", ["product", "half"], ["output"]),
+            ]
+            model = _save_model(root / "decomposed_gelu.onnx", nodes, [sqrt_two, one, half], output_shape=(4, "batch"))
+            original, optimized, _ = load_and_optimize(model)
+            self.assertEqual([node.op for node in optimized.nodes], ["Gelu"])
+            values = np.random.default_rng(167).standard_normal((4, 5)).astype(np.float32)
+            np.testing.assert_allclose(run_graph(original, values), run_graph(optimized, values), rtol=2e-6, atol=2e-6)
 
     def test_multiple_consumers_prevent_illegal_dense_activation_fusion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -489,7 +834,9 @@ class CompilerTests(unittest.TestCase):
             model = _save_model(root / "chain.onnx", nodes, [scalar0, scalar1], output_shape=(4, "batch"))
             _, optimized, _ = load_and_optimize(model)
             self.assertEqual([node.op for node in optimized.nodes], ["ElementwiseChain"])
-            _, unfused, _ = load_and_optimize(model, {"elementwise-chain-fusion"})
+            _, unfused, _ = load_and_optimize(
+                model, {"elementwise-chain-fusion", "pointwise-region-fusion"}
+            )
             self.assertEqual([node.op for node in unfused.nodes], ["Mul", "Add"])
 
     def test_converging_elementwise_branches_are_owned_by_only_one_fused_chain(self) -> None:
@@ -507,7 +854,7 @@ class CompilerTests(unittest.TestCase):
             ]
             model = _save_model(root / "converging.onnx", nodes, constants, output_shape=(4, "batch"))
             original, optimized, _ = load_and_optimize(model)
-            self.assertEqual([node.op for node in optimized.nodes].count("ElementwiseChain"), 1)
+            self.assertEqual([node.op for node in optimized.nodes], ["PointwiseRegion"])
             for tensor in optimized.tensors.values():
                 if tensor.is_constant or tensor.is_input:
                     continue

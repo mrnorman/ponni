@@ -17,6 +17,14 @@ Legal dense pairs can be streamed instead of materialized, and the two highest w
 recompute selected shared branches. The generator does not use architecture-specific thresholds, launch bounds, team
 scratch, or an autotuner.
 
+Nested static `Concat` and `Gather` results are composed into virtual dense-input index maps, and a `Gather` selecting
+dense output rows prunes the unused weights and bias entries. Ordered dense epilogues, mixed predicate/selection
+regions, linear and reconverging pointwise regions, and pointwise DAGs feeding one-pass reductions are fused without
+reassociating arithmetic. Stable Softmax/LogSoftmax, LayerNormalization, and common decomposed activation spellings
+are canonicalized before general region fusion. The local-storage planner applies reviewed in-place aliases and
+compares deterministic arena placements; dense streaming and small recomputation sets are scored against planned
+arena high-water.
+
 ## Installation and use
 
 Install the build-time package in a Python environment containing NumPy and ONNX:
@@ -34,6 +42,24 @@ python -m kokkos_nn compile model.onnx --output-dir generated --model-name MyMod
 
 Both commands print their JSON report by default. Add `--quiet` to suppress that terminal output;
 `compile` still writes its report files, and the CMake generation targets use this mode.
+
+Add `--onnx-preprocess` to run provider-neutral ONNX Script constant folding, function inlining, shape inference, and
+dead-code cleanup before importing PONNI's canonical IR. This is opt-in so exporter compatibility remains explicit;
+PONNI still validates the rewritten graph against its reviewed ONNX contract and compares the final optimized IR with
+the original model.
+
+Add `--analyze-workspace` to compare the selected native arena layout with the original greedy placement and an exact
+small-graph oracle. PONNI exhaustively places up to seven live storage groups in normal compilation, which removes
+arena fragmentation without changing generated arithmetic. The analysis mode extends exhaustive search through nine
+groups. For larger layouts it uses deterministic OR-Tools CP-SAT when the optional `exact` dependency is installed:
+
+```bash
+python -m pip install -e 'src/generator[exact]'
+python -m kokkos_nn validate model.onnx --analyze-workspace
+```
+
+The oracle covers arena placement for the already selected fusion, streaming, and recomputation schedule; it does not
+claim global optimality over every possible graph rewrite or recomputation strategy.
 
 ### Workspace-reduction aggressiveness
 
@@ -67,7 +93,7 @@ Disable an optimization pass when diagnosing a graph:
 
 ```bash
 python -m kokkos_nn compile model.onnx --output-dir generated \
-  --disable-pass fuse_dense_bias_activation
+  --disable-pass dense-epilogue-fusion
 ```
 
 `python -m kokkos_nn list-passes` prints the available deterministic passes.
@@ -95,9 +121,9 @@ tensors, constants, explicit producer/consumer links, canonical operations, norm
 compatibility metadata. Framework-specific transpose and reshape scaffolding is folded away when proven to preserve
 the feature-major representation.
 
-`canonical_ir.json` is the canonical graph after optimization. `optimization_report.json` records original and
-optimized operation lists, pass results, storage slots, dense streaming decisions, fusion rejections, schema/opset
-metadata, and the three generated targets.
+`canonical_ir.json` is the canonical graph after optimization. `optimization_report.json` records original,
+optimized, and nested fused-component operation lists, pass results, storage slots, dense streaming decisions, fusion
+rejections, schema/opset metadata, and the three generated targets.
 
 ## Generated APIs
 

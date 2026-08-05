@@ -349,11 +349,11 @@ def _fold_static_shape_nodes(graph: Graph) -> None:
     graph.renumber_nodes()
 
 
-def import_onnx(path: str | Path) -> Graph:
+def import_onnx(path: str | Path | Any) -> Graph:
     onnx, numpy_helper = _onnx_modules()
-    model_path = Path(path)
+    model_path = Path(path) if isinstance(path, (str, Path)) else None
     try:
-        model = onnx.load(model_path)
+        model = onnx.load(model_path) if model_path is not None else path
         if not MIN_SUPPORTED_IR_VERSION <= model.ir_version <= MAX_SUPPORTED_IR_VERSION:
             raise CompilerError(
                 f"unsupported ONNX IR version {model.ir_version}; PONNI supports IR versions "
@@ -366,7 +366,8 @@ def import_onnx(path: str | Path) -> Graph:
     except CompilerError:
         raise
     except Exception as exc:
-        raise CompilerError(f"ONNX validation or shape inference failed for {model_path}: {exc}") from exc
+        source = model_path if model_path is not None else "in-memory model"
+        raise CompilerError(f"ONNX validation or shape inference failed for {source}: {exc}") from exc
 
     metadata = {entry.key: entry.value for entry in model.metadata_props}
     batch_symbol = metadata.get("ponni.batch_symbol", "batch")

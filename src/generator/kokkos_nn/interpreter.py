@@ -135,6 +135,54 @@ def _comparison(op: str, left: np.ndarray, right: np.ndarray) -> np.ndarray:
     raise CompilerError(f"interpreter has no comparison implementation for {op}")
 
 
+def _pointwise_step(op: str, operands: list[np.ndarray], attributes: dict[str, object],
+                    output_size: int, output_dtype: DType) -> np.ndarray:
+    if op in {"Add", "Div", "Max", "Min", "Mul", "Pow", "Sub"}:
+        return _binary(op, operands[0], operands[1], output_size)
+    if op in {"Equal", "Greater", "GreaterOrEqual", "Less", "LessOrEqual"}:
+        return _comparison(op, operands[0], operands[1])
+    if op == "And":
+        return np.logical_and(operands[0], operands[1])
+    if op == "Or":
+        return np.logical_or(operands[0], operands[1])
+    if op == "Xor":
+        return np.logical_xor(operands[0], operands[1])
+    if op == "Not":
+        return np.logical_not(operands[0])
+    if op == "Cast":
+        dtype = np.float32 if output_dtype == DType.FLOAT32 else np.float64
+        return operands[0].astype(dtype)
+    if op == "PRelu":
+        return np.where(operands[0] >= 0, operands[0], operands[0] * operands[1])
+    if op in {"Mean", "Sum"}:
+        result = sum(operands[1:], start=operands[0])
+        return result / len(operands) if op == "Mean" else result
+    if op == "IsNaN":
+        return np.isnan(operands[0])
+    if op == "IsInf":
+        result = np.isinf(operands[0])
+        if not int(attributes.get("detect_negative", 1)):
+            result &= ~np.isneginf(operands[0])
+        if not int(attributes.get("detect_positive", 1)):
+            result &= ~np.isposinf(operands[0])
+        return result
+    if op == "Where":
+        return np.where(operands[0], operands[1], operands[2])
+    if op == "CompareSelect":
+        condition = _comparison(str(attributes["comparison"]), operands[0], operands[1])
+        return np.where(condition, operands[2], operands[3])
+    if op == "Clip":
+        minimum = operands[1].item() if len(operands) > 1 else attributes.get("min")
+        maximum = operands[2].item() if len(operands) > 2 else attributes.get("max")
+        return np.clip(operands[0], minimum, maximum)
+    if op == "BatchNormalization":
+        epsilon = float(attributes.get("epsilon", 1e-5))
+        return ((operands[0] - operands[3]) / np.sqrt(operands[4] + epsilon) * operands[1] + operands[2])
+    if len(operands) == 1:
+        return _unary(op, operands[0], attributes)
+    raise CompilerError(f"interpreter has no pointwise-region implementation for {op}")
+
+
 def run_sample(graph: Graph, sample: np.ndarray) -> np.ndarray:
     values: dict[int, np.ndarray] = {}
     input_id = graph.inputs[0]
@@ -150,6 +198,39 @@ def run_sample(graph: Graph, sample: np.ndarray) -> np.ndarray:
     for node in graph.nodes:
         inputs = [values[tensor_id] for tensor_id in node.inputs]
         output_size = graph.tensors[node.outputs[0]].sample_size
+        mapped_input = None
+        if "map_steps" in node.attributes:
+            for step in node.attributes["map_steps"]:
+                operands = [mapped_input if tensor_id == "prev" else values[tensor_id]
+                            for tensor_id in step["inputs"]]
+                if len(operands) == 1:
+                    mapped_input = _unary(step["op"], operands[0], step.get("attributes", {}))
+                else:
+                    mapped_input = _binary(step["op"], operands[0], operands[1],
+                                           int(node.attributes["map_size"]))
+        elif "map_region_steps" in node.attributes:
+            region_values = dict(values)
+            map_size = int(node.attributes["map_size"])
+            for step in node.attributes["map_region_steps"]:
+                operands = [region_values[tensor_id] for tensor_id in step["inputs"]]
+                if step["op"] == "ElementwiseChain":
+                    step_result = None
+                    for chain_step in step["attributes"]["steps"]:
+                        chain_operands = [
+                            step_result if tensor_id == "prev" else region_values[tensor_id]
+                            for tensor_id in chain_step["inputs"]
+                        ]
+                        step_result = _pointwise_step(
+                            chain_step["op"], chain_operands, chain_step.get("attributes", {}), map_size,
+                            DType(step["output_dtype"]),
+                        )
+                else:
+                    step_result = _pointwise_step(
+                        step["op"], operands, step["attributes"], map_size,
+                        DType(step["output_dtype"]),
+                    )
+                region_values[step["outputs"][0]] = step_result
+            mapped_input = region_values[int(node.attributes["map_output"])]
         if node.op in {"Add", "Div", "Max", "Min", "Mul", "Pow", "Sub"}:
             result = _binary(node.op, inputs[0], inputs[1], output_size)
         elif node.op in {"Equal", "Greater", "GreaterOrEqual", "Less", "LessOrEqual"}:
@@ -208,30 +289,31 @@ def run_sample(graph: Graph, sample: np.ndarray) -> np.ndarray:
             epsilon = float(node.attributes.get("epsilon", 1e-5))
             result = (inputs[0] - inputs[3]) / np.sqrt(inputs[4] + epsilon) * inputs[1] + inputs[2]
         elif node.op.startswith("Reduce"):
+            reduction_input = inputs[0] if mapped_input is None else mapped_input
             if node.op == "ReduceL1":
-                reduced = np.sum(np.abs(inputs[0]))
+                reduced = np.sum(np.abs(reduction_input))
             elif node.op == "ReduceL2":
-                reduced = np.sqrt(np.sum(inputs[0] ** 2))
+                reduced = np.sqrt(np.sum(reduction_input ** 2))
             elif node.op == "ReduceLogSum":
-                reduced = np.log(np.sum(inputs[0]))
+                reduced = np.log(np.sum(reduction_input))
             elif node.op == "ReduceLogSumExp":
-                maximum = np.max(inputs[0])
-                reduced = maximum if np.isinf(maximum) else maximum + np.log(np.sum(np.exp(inputs[0] - maximum)))
+                maximum = np.max(reduction_input)
+                reduced = maximum if np.isinf(maximum) else maximum + np.log(np.sum(np.exp(reduction_input - maximum)))
             elif node.op == "ReduceMax":
-                reduced = np.max(inputs[0])
+                reduced = np.max(reduction_input)
             elif node.op == "ReduceMean":
-                reduced = np.mean(inputs[0])
+                reduced = np.mean(reduction_input)
             elif node.op == "ReduceMin":
-                reduced = np.min(inputs[0])
+                reduced = np.min(reduction_input)
             elif node.op == "ReduceProd":
-                reduced = np.prod(inputs[0])
+                reduced = np.prod(reduction_input)
             elif node.op == "ReduceSum":
-                reduced = np.sum(inputs[0])
+                reduced = np.sum(reduction_input)
             elif node.op == "ReduceSumSquare":
-                reduced = np.sum(inputs[0] ** 2)
+                reduced = np.sum(reduction_input ** 2)
             else:
                 raise CompilerError(f"interpreter has no reduction implementation for {node.op}")
-            result = np.asarray([reduced], dtype=inputs[0].dtype)
+            result = np.asarray([reduced], dtype=reduction_input.dtype)
         elif node.op == "LpNormalization":
             norm = np.sum(np.abs(inputs[0])) if int(node.attributes.get("p", 2)) == 1 else np.linalg.norm(inputs[0])
             result = np.zeros_like(inputs[0]) if norm == 0 else inputs[0] / norm
@@ -256,15 +338,34 @@ def run_sample(graph: Graph, sample: np.ndarray) -> np.ndarray:
             result = float(node.attributes.get("alpha", 1.0)) * np.matmul(inputs[0], weight)
             if len(inputs) > 2:
                 result = result + float(node.attributes.get("beta", 1.0)) * inputs[2]
-        elif node.op in {"Dense", "DenseBiasActivation"}:
+        elif node.op in {"Dense", "DenseBiasActivation", "DenseResidualActivation", "DenseEpilogue"}:
             weight = values[node.attributes["weight"]]
-            result = np.matmul(weight, inputs[0])
+            if "input_map" in node.attributes:
+                dense_input = np.asarray([
+                    values[entry["tensor"]].reshape(-1)[entry["index"]]
+                    for entry in node.attributes["input_map"]
+                ])
+            else:
+                dense_input = inputs[0]
+            result = np.matmul(weight, dense_input)
             bias_id = node.attributes.get("bias")
             if bias_id is not None:
                 result = result + values[bias_id]
             if node.op == "DenseBiasActivation":
                 result = _unary(node.attributes["activation"], result,
                                 node.attributes.get("activation_attributes", {}))
+            elif node.op == "DenseResidualActivation":
+                result = _unary(
+                    node.attributes["activation"], result + values[node.attributes["residual"]],
+                    node.attributes.get("activation_attributes", {}),
+                )
+            elif node.op == "DenseEpilogue":
+                for step in node.attributes["epilogue_steps"]:
+                    operands = [result if value == "prev" else values[value] for value in step["inputs"]]
+                    result = _pointwise_step(
+                        step["op"], operands, step.get("attributes", {}), output_size,
+                        graph.tensors[node.outputs[0]].dtype,
+                    )
         elif node.op == "ResidualAddActivation":
             result = _unary(node.attributes["activation"], _binary("Add", inputs[0], inputs[1], output_size),
                             node.attributes.get("activation_attributes", {}))
@@ -272,8 +373,37 @@ def run_sample(graph: Graph, sample: np.ndarray) -> np.ndarray:
             result = None
             for step in node.attributes["steps"]:
                 operands = [result if tensor_id == "prev" else values[tensor_id] for tensor_id in step["inputs"]]
-                result = _binary(step["op"], operands[0], operands[1], output_size)
+                if len(operands) == 1:
+                    result = _unary(step["op"], operands[0], step.get("attributes", {}))
+                else:
+                    result = _binary(step["op"], operands[0], operands[1], output_size)
             assert result is not None
+        elif node.op == "PointwiseRegion":
+            region_values = dict(values)
+            for step in node.attributes["steps"]:
+                operands = [region_values[tensor_id] for tensor_id in step["inputs"]]
+                if step["op"] == "ElementwiseChain":
+                    step_result = None
+                    for chain_step in step["attributes"]["steps"]:
+                        chain_operands = [
+                            step_result if tensor_id == "prev" else region_values[tensor_id]
+                            for tensor_id in chain_step["inputs"]
+                        ]
+                        if len(chain_operands) == 1:
+                            step_result = _unary(
+                                chain_step["op"], chain_operands[0], chain_step.get("attributes", {}),
+                            )
+                        else:
+                            step_result = _binary(
+                                chain_step["op"], chain_operands[0], chain_operands[1], output_size,
+                            )
+                else:
+                    step_result = _pointwise_step(
+                        step["op"], operands, step["attributes"], output_size,
+                        DType(step["output_dtype"]),
+                    )
+                region_values[step["outputs"][0]] = step_result
+            result = region_values[node.outputs[0]]
         else:
             raise CompilerError(f"interpreter has no implementation for canonical operation {node.op}")
         result = np.asarray(result).reshape(-1)

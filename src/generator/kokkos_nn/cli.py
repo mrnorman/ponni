@@ -26,6 +26,14 @@ def _parser() -> argparse.ArgumentParser:
     validate.add_argument("model", type=Path)
     validate.add_argument("--disable-pass", action="append", default=[], metavar="NAME[,NAME]")
     validate.add_argument(
+        "--onnx-preprocess", action="store_true",
+        help="run provider-neutral ONNX Script canonicalization before PONNI import",
+    )
+    validate.add_argument(
+        "--analyze-workspace", action="store_true",
+        help="compare native arena placement with the heuristic and exact small-graph oracle",
+    )
+    validate.add_argument(
         "--workspace-reduction-aggressiveness", type=int, choices=range(1, 6), default=3,
         help="cross-layer streaming and one-hop recomputation level (1-5; default: 3)",
     )
@@ -36,6 +44,14 @@ def _parser() -> argparse.ArgumentParser:
     compile_command.add_argument("--output-dir", type=Path, required=True)
     compile_command.add_argument("--model-name", default="GeneratedModel")
     compile_command.add_argument("--disable-pass", action="append", default=[], metavar="NAME[,NAME]")
+    compile_command.add_argument(
+        "--onnx-preprocess", action="store_true",
+        help="run provider-neutral ONNX Script canonicalization before PONNI import",
+    )
+    compile_command.add_argument(
+        "--analyze-workspace", action="store_true",
+        help="compare native arena placement with the heuristic and exact small-graph oracle",
+    )
     compile_command.add_argument(
         "--workspace-reduction-aggressiveness", type=int, choices=range(1, 6), default=3,
         help="cross-layer streaming and one-hop recomputation level (1-5; default: 3)",
@@ -67,6 +83,7 @@ def main(argv: list[str] | None = None) -> None:
         if args.command == "validate":
             report = validate_model(
                 args.model, disabled, args.workspace_reduction_aggressiveness,
+                args.onnx_preprocess, args.analyze_workspace,
             )
         else:
             report = compile_model(
@@ -75,6 +92,8 @@ def main(argv: list[str] | None = None) -> None:
                 disabled,
                 args.model_name,
                 args.workspace_reduction_aggressiveness,
+                args.onnx_preprocess,
+                args.analyze_workspace,
             )
         if not args.quiet:
             print(json.dumps(report, indent=2, sort_keys=True))

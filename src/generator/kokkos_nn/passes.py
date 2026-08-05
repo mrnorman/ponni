@@ -16,10 +16,15 @@ ACTIVATIONS = {
 }
 ELEMENTWISE = {"Add", "Div", "Max", "Min", "Mul", "Pow", "Sub"}
 COMPARISONS = {"Equal", "Greater", "GreaterOrEqual", "Less", "LessOrEqual"}
+LOGICAL = {"And", "Or", "Xor"}
 UNARY = ACTIVATIONS | {
     "Abs", "Acos", "Acosh", "Asin", "Asinh", "Atan", "Atanh", "Ceil", "Celu", "Cos", "Cosh", "Erf", "Exp",
     "Floor", "Log", "Neg", "Reciprocal", "Round", "Selu", "Sign", "Sin", "Sinh", "Softsign", "Sqrt", "Tan",
     "ThresholdedRelu",
+}
+POINTWISE = ELEMENTWISE | UNARY | COMPARISONS | LOGICAL | {
+    "BatchNormalization", "Cast", "Clip", "CompareSelect", "IsInf", "IsNaN", "Mean", "Not", "PRelu",
+    "Sum", "Where",
 }
 
 
@@ -159,7 +164,10 @@ def constant_fold(graph: Graph) -> bool:
             raise CompilerError(f"constant folding failed for {node.source_name or node.op}: {exc}") from exc
         output_id = node.outputs[0]
         output = graph.tensors[output_id]
-        result_dtype = np.bool_ if output.dtype == DType.BOOL else values[0].dtype
+        result_dtype = {
+            DType.BOOL: np.bool_, DType.FLOAT32: np.float32, DType.FLOAT64: np.float64,
+            DType.INT32: np.int32, DType.INT64: np.int64,
+        }[output.dtype]
         result = np.asarray(result, dtype=result_dtype)
         constant_name = f"__folded_{output_id}_{output.name}"
         graph.constants[constant_name] = ConstantTensor(
@@ -414,6 +422,108 @@ def fuse_dense_activation(graph: Graph) -> bool:
     return changed
 
 
+def fuse_virtual_dense_inputs(graph: Graph) -> bool:
+    """Let a dense read recursively composed static Concat/Gather index maps."""
+    graph.rebuild_links()
+    changed = False
+
+    def index_map(tensor_id: int, active: set[int]) -> list[dict[str, int]]:
+        if tensor_id in active:
+            raise CompilerError("virtual dense input contains a cyclic Concat/Gather region")
+        tensor = graph.tensors[tensor_id]
+        if tensor.producer is None:
+            return [{"tensor": tensor_id, "index": index} for index in range(tensor.sample_size)]
+        producer = graph.node_by_id(tensor.producer)
+        if producer.op not in {"Concat", "Gather"}:
+            return [{"tensor": tensor_id, "index": index} for index in range(tensor.sample_size)]
+        active.add(tensor_id)
+        if producer.op == "Concat":
+            result = [entry for input_id in producer.inputs for entry in index_map(input_id, active)]
+        else:
+            source = index_map(producer.inputs[0], active)
+            result = [dict(source[int(index)]) for index in producer.attributes["indices"]]
+        active.remove(tensor_id)
+        if len(result) != tensor.sample_size:
+            raise CompilerError(
+                f"virtual {producer.op} input map has {len(result)} elements; expected {tensor.sample_size}"
+            )
+        return result
+
+    for node in graph.nodes:
+        if node.op != "Dense" or "input_map" in node.attributes:
+            continue
+        data_id = node.inputs[0]
+        data = graph.tensors[data_id]
+        if data.producer is None:
+            continue
+        producer = graph.node_by_id(data.producer)
+        if producer.op not in {"Concat", "Gather"}:
+            continue
+        input_map = index_map(data_id, set())
+        if len(input_map) != data.sample_size:
+            continue
+        dynamic_inputs: list[int] = []
+        for entry in input_map:
+            tensor_id = entry["tensor"]
+            if tensor_id not in dynamic_inputs:
+                dynamic_inputs.append(tensor_id)
+        parameter_inputs = [int(node.attributes["weight"])]
+        if node.attributes.get("bias") is not None:
+            parameter_inputs.append(int(node.attributes["bias"]))
+        node.inputs = dynamic_inputs + parameter_inputs
+        node.attributes["input_map"] = input_map
+        changed = True
+    if changed:
+        graph.rebuild_links()
+    return changed
+
+
+def prune_dense_gather_outputs(graph: Graph) -> bool:
+    """Select static dense rows directly instead of materializing then gathering."""
+    graph.rebuild_links()
+    changed = False
+    remove: set[int] = set()
+    for node in graph.nodes:
+        if node.op != "Dense":
+            continue
+        output = graph.tensors[node.outputs[0]]
+        if len(output.consumers) != 1:
+            continue
+        gather = graph.node_by_id(output.consumers[0])
+        if gather.op != "Gather" or gather.inputs[0] != output.id:
+            continue
+        indices = [int(index) for index in gather.attributes["indices"]]
+        weight_id = int(node.attributes["weight"])
+        weight = _constant(graph, weight_id)
+        if weight is None or weight.ndim != 2:
+            continue
+        bias_id = node.attributes.get("bias")
+        bias = None if bias_id is None else _constant(graph, int(bias_id))
+        if bias_id is not None and bias is None:
+            continue
+        new_weight_id = _add_constant(
+            graph, f"dense_{node.id}_gathered_weight", np.asarray(weight[indices, :]), weight_id, "output_input"
+        )
+        replacements = {weight_id: new_weight_id}
+        node.attributes["weight"] = new_weight_id
+        if bias_id is not None:
+            assert bias is not None
+            gathered_bias = bias if bias.size == 1 else np.asarray(bias.reshape(-1)[indices])
+            new_bias_id = _add_constant(
+                graph, f"dense_{node.id}_gathered_bias", gathered_bias, int(bias_id), "output"
+            )
+            replacements[int(bias_id)] = new_bias_id
+            node.attributes["bias"] = new_bias_id
+        node.inputs = [replacements.get(tensor_id, tensor_id) for tensor_id in node.inputs]
+        node.outputs = gather.outputs
+        remove.add(gather.id)
+        changed = True
+    if changed:
+        graph.nodes = [node for node in graph.nodes if node.id not in remove]
+        graph.renumber_nodes()
+    return changed
+
+
 def fuse_residual_activation(graph: Graph) -> bool:
     graph.rebuild_links()
     changed = False
@@ -432,6 +542,79 @@ def fuse_residual_activation(graph: Graph) -> bool:
         node.attributes["activation_attributes"] = dict(activation.attributes)
         node.outputs = activation.outputs
         remove.add(activation.id)
+        changed = True
+    if changed:
+        graph.nodes = [node for node in graph.nodes if node.id not in remove]
+        graph.renumber_nodes()
+    return changed
+
+
+def fuse_dense_residual_activation(graph: Graph) -> bool:
+    """Fold a sole-consumer residual epilogue into the dense output loop."""
+    graph.rebuild_links()
+    changed = False
+    remove: set[int] = set()
+    for node in graph.nodes:
+        if node.op != "Dense":
+            continue
+        consumers = graph.tensors[node.outputs[0]].consumers
+        if len(consumers) != 1:
+            continue
+        residual = graph.node_by_id(consumers[0])
+        if residual.op != "ResidualAddActivation":
+            continue
+        other = [tensor_id for tensor_id in residual.inputs if tensor_id != node.outputs[0]]
+        if len(other) != 1:
+            continue
+        node.op = "DenseResidualActivation"
+        node.inputs.append(other[0])
+        node.attributes["residual"] = other[0]
+        node.attributes["activation"] = residual.attributes["activation"]
+        node.attributes["activation_attributes"] = dict(residual.attributes.get("activation_attributes", {}))
+        node.outputs = residual.outputs
+        remove.add(residual.id)
+        changed = True
+    if changed:
+        graph.nodes = [node for node in graph.nodes if node.id not in remove]
+        graph.renumber_nodes()
+    return changed
+
+
+def fuse_dense_epilogues(graph: Graph) -> bool:
+    """Attach otherwise-unhandled ordered floating-point pointwise steps to a dense loop."""
+    graph.rebuild_links()
+    supported = ELEMENTWISE | UNARY | {"BatchNormalization", "Clip", "Mean", "PRelu", "Sum", "Where"}
+    changed = False
+    remove: set[int] = set()
+    for node in graph.nodes:
+        if node.id in remove or node.op != "Dense":
+            continue
+        previous = node.outputs[0]
+        steps: list[dict[str, object]] = []
+        while len(set(graph.tensors[previous].consumers)) == 1:
+            consumer = graph.node_by_id(graph.tensors[previous].consumers[0])
+            if consumer.id in remove or consumer.op not in supported or previous not in consumer.inputs:
+                break
+            if graph.tensors[consumer.outputs[0]].dtype not in {DType.FLOAT32, DType.FLOAT64}:
+                break
+            steps.append({
+                "op": consumer.op,
+                "inputs": ["prev" if tensor_id == previous else tensor_id for tensor_id in consumer.inputs],
+                "attributes": dict(consumer.attributes),
+            })
+            remove.add(consumer.id)
+            previous = consumer.outputs[0]
+        if not steps:
+            continue
+        external_inputs = list(node.inputs)
+        for step in steps:
+            for value in step["inputs"]:
+                if value != "prev" and value not in external_inputs:
+                    external_inputs.append(int(value))
+        node.op = "DenseEpilogue"
+        node.inputs = external_inputs
+        node.outputs = [previous]
+        node.attributes["epilogue_steps"] = steps
         changed = True
     if changed:
         graph.nodes = [node for node in graph.nodes if node.id not in remove]
@@ -463,26 +646,304 @@ def fuse_silu(graph: Graph) -> bool:
     return changed
 
 
+def canonicalize_decomposed_activations(graph: Graph) -> bool:
+    """Recognize common activation spellings emitted as small pointwise graphs."""
+    graph.rebuild_links()
+    changed = False
+    remove: set[int] = set()
+    for multiply in graph.nodes:
+        if multiply.id in remove or multiply.op != "Mul" or len(multiply.inputs) != 2:
+            continue
+        for value_id, branch_id in (multiply.inputs, reversed(multiply.inputs)):
+            branch = graph.tensors[branch_id]
+            if branch.producer is None or branch.consumers != [multiply.id]:
+                continue
+            outer = graph.node_by_id(branch.producer)
+            if outer.op == "HardSigmoid" and outer.inputs == [value_id]:
+                multiply.op = "HardSwish"
+                multiply.inputs = [value_id]
+                multiply.attributes = {}
+                remove.add(outer.id)
+                changed = True
+                break
+            if outer.op != "Tanh" or len(outer.inputs) != 1:
+                continue
+            softplus_value = graph.tensors[outer.inputs[0]]
+            if softplus_value.producer is None or softplus_value.consumers != [outer.id]:
+                continue
+            softplus = graph.node_by_id(softplus_value.producer)
+            if softplus.op != "Softplus" or softplus.inputs != [value_id]:
+                continue
+            multiply.op = "Mish"
+            multiply.inputs = [value_id]
+            multiply.attributes = {}
+            remove.update({outer.id, softplus.id})
+            changed = True
+            break
+    for final in graph.nodes:
+        if final.id in remove or final.op != "Mul" or len(final.inputs) != 2:
+            continue
+        half_matches = [
+            (tensor_id, other_id)
+            for tensor_id, other_id in (final.inputs, reversed(final.inputs))
+            if (value := _constant(graph, tensor_id)) is not None and value.size == 1 and
+            np.isclose(float(value.item()), 0.5)
+        ]
+        if not half_matches:
+            continue
+        _, product_id = half_matches[0]
+        product_tensor = graph.tensors[product_id]
+        if product_tensor.producer is None or product_tensor.consumers != [final.id]:
+            continue
+        product = graph.node_by_id(product_tensor.producer)
+        if product.op != "Mul":
+            continue
+        matched_nodes: tuple[Node, Node, Node] | None = None
+        value_id: int | None = None
+        for possible_value, add_id in (product.inputs, reversed(product.inputs)):
+            add_tensor = graph.tensors[add_id]
+            if add_tensor.producer is None or add_tensor.consumers != [product.id]:
+                continue
+            addition = graph.node_by_id(add_tensor.producer)
+            if addition.op != "Add":
+                continue
+            for one_id, erf_id in (addition.inputs, reversed(addition.inputs)):
+                one = _constant(graph, one_id)
+                erf_tensor = graph.tensors[erf_id]
+                if one is None or one.size != 1 or not np.isclose(float(one.item()), 1.0):
+                    continue
+                if erf_tensor.producer is None or erf_tensor.consumers != [addition.id]:
+                    continue
+                error_function = graph.node_by_id(erf_tensor.producer)
+                if error_function.op != "Erf":
+                    continue
+                scaled_tensor = graph.tensors[error_function.inputs[0]]
+                if scaled_tensor.producer is None or scaled_tensor.consumers != [error_function.id]:
+                    continue
+                scaled = graph.node_by_id(scaled_tensor.producer)
+                if scaled.op not in {"Div", "Mul"}:
+                    continue
+                if scaled.op == "Div":
+                    scale = _constant(graph, scaled.inputs[1])
+                    legal_scale = scale is not None and scale.size == 1 and np.isclose(
+                        float(scale.item()), math.sqrt(2.0), rtol=1e-5,
+                    )
+                    scaled_value = scaled.inputs[0]
+                else:
+                    scale = _constant(graph, scaled.inputs[1])
+                    legal_scale = scale is not None and scale.size == 1 and np.isclose(
+                        float(scale.item()), 1.0 / math.sqrt(2.0), rtol=1e-5,
+                    )
+                    scaled_value = scaled.inputs[0]
+                if legal_scale and possible_value == scaled_value:
+                    value_id = possible_value
+                    matched_nodes = addition, error_function, scaled
+                    break
+            if matched_nodes is not None:
+                break
+        if matched_nodes is None or value_id is None:
+            continue
+        final.op = "Gelu"
+        final.inputs = [value_id]
+        final.attributes = {"approximate": "none"}
+        remove.update({product.id, *(node.id for node in matched_nodes)})
+        changed = True
+    if changed:
+        graph.nodes = [node for node in graph.nodes if node.id not in remove]
+        graph.renumber_nodes()
+    return changed
+
+
+def canonicalize_decomposed_softmax(graph: Graph) -> bool:
+    """Recognize stable full-feature Softmax and LogSoftmax reduction DAGs."""
+    graph.rebuild_links()
+    changed = False
+    remove: set[int] = set()
+
+    def producer(tensor_id: int, op: str) -> Node | None:
+        producer_id = graph.tensors[tensor_id].producer
+        if producer_id is None:
+            return None
+        node = graph.node_by_id(producer_id)
+        return node if node.op == op and node.id not in remove else None
+
+    for final in graph.nodes:
+        if final.id in remove or final.op not in {"Div", "Sub"}:
+            continue
+        shifted_id: int | None = None
+        exponential: Node | None = None
+        reduction: Node | None = None
+        logarithm: Node | None = None
+        if final.op == "Div":
+            exponential = producer(final.inputs[0], "Exp")
+            reduction = producer(final.inputs[1], "ReduceSum")
+            if exponential is None or reduction is None or reduction.inputs[0] != exponential.outputs[0]:
+                continue
+            shifted_id = exponential.inputs[0]
+            canonical_op = "Softmax"
+        else:
+            logarithm = producer(final.inputs[1], "Log")
+            if logarithm is None:
+                continue
+            reduction = producer(logarithm.inputs[0], "ReduceSum")
+            if reduction is None:
+                continue
+            exponential = producer(reduction.inputs[0], "Exp")
+            if exponential is None or final.inputs[0] != exponential.inputs[0]:
+                continue
+            shifted_id = final.inputs[0]
+            canonical_op = "LogSoftmax"
+        shifted = producer(shifted_id, "Sub")
+        if shifted is None:
+            continue
+        maximum = producer(shifted.inputs[1], "ReduceMax")
+        if maximum is None or maximum.inputs[0] != shifted.inputs[0]:
+            continue
+        expected_exp_consumers = {reduction.id, final.id} if canonical_op == "Softmax" else {reduction.id}
+        if (graph.tensors[maximum.outputs[0]].consumers != [shifted.id] or
+                graph.tensors[shifted.outputs[0]].consumers != [exponential.id] and
+                set(graph.tensors[shifted.outputs[0]].consumers) != {exponential.id, final.id} or
+                set(graph.tensors[exponential.outputs[0]].consumers) != expected_exp_consumers or
+                graph.tensors[reduction.outputs[0]].consumers !=
+                ([final.id] if logarithm is None else [logarithm.id]) or
+                logarithm is not None and graph.tensors[logarithm.outputs[0]].consumers != [final.id]):
+            continue
+        final.op = canonical_op
+        final.inputs = [shifted.inputs[0]]
+        final.attributes = {"axis": -1}
+        remove.update({maximum.id, shifted.id, exponential.id, reduction.id})
+        if logarithm is not None:
+            remove.add(logarithm.id)
+        changed = True
+    if changed:
+        graph.nodes = [node for node in graph.nodes if node.id not in remove]
+        graph.renumber_nodes()
+    return changed
+
+
+def canonicalize_decomposed_layernorm(graph: Graph) -> bool:
+    """Recognize the conventional mean/variance LayerNormalization DAG."""
+    graph.rebuild_links()
+    changed = False
+    remove: set[int] = set()
+
+    def producer(tensor_id: int, op: str | set[str]) -> Node | None:
+        producer_id = graph.tensors[tensor_id].producer
+        if producer_id is None:
+            return None
+        node = graph.node_by_id(producer_id)
+        allowed = {op} if isinstance(op, str) else op
+        return node if node.op in allowed and node.id not in remove else None
+
+    for final in graph.nodes:
+        if final.id in remove or final.op not in {"Add", "Mul"}:
+            continue
+        if final.op == "Mul" and len(graph.tensors[final.outputs[0]].consumers) == 1:
+            possible_bias = graph.node_by_id(graph.tensors[final.outputs[0]].consumers[0])
+            if possible_bias.op == "Add":
+                other = [tensor_id for tensor_id in possible_bias.inputs if tensor_id != final.outputs[0]]
+                if len(other) == 1 and _constant(graph, other[0]) is not None:
+                    continue
+        bias_id: int | None = None
+        scaled = final
+        if final.op == "Add":
+            candidates = [(producer(final.inputs[0], "Mul"), final.inputs[1]),
+                          (producer(final.inputs[1], "Mul"), final.inputs[0])]
+            match = next(
+                ((node, bias) for node, bias in candidates
+                 if node is not None and _constant(graph, bias) is not None),
+                None,
+            )
+            if match is None:
+                continue
+            scaled, bias_id = match
+        norm_candidates = [(producer(scaled.inputs[0], "Div"), scaled.inputs[1]),
+                           (producer(scaled.inputs[1], "Div"), scaled.inputs[0])]
+        norm_match = next(
+            ((node, scale) for node, scale in norm_candidates if node is not None and _constant(graph, scale) is not None),
+            None,
+        )
+        if norm_match is None:
+            continue
+        normalized, scale_id = norm_match
+        centered = producer(normalized.inputs[0], "Sub")
+        root = producer(normalized.inputs[1], "Sqrt")
+        if centered is None or root is None:
+            continue
+        variance_epsilon = producer(root.inputs[0], "Add")
+        if variance_epsilon is None:
+            continue
+        variance_candidates = [
+            (producer(variance_epsilon.inputs[0], "ReduceMean"), variance_epsilon.inputs[1]),
+            (producer(variance_epsilon.inputs[1], "ReduceMean"), variance_epsilon.inputs[0]),
+        ]
+        variance_match = next(
+            ((node, epsilon) for node, epsilon in variance_candidates
+             if node is not None and _constant(graph, epsilon) is not None),
+            None,
+        )
+        if variance_match is None:
+            continue
+        variance, epsilon_id = variance_match
+        epsilon_values = _constant(graph, epsilon_id)
+        if epsilon_values is None or epsilon_values.size != 1:
+            continue
+        square = producer(variance.inputs[0], {"Mul", "Pow"})
+        if square is None:
+            continue
+        if square.op == "Mul":
+            if square.inputs != [centered.outputs[0], centered.outputs[0]]:
+                continue
+        else:
+            exponent = _constant(graph, square.inputs[1])
+            if square.inputs[0] != centered.outputs[0] or exponent is None or exponent.size != 1 or exponent.item() != 2:
+                continue
+        mean = producer(centered.inputs[1], "ReduceMean")
+        if mean is None or mean.inputs[0] != centered.inputs[0]:
+            continue
+        expected_centered_consumers = {square.id, normalized.id}
+        if (set(graph.tensors[centered.outputs[0]].consumers) != expected_centered_consumers or
+                graph.tensors[mean.outputs[0]].consumers != [centered.id] or
+                graph.tensors[square.outputs[0]].consumers != [variance.id] or
+                graph.tensors[variance.outputs[0]].consumers != [variance_epsilon.id] or
+                graph.tensors[variance_epsilon.outputs[0]].consumers != [root.id] or
+                graph.tensors[root.outputs[0]].consumers != [normalized.id] or
+                graph.tensors[normalized.outputs[0]].consumers != [scaled.id] or
+                scaled.id != final.id and graph.tensors[scaled.outputs[0]].consumers != [final.id]):
+            continue
+        final.op = "LayerNormalization"
+        final.inputs = [centered.inputs[0], scale_id] + ([] if bias_id is None else [bias_id])
+        final.attributes = {"axis": -1, "epsilon": float(epsilon_values.item()), "stash_type": 1}
+        remove.update({mean.id, centered.id, square.id, variance.id, variance_epsilon.id, root.id, normalized.id})
+        if scaled.id != final.id:
+            remove.add(scaled.id)
+        changed = True
+    if changed:
+        graph.nodes = [node for node in graph.nodes if node.id not in remove]
+        graph.renumber_nodes()
+    return changed
+
+
 def fuse_elementwise_chains(graph: Graph) -> bool:
     graph.rebuild_links()
     changed = False
     remove: set[int] = set()
     for node in graph.nodes:
-        if node.id in remove or node.op not in ELEMENTWISE:
+        if node.id in remove or node.op not in ELEMENTWISE | UNARY:
             continue
-        steps = [{"op": node.op, "inputs": list(node.inputs)}]
+        steps = [{"op": node.op, "inputs": list(node.inputs), "attributes": dict(node.attributes)}]
         final_output = node.outputs[0]
-        while len(graph.tensors[final_output].consumers) == 1:
+        while len(set(graph.tensors[final_output].consumers)) == 1:
             consumer = graph.node_by_id(graph.tensors[final_output].consumers[0])
-            if consumer.id in remove or consumer.op not in ELEMENTWISE:
+            if consumer.id in remove or consumer.op not in ELEMENTWISE | UNARY:
                 break
-            external = [tensor_id for tensor_id in consumer.inputs if tensor_id != final_output]
-            if len(external) != 1:
+            if final_output not in consumer.inputs:
                 break
             steps.append(
                 {
                     "op": consumer.op,
                     "inputs": ["prev" if tensor_id == final_output else tensor_id for tensor_id in consumer.inputs],
+                    "attributes": dict(consumer.attributes),
                 }
             )
             remove.add(consumer.id)
@@ -500,6 +961,108 @@ def fuse_elementwise_chains(graph: Graph) -> bool:
             changed = True
     if changed:
         graph.nodes = [node for node in graph.nodes if node.id not in remove]
+        graph.renumber_nodes()
+    return changed
+
+
+def fuse_mapped_reductions(graph: Graph) -> bool:
+    """Evaluate a sole-consumer pointwise chain directly inside a one-pass reduction."""
+    graph.rebuild_links()
+    changed = False
+    remove: set[int] = set()
+    supported = {
+        "ReduceL1", "ReduceL2", "ReduceLogSum", "ReduceMax", "ReduceMean", "ReduceMin", "ReduceProd",
+        "ReduceSum", "ReduceSumSquare",
+    }
+    for reduction in graph.nodes:
+        if reduction.op not in supported:
+            continue
+        mapped_id = reduction.inputs[0]
+        mapped = graph.tensors[mapped_id]
+        if mapped.producer is None or mapped.consumers != [reduction.id]:
+            continue
+        producer = graph.node_by_id(mapped.producer)
+        if producer.op == "ElementwiseChain":
+            steps = producer.attributes["steps"]
+            reduction.attributes["map_steps"] = steps
+        elif producer.op == "PointwiseRegion":
+            reduction.attributes["map_region_steps"] = producer.attributes["steps"]
+            reduction.attributes["map_output"] = producer.outputs[0]
+        elif producer.op in ELEMENTWISE | UNARY:
+            steps = [{"op": producer.op, "inputs": list(producer.inputs),
+                      "attributes": dict(producer.attributes)}]
+            reduction.attributes["map_steps"] = steps
+        else:
+            continue
+        reduction.attributes["map_size"] = mapped.sample_size
+        reduction.inputs = list(producer.inputs)
+        remove.add(producer.id)
+        changed = True
+    if changed:
+        graph.nodes = [node for node in graph.nodes if node.id not in remove]
+        graph.renumber_nodes()
+    return changed
+
+
+def fuse_pointwise_regions(graph: Graph) -> bool:
+    """Fuse reconverging pointwise producers into one per-element loop."""
+    graph.rebuild_links()
+    supported = POINTWISE | {"ElementwiseChain"}
+    removed: set[int] = set()
+    changed = False
+    for sink in reversed(graph.nodes):
+        if sink.id in removed or sink.op not in supported:
+            continue
+        region = {sink.id}
+        grew = True
+        while grew:
+            grew = False
+            for node_id in tuple(region):
+                node = graph.node_by_id(node_id)
+                for tensor_id in node.inputs:
+                    producer_id = graph.tensors[tensor_id].producer
+                    if producer_id is None or producer_id in region or producer_id in removed:
+                        continue
+                    producer = graph.node_by_id(producer_id)
+                    if producer.op not in supported:
+                        continue
+                    if set(graph.tensors[tensor_id].consumers) <= region:
+                        region.add(producer_id)
+                        grew = True
+        if len(region) == 1:
+            continue
+        pending = {node.id: node for node in graph.nodes if node.id in region}
+        region_nodes: list[Node] = []
+        emitted: set[int] = set()
+        while pending:
+            ready = sorted(
+                node_id for node_id, node in pending.items()
+                if all(graph.tensors[tensor_id].producer not in region or
+                       graph.tensors[tensor_id].producer in emitted for tensor_id in node.inputs)
+            )
+            if not ready:
+                raise CompilerError("pointwise fusion encountered a cyclic region")
+            for node_id in ready:
+                region_nodes.append(pending.pop(node_id))
+                emitted.add(node_id)
+        external_inputs: list[int] = []
+        for node in region_nodes:
+            for tensor_id in node.inputs:
+                if graph.tensors[tensor_id].producer not in region and tensor_id not in external_inputs:
+                    external_inputs.append(tensor_id)
+        steps = [
+            {"id": node.id, "op": node.op, "inputs": list(node.inputs), "outputs": list(node.outputs),
+             "attributes": dict(node.attributes), "output_dtype": graph.tensors[node.outputs[0]].dtype.value,
+             "input_dtypes": [graph.tensors[tensor_id].dtype.value for tensor_id in node.inputs]}
+            for node in region_nodes
+        ]
+        sink.op = "PointwiseRegion"
+        sink.inputs = external_inputs
+        sink.attributes = {"steps": steps}
+        removed.update(region - {sink.id})
+        changed = True
+    if changed:
+        graph.nodes = [node for node in graph.nodes if node.id not in removed]
         graph.renumber_nodes()
     return changed
 
@@ -531,22 +1094,44 @@ def fuse_comparison_where(graph: Graph) -> bool:
     return changed
 
 
-PASS_PIPELINE: list[tuple[str, Callable[[Graph], bool]]] = [
-    ("topological-schedule", topological_schedule),
-    ("constant-fold", constant_fold),
-    ("identity-elimination", eliminate_identity),
-    ("layout-fold", fold_layout_operations),
-    ("dead-code-elimination", eliminate_dead_code),
-    ("dense-canonicalization", canonicalize_dense),
-    ("dense-bias-fusion", fuse_dense_bias),
-    ("silu-fusion", fuse_silu),
-    ("dense-activation-fusion", fuse_dense_activation),
-    ("residual-activation-fusion", fuse_residual_activation),
-    ("comparison-where-fusion", fuse_comparison_where),
-    ("elementwise-chain-fusion", fuse_elementwise_chains),
-    ("dead-code-cleanup", eliminate_dead_code),
-    ("final-schedule", topological_schedule),
+PASS_STAGES: list[list[tuple[str, Callable[[Graph], bool]]]] = [
+    [
+        ("topological-schedule", topological_schedule),
+        ("constant-fold", constant_fold),
+        ("identity-elimination", eliminate_identity),
+        ("layout-fold", fold_layout_operations),
+        ("dead-code-elimination", eliminate_dead_code),
+    ],
+    [
+        ("dense-canonicalization", canonicalize_dense),
+        ("dense-gather-pruning", prune_dense_gather_outputs),
+        ("dense-bias-fusion", fuse_dense_bias),
+        ("virtual-dense-input-fusion", fuse_virtual_dense_inputs),
+    ],
+    [
+        ("silu-fusion", fuse_silu),
+        ("decomposed-activation-canonicalization", canonicalize_decomposed_activations),
+        ("decomposed-softmax-canonicalization", canonicalize_decomposed_softmax),
+        ("decomposed-layernorm-canonicalization", canonicalize_decomposed_layernorm),
+    ],
+    [
+        ("dense-activation-fusion", fuse_dense_activation),
+        ("residual-activation-fusion", fuse_residual_activation),
+        ("dense-residual-activation-fusion", fuse_dense_residual_activation),
+        ("dense-epilogue-fusion", fuse_dense_epilogues),
+    ],
+    [
+        ("comparison-where-fusion", fuse_comparison_where),
+        ("elementwise-chain-fusion", fuse_elementwise_chains),
+        ("pointwise-region-fusion", fuse_pointwise_regions),
+        ("mapped-reduction-fusion", fuse_mapped_reductions),
+    ],
+    [
+        ("dead-code-cleanup", eliminate_dead_code),
+        ("final-schedule", topological_schedule),
+    ],
 ]
+PASS_PIPELINE: list[tuple[str, Callable[[Graph], bool]]] = [entry for stage in PASS_STAGES for entry in stage]
 
 
 def optimize(graph: Graph, disabled: set[str] | None = None) -> tuple[Graph, list[dict[str, object]]]:
@@ -556,12 +1141,27 @@ def optimize(graph: Graph, disabled: set[str] | None = None) -> tuple[Graph, lis
         raise CompilerError(f"unknown disabled optimization pass(es): {', '.join(sorted(unknown))}")
     optimized = graph.clone()
     report: list[dict[str, object]] = []
-    for name, function in PASS_PIPELINE:
-        if name in disabled:
-            report.append({"name": name, "disabled": True, "changed": False})
-            continue
-        before = len(optimized.nodes)
-        changed = function(optimized)
-        report.append({"name": name, "disabled": False, "changed": changed, "nodes_before": before,
-                       "nodes_after": len(optimized.nodes)})
+    for stage in PASS_STAGES:
+        entries = {
+            name: {"name": name, "disabled": name in disabled, "changed": False,
+                   "nodes_before": len(optimized.nodes), "nodes_after": len(optimized.nodes), "iterations": 0}
+            for name, _ in stage
+        }
+        for iteration in range(8):
+            stage_changed = False
+            for name, function in stage:
+                entry = entries[name]
+                if name in disabled:
+                    continue
+                changed = function(optimized)
+                entry["changed"] = bool(entry["changed"] or changed)
+                entry["nodes_after"] = len(optimized.nodes)
+                entry["iterations"] = iteration + 1
+                stage_changed = stage_changed or changed
+            if not stage_changed:
+                break
+        else:
+            names = ", ".join(name for name, _ in stage)
+            raise CompilerError(f"optimization stage did not converge after eight iterations: {names}")
+        report.extend(entries[name] for name, _ in stage)
     return optimized, report

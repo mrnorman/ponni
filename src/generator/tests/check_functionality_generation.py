@@ -9,7 +9,7 @@ from pathlib import Path
 def dense_count(report: dict[str, object]) -> int:
     operations = report["optimized_operations"]
     assert isinstance(operations, list)
-    return sum(operation in {"Dense", "DenseBiasActivation"} for operation in operations)
+    return sum(operation in {"Dense", "DenseBiasActivation", "DenseResidualActivation"} for operation in operations)
 
 
 def check_header(path: Path) -> None:
@@ -61,10 +61,10 @@ def main() -> None:
         raise RuntimeError("depth-10 model did not exercise generalized non-overlapping dense-chain streaming")
     if dense_count(reports["resnet"]) != 10:
         raise RuntimeError("depth-10 ResNet did not retain ten canonical dense operations")
-    if reports["resnet"]["optimized_operations"].count("ResidualAddActivation") != 5:
+    if reports["resnet"]["optimized_operations"].count("DenseResidualActivation") != 5:
         raise RuntimeError("depth-10 ResNet did not fuse its five residual activations")
-    if dense_count(reports["densenet"]) != 5 or "Concat" not in reports["densenet"]["optimized_operations"]:
-        raise RuntimeError("DenseNet did not retain dense connectivity through static feature concatenation")
+    if dense_count(reports["densenet"]) != 5 or "Concat" in reports["densenet"]["optimized_operations"]:
+        raise RuntimeError("DenseNet did not virtualize static feature concatenation into its dense consumers")
     branch_counts = reports["branching"]["operator_counts"]
     for activation in ("Relu", "Sigmoid", "Tanh"):
         if int(branch_counts.get(activation, 0)) == 0:
@@ -91,7 +91,11 @@ def main() -> None:
         raise RuntimeError("workspace level 4 did not recompute exactly the two-consumer branch")
     if counts[4]["recompute"] != 2:
         raise RuntimeError("workspace level 5 did not additionally recompute the three-consumer branch")
-    zoo_operations = set(reports["operator_zoo"]["optimized_operations"])
+    zoo_operations = (
+        set(reports["operator_zoo"]["optimized_operations"]) |
+        set(reports["operator_zoo"]["optimized_component_operations"]) |
+        set(reports["operator_zoo"]["canonical_operations"])
+    )
     required = {
         "BatchNormalization", "LayerNormalization", "Softmax", "LogSoftmax", "ReduceMean", "ReduceSum",
         "LeakyRelu", "Elu", "Gelu", "Softplus", "HardSigmoid", "HardSwish", "Mish", "Silu", "Clip",

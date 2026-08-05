@@ -18,9 +18,40 @@ from .scheduler import DenseChainSchedule, schedule_dense_chains
 from .weights import write_weights
 
 
-def load_and_optimize(model_path: str | Path, disabled_passes: set[str] | None = None):
+def _onnxscript_preprocess(model_path: str | Path):
+    try:
+        import onnx
+        from onnxscript import optimizer
+
+        model = onnx.load(Path(model_path))
+        before = model.SerializeToString()
+        optimized = optimizer.optimize(model)
+        return optimized, optimized.SerializeToString() != before
+    except ImportError as exc:
+        raise CompilerError(
+            "ONNX Script preprocessing requested, but onnxscript is not installed"
+        ) from exc
+    except Exception as exc:
+        raise CompilerError(f"ONNX Script preprocessing failed for {model_path}: {exc}") from exc
+
+
+def load_and_optimize(model_path: str | Path, disabled_passes: set[str] | None = None,
+                      onnx_preprocess: bool = False):
     original = import_onnx(model_path)
-    optimized, pass_report = optimize(original, disabled_passes)
+    preprocessor_changed = False
+    if onnx_preprocess:
+        preprocessed_model, preprocessor_changed = _onnxscript_preprocess(model_path)
+        canonical = import_onnx(preprocessed_model)
+    else:
+        canonical = original
+    optimized, pass_report = optimize(canonical, disabled_passes)
+    pass_report.insert(0, {
+        "name": "onnxscript-preprocess",
+        "disabled": not onnx_preprocess,
+        "changed": preprocessor_changed,
+        "nodes_before": len(original.nodes),
+        "nodes_after": len(canonical.nodes),
+    })
     return original, optimized, pass_report
 
 
@@ -32,7 +63,7 @@ def _fusion_rejections(graph, schedule: DenseChainSchedule) -> list[str]:
     graph.rebuild_links()
     reasons: list[str] = []
     for node in graph.nodes:
-        if node.op not in {"Dense", "DenseBiasActivation", "Add"}:
+        if node.op not in {"Dense", "DenseBiasActivation", "DenseEpilogue", "DenseResidualActivation", "Add"}:
             continue
         consumers = graph.tensors[node.outputs[0]].consumers
         if len(consumers) > 1:
@@ -46,8 +77,26 @@ def _fusion_rejections(graph, schedule: DenseChainSchedule) -> list[str]:
     return reasons
 
 
+def _optimized_component_operations(graph) -> list[str]:
+    operations: list[str] = []
+
+    def record_steps(steps) -> None:
+        for step in steps:
+            operations.append(str(step["op"]))
+            record_steps(step.get("attributes", {}).get("steps", []))
+
+    for node in graph.nodes:
+        operations.append(node.op)
+        record_steps(node.attributes.get("steps", []))
+        record_steps(node.attributes.get("map_steps", []))
+        record_steps(node.attributes.get("map_region_steps", []))
+        record_steps(node.attributes.get("epilogue_steps", []))
+    return operations
+
+
 def _report(original, optimized, pass_report, sample_plan, sample_mask_plan,
-            schedule: DenseChainSchedule, scalar_bytes: int) -> dict[str, Any]:
+            schedule: DenseChainSchedule, scalar_bytes: int,
+            workspace_oracle: dict[str, Any] | None = None) -> dict[str, Any]:
     input_tensor = original.tensors[original.inputs[0]]
     output_tensor = original.tensors[original.outputs[0]]
     learned_parameter_count = sum(
@@ -56,12 +105,13 @@ def _report(original, optimized, pass_report, sample_plan, sample_mask_plan,
     canonical_counts = dict(sorted(Counter(node.op for node in optimized.nodes).items()))
     fused_ops = sum(
         count for op, count in canonical_counts.items()
-        if op in {"CompareSelect", "DenseBiasActivation", "ElementwiseChain", "ResidualAddActivation"}
+        if op in {"CompareSelect", "DenseBiasActivation", "DenseEpilogue", "DenseResidualActivation", "ElementwiseChain",
+                  "PointwiseRegion", "ResidualAddActivation"}
     )
     storage_report = sample_plan.to_dict(scalar_bytes)
     storage_report["mask_plan"] = sample_mask_plan.to_dict(1)
     storage_report["estimated_stack_bytes"] += sample_mask_plan.total_elements
-    return {
+    report = {
         "model_inputs": [{"name": input_tensor.name, "shape": _shape_string(input_tensor.shape),
                           "dtype": input_tensor.dtype.value}],
         "model_outputs": [{"name": output_tensor.name, "shape": _shape_string(output_tensor.shape),
@@ -77,6 +127,7 @@ def _report(original, optimized, pass_report, sample_plan, sample_mask_plan,
         "fused_operation_count": fused_ops,
         "canonical_operations": [node.op for node in original.nodes],
         "optimized_operations": [node.op for node in optimized.nodes],
+        "optimized_component_operations": _optimized_component_operations(optimized),
         "passes": pass_report,
         "storage": storage_report,
         "dense_chain_schedule": schedule.to_dict(),
@@ -119,9 +170,25 @@ def _report(original, optimized, pass_report, sample_plan, sample_mask_plan,
         "fusion_rejections": _fusion_rejections(optimized, schedule),
         "rejected_constructs": [],
     }
+    if workspace_oracle is not None:
+        report["workspace_oracle"] = workspace_oracle
+    return report
 
 
-def _plans(optimized, workspace_reduction_aggressiveness: int):
+def _plan_comparison(native_plan, heuristic_plan, exact_plan) -> dict[str, Any]:
+    return {
+        "heuristic_elements": heuristic_plan.total_elements,
+        "native_elements": native_plan.total_elements,
+        "exact_elements": exact_plan.total_elements,
+        "native_saved_elements": heuristic_plan.total_elements - native_plan.total_elements,
+        "heuristic_optimality_gap": heuristic_plan.total_elements - exact_plan.total_elements,
+        "exact_backend": exact_plan.placement_strategy,
+        "optimality_proven": exact_plan.optimality_proven,
+    }
+
+
+def _plans(optimized, workspace_reduction_aggressiveness: int,
+           analyze_workspace: bool = False):
     schedule = schedule_dense_chains(optimized, workspace_reduction_aggressiveness)
     floating = {DType.FLOAT32, DType.FLOAT64}
     sample_plan = plan_storage(
@@ -129,7 +196,26 @@ def _plans(optimized, workspace_reduction_aggressiveness: int):
         schedule.recompute_liveness_extensions(optimized), floating,
     )
     sample_mask_plan = plan_storage(optimized, dtypes={DType.BOOL})
-    return schedule, sample_plan, sample_mask_plan
+    oracle = None
+    if analyze_workspace:
+        floating_heuristic = plan_storage(
+            optimized, schedule.eliminated_tensors,
+            schedule.recompute_liveness_extensions(optimized), floating,
+            placement="heuristic",
+        )
+        floating_exact = plan_storage(
+            optimized, schedule.eliminated_tensors,
+            schedule.recompute_liveness_extensions(optimized), floating,
+            placement="exact",
+        )
+        mask_heuristic = plan_storage(optimized, dtypes={DType.BOOL}, placement="heuristic")
+        mask_exact = plan_storage(optimized, dtypes={DType.BOOL}, placement="exact")
+        oracle = {
+            "scope": "arena placement for the selected fusion/streaming/recomputation schedule",
+            "floating": _plan_comparison(sample_plan, floating_heuristic, floating_exact),
+            "boolean": _plan_comparison(sample_mask_plan, mask_heuristic, mask_exact),
+        }
+    return schedule, sample_plan, sample_mask_plan, oracle
 
 
 def _validate_workspace_reduction_aggressiveness(value: int) -> None:
@@ -141,28 +227,36 @@ def _validate_workspace_reduction_aggressiveness(value: int) -> None:
 
 
 def validate_model(model_path: str | Path, disabled_passes: set[str] | None = None,
-                   workspace_reduction_aggressiveness: int = 3) -> dict[str, Any]:
+                   workspace_reduction_aggressiveness: int = 3,
+                   onnx_preprocess: bool = False,
+                   analyze_workspace: bool = False) -> dict[str, Any]:
     _validate_workspace_reduction_aggressiveness(workspace_reduction_aggressiveness)
-    original, optimized, pass_report = load_and_optimize(model_path, disabled_passes)
-    schedule, sample_plan, sample_mask_plan = _plans(
-        optimized, workspace_reduction_aggressiveness,
+    original, optimized, pass_report = load_and_optimize(
+        model_path, disabled_passes, onnx_preprocess,
+    )
+    schedule, sample_plan, sample_mask_plan, oracle = _plans(
+        optimized, workspace_reduction_aggressiveness, analyze_workspace,
     )
     scalar_bytes = 4 if optimized.tensors[optimized.inputs[0]].dtype == DType.FLOAT32 else 8
     return _report(
-        original, optimized, pass_report, sample_plan, sample_mask_plan, schedule, scalar_bytes,
+        original, optimized, pass_report, sample_plan, sample_mask_plan, schedule, scalar_bytes, oracle,
     )
 
 
 def compile_model(model_path: str | Path, output_dir: str | Path,
                   disabled_passes: set[str] | None = None,
                   model_name: str = "GeneratedModel",
-                  workspace_reduction_aggressiveness: int = 3) -> dict[str, Any]:
+                  workspace_reduction_aggressiveness: int = 3,
+                  onnx_preprocess: bool = False,
+                  analyze_workspace: bool = False) -> dict[str, Any]:
     _validate_workspace_reduction_aggressiveness(workspace_reduction_aggressiveness)
-    original, optimized, pass_report = load_and_optimize(model_path, disabled_passes)
+    original, optimized, pass_report = load_and_optimize(
+        model_path, disabled_passes, onnx_preprocess,
+    )
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    schedule, sample_plan, sample_mask_plan = _plans(
-        optimized, workspace_reduction_aggressiveness,
+    schedule, sample_plan, sample_mask_plan, oracle = _plans(
+        optimized, workspace_reduction_aggressiveness, analyze_workspace,
     )
     scalar_bytes = 4 if optimized.tensors[optimized.inputs[0]].dtype == DType.FLOAT32 else 8
     offsets, manifest = write_weights(optimized, output_path)
@@ -173,7 +267,7 @@ def compile_model(model_path: str | Path, output_dir: str | Path,
         payload_elements, scalar_code,
     )
     report = _report(
-        original, optimized, pass_report, sample_plan, sample_mask_plan, schedule, scalar_bytes,
+        original, optimized, pass_report, sample_plan, sample_mask_plan, schedule, scalar_bytes, oracle,
     )
     report["generated_header"] = header.name
     report["weights"] = "weights.bin"

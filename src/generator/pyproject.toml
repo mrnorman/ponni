@@ -9,6 +9,9 @@ description = "Ahead-of-time ONNX to Kokkos compiler for PONNI"
 requires-python = ">=3.10"
 dependencies = ["numpy", "onnx", "onnxruntime", "onnxscript", "torch", "keras", "tensorflow", "tf2onnx"]
 
+[project.optional-dependencies]
+exact = ["ortools>=9.10"]
+
 [project.scripts]
 kokkos-nn = "kokkos_nn.cli:main"
 

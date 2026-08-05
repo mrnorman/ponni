@@ -30,6 +30,21 @@ class CppEmitter:
         return self.graph.tensors[tensor_id].sample_size
 
     @staticmethod
+    def _input_map_runs(input_map: list[dict[str, int]]) -> list[tuple[int, int, int, int]]:
+        runs: list[tuple[int, int, int, int]] = []
+        begin = 0
+        while begin < len(input_map):
+            tensor_id = int(input_map[begin]["tensor"])
+            source_begin = int(input_map[begin]["index"])
+            end = begin + 1
+            while (end < len(input_map) and int(input_map[end]["tensor"]) == tensor_id and
+                   int(input_map[end]["index"]) == source_begin + end - begin):
+                end += 1
+            runs.append((begin, end, tensor_id, source_begin))
+            begin = end
+        return runs
+
+    @staticmethod
     def _scope(lines: list[str]) -> list[str]:
         return ["    {"] + [f"  {line}" for line in lines] + ["    }"]
 
@@ -246,6 +261,127 @@ class CppEmitter:
             return f"Kokkos::pow({left}, {right})"
         raise CompilerError(f"C++ emitter has no binary implementation for {op}")
 
+    def _pointwise_expression(self, op: str, operands: list[str], attributes: dict[str, object],
+                              input_ids: list[int], half: bool,
+                              input_dtypes: list[DType] | None = None) -> str:
+        if op in {"Add", "Div", "Max", "Min", "Mul", "Pow", "Sub"}:
+            return self._binary(op, operands[0], operands[1], half=half)
+        if op in {"Equal", "Greater", "GreaterOrEqual", "Less", "LessOrEqual"}:
+            return self._comparison(
+                op, operands[0], operands[1], half=half,
+                boolean_inputs=(
+                    input_dtypes[0] == DType.BOOL if input_dtypes is not None else
+                    self.graph.tensors[input_ids[0]].dtype == DType.BOOL
+                ),
+            )
+        if op in {"And", "Or", "Xor"}:
+            return self._logical(op, operands[0], operands[1], half=half)
+        if op == "Not":
+            return self._logical(op, operands[0], half=half)
+        if op == "Cast":
+            if half:
+                return (
+                    f"ponni::TwoHalf::select({operands[0]}, ponni::TwoHalf::from_floats(1.0f, 1.0f), "
+                    "ponni::TwoHalf::zero())"
+                )
+            return f"static_cast<Scalar>({operands[0]})"
+        if op == "PRelu":
+            if half:
+                return f"ponni::TwoHalf::prelu({operands[0]}, {operands[1]})"
+            return (
+                f"({operands[0]} >= static_cast<Scalar>(0) ? {operands[0]} : "
+                f"{operands[0]} * {operands[1]})"
+            )
+        if op in {"Mean", "Sum"}:
+            expression = " + ".join(operands)
+            if op == "Mean":
+                if half:
+                    divisor = len(operands)
+                    return f"({expression}) / ponni::TwoHalf::from_floats({divisor}.0f, {divisor}.0f)"
+                return f"({expression}) / static_cast<Scalar>({len(operands)})"
+            return f"({expression})"
+        if op in {"IsInf", "IsNaN"}:
+            if half:
+                if op == "IsNaN":
+                    return f"ponni::TwoHalf::is_nan({operands[0]})"
+                negative = str(bool(int(attributes.get("detect_negative", 1)))).lower()
+                positive = str(bool(int(attributes.get("detect_positive", 1)))).lower()
+                return f"ponni::TwoHalf::is_inf({operands[0]}, {negative}, {positive})"
+            if op == "IsNaN":
+                return f"Kokkos::isnan({operands[0]})"
+            signs = []
+            if int(attributes.get("detect_negative", 1)):
+                signs.append(f"{operands[0]} < static_cast<Scalar>(0)")
+            if int(attributes.get("detect_positive", 1)):
+                signs.append(f"{operands[0]} > static_cast<Scalar>(0)")
+            return f"(Kokkos::isinf({operands[0]}) && ({' || '.join(signs) if signs else 'false'}))"
+        if op == "Where":
+            if half:
+                return f"ponni::TwoHalf::select({operands[0]}, {operands[1]}, {operands[2]})"
+            return f"({operands[0]} ? {operands[1]} : {operands[2]})"
+        if op == "CompareSelect":
+            condition = self._comparison(
+                str(attributes["comparison"]), operands[0], operands[1], half=half,
+            )
+            if half:
+                return f"ponni::TwoHalf::select({condition}, {operands[2]}, {operands[3]})"
+            return f"({condition} ? {operands[2]} : {operands[3]})"
+        if op == "Clip":
+            value = operands[0]
+            minimum = operands[1] if len(operands) > 1 else None
+            maximum = operands[2] if len(operands) > 2 else None
+            if minimum is None and "min" in attributes:
+                scalar = float(attributes["min"])
+                minimum = (
+                    f"ponni::TwoHalf::from_floats({scalar!r}f, {scalar!r}f)"
+                    if half else f"static_cast<Scalar>({scalar!r})"
+                )
+            if maximum is None and "max" in attributes:
+                scalar = float(attributes["max"])
+                maximum = (
+                    f"ponni::TwoHalf::from_floats({scalar!r}f, {scalar!r}f)"
+                    if half else f"static_cast<Scalar>({scalar!r})"
+                )
+            if minimum is not None:
+                value = (
+                    f"ponni::TwoHalf::maximum({value}, {minimum})"
+                    if half else f"({value} > {minimum} ? {value} : {minimum})"
+                )
+            if maximum is not None:
+                value = (
+                    f"ponni::TwoHalf::minimum({value}, {maximum})"
+                    if half else f"({value} < {maximum} ? {value} : {maximum})"
+                )
+            return value
+        if op == "BatchNormalization":
+            epsilon = float(attributes.get("epsilon", 1e-5))
+            if half:
+                eps = f"ponni::TwoHalf::from_floats({epsilon!r}f, {epsilon!r}f)"
+                return (
+                    f"(({operands[0]} - {operands[3]}) / ponni::TwoHalf::sqrt({operands[4]} + {eps}) * "
+                    f"{operands[1]} + {operands[2]})"
+                )
+            return (
+                f"(({operands[0]} - {operands[3]}) / "
+                f"Kokkos::sqrt({operands[4]} + static_cast<Scalar>({epsilon!r})) * "
+                f"{operands[1]} + {operands[2]})"
+            )
+        if len(operands) == 1:
+            return (
+                self._half_unary(op, operands[0], attributes)
+                if half else self._unary(op, operands[0], attributes)
+            )
+        raise CompilerError(f"pointwise-region emitter has no implementation for {op}")
+
+    def _dense_epilogue_value(self, node: Node, value: str, index: str, read, half: bool) -> str:
+        for step in node.attributes.get("epilogue_steps", []):
+            input_ids = [node.outputs[0] if item == "prev" else int(item) for item in step["inputs"]]
+            operands = [value if item == "prev" else read(int(item), index) for item in step["inputs"]]
+            value = self._pointwise_expression(
+                str(step["op"]), operands, step.get("attributes", {}), input_ids, half,
+            )
+        return value
+
     @staticmethod
     def _comparison(op: str, left: str, right: str, half: bool = False,
                     boolean_inputs: bool = False) -> str:
@@ -324,17 +460,44 @@ class CppEmitter:
 
     def _scalar_reduction(self, node: Node, read, write, indent: str) -> list[str]:
         input_id = node.inputs[0]
-        input_size = self._size(input_id)
-        value = lambda index: read(input_id, index)
+        input_size = int(node.attributes.get("map_size", self._size(input_id)))
+        map_steps = node.attributes.get("map_steps")
+        map_region_steps = node.attributes.get("map_region_steps")
+
+        def mapped_value(index: str, line_indent: str) -> tuple[list[str], str]:
+            if map_region_steps is not None:
+                return self._pointwise_program_value(
+                    map_region_steps, int(node.attributes["map_output"]), index, read, False,
+                    line_indent, "mapped_region_value",
+                )
+            if map_steps is None:
+                return [], read(input_id, index)
+            mapped_lines: list[str] = []
+            current = ""
+            for step_index, step in enumerate(map_steps):
+                operands = [current if value == "prev" else read(int(value), index) for value in step["inputs"]]
+                if len(operands) == 1:
+                    expression = self._unary(str(step["op"]), operands[0], step.get("attributes", {}))
+                else:
+                    expression = self._binary(str(step["op"]), operands[0], operands[1])
+                current = f"mapped_value_{step_index}"
+                mapped_lines.append(f"{line_indent}Scalar const {current} = {expression};")
+            return mapped_lines, current
+
         lines: list[str] = []
         if node.op in {"ReduceMax", "ReduceMin"}:
-            lines.append(f"{indent}Scalar reduction = {value('0')};")
+            mapped_lines, initial = mapped_value("0", indent)
+            lines.extend(mapped_lines)
+            lines.append(f"{indent}Scalar reduction = {initial};")
             comparison = ">" if node.op == "ReduceMax" else "<"
             lines.append(f"{indent}for (int i = 1; i < {input_size}; i++) {{")
-            lines.append(f"{indent}  Scalar const value = {value('i')};")
+            mapped_lines, current = mapped_value("i", indent + "  ")
+            lines.extend(mapped_lines)
+            lines.append(f"{indent}  Scalar const value = {current};")
             lines.append(f"{indent}  reduction = value {comparison} reduction ? value : reduction;")
             lines.append(f"{indent}}}")
         elif node.op == "ReduceLogSumExp":
+            value = lambda index: read(input_id, index)
             lines.append(f"{indent}Scalar maximum = {value('0')};")
             lines.append(f"{indent}for (int i = 1; i < {input_size}; i++) {{")
             lines.append(f"{indent}  Scalar const value = {value('i')};")
@@ -350,13 +513,16 @@ class CppEmitter:
         else:
             initial = "static_cast<Scalar>(1)" if node.op == "ReduceProd" else "static_cast<Scalar>(0)"
             lines.append(f"{indent}Scalar reduction = {initial};")
-            expression = value("i")
+            mapped_lines, expression = mapped_value("i", indent + "  ")
             if node.op == "ReduceL1":
                 expression = f"Kokkos::abs({expression})"
             elif node.op in {"ReduceL2", "ReduceSumSquare"}:
                 expression = f"({expression} * {expression})"
             operator = "*=" if node.op == "ReduceProd" else "+="
-            lines.append(f"{indent}for (int i = 0; i < {input_size}; i++) reduction {operator} {expression};")
+            lines.append(f"{indent}for (int i = 0; i < {input_size}; i++) {{")
+            lines.extend(mapped_lines)
+            lines.append(f"{indent}  reduction {operator} {expression};")
+            lines.append(f"{indent}}}")
             if node.op == "ReduceMean":
                 lines.append(f"{indent}reduction /= static_cast<Scalar>({input_size});")
             elif node.op == "ReduceL2":
@@ -368,16 +534,43 @@ class CppEmitter:
 
     def _half_reduction(self, node: Node) -> list[str]:
         input_id = node.inputs[0]
-        input_size = self._size(input_id)
+        input_size = int(node.attributes.get("map_size", self._size(input_id)))
+        map_steps = node.attributes.get("map_steps")
+        map_region_steps = node.attributes.get("map_region_steps")
+
+        def mapped_value(index: str, indent: str) -> tuple[list[str], str]:
+            if map_region_steps is not None:
+                return self._pointwise_program_value(
+                    map_region_steps, int(node.attributes["map_output"]), index, self._half_read, True,
+                    indent, "mapped_region_value",
+                )
+            if map_steps is None:
+                return [], self._half_read(input_id, index)
+            mapped_lines: list[str] = []
+            current = ""
+            for step_index, step in enumerate(map_steps):
+                operands = [current if value == "prev" else self._half_read(int(value), index)
+                            for value in step["inputs"]]
+                if len(operands) == 1:
+                    expression = self._half_unary(str(step["op"]), operands[0], step.get("attributes", {}))
+                else:
+                    expression = self._binary(str(step["op"]), operands[0], operands[1], half=True)
+                current = f"mapped_value_{step_index}"
+                mapped_lines.append(f"{indent}ponni::TwoHalf const {current} = {expression};")
+            return mapped_lines, current
+
         value = lambda index: self._half_read(input_id, index)
         lines: list[str] = []
         if node.op in {"ReduceMax", "ReduceMin"}:
             function = "maximum" if node.op == "ReduceMax" else "minimum"
-            lines.append(f"    ponni::TwoHalf reduction = {value('0')};")
-            lines.append(
-                f"    for (int i = 1; i < {input_size}; i++) reduction = "
-                f"ponni::TwoHalf::{function}(reduction, {value('i')});"
-            )
+            mapped_lines, initial = mapped_value("0", "    ")
+            lines.extend(mapped_lines)
+            lines.append(f"    ponni::TwoHalf reduction = {initial};")
+            lines.append(f"    for (int i = 1; i < {input_size}; i++) {{")
+            mapped_lines, current = mapped_value("i", "      ")
+            lines.extend(mapped_lines)
+            lines.append(f"      reduction = ponni::TwoHalf::{function}(reduction, {current});")
+            lines.append("    }")
         elif node.op == "ReduceLogSumExp":
             lines.append(f"    ponni::TwoHalf maximum = {value('0')};")
             lines.append(
@@ -396,15 +589,16 @@ class CppEmitter:
         else:
             initial = "ponni::TwoHalf::from_floats(1.0f, 1.0f)" if node.op == "ReduceProd" else "ponni::TwoHalf::zero()"
             lines.append(f"    ponni::TwoHalf reduction = {initial};")
-            expression = value("i")
+            mapped_lines, expression = mapped_value("i", "      ")
             if node.op == "ReduceL1":
                 expression = f"ponni::TwoHalf::abs({expression})"
             elif node.op in {"ReduceL2", "ReduceSumSquare"}:
                 expression = f"({expression} * {expression})"
             operator = "*" if node.op == "ReduceProd" else "+"
-            lines.append(
-                f"    for (int i = 0; i < {input_size}; i++) reduction = reduction {operator} {expression};"
-            )
+            lines.append(f"    for (int i = 0; i < {input_size}; i++) {{")
+            lines.extend(mapped_lines)
+            lines.append(f"      reduction = reduction {operator} {expression};")
+            lines.append("    }")
             if node.op == "ReduceMean":
                 lines.append(
                     f"    reduction = reduction / ponni::TwoHalf::from_floats({input_size}.0f, {input_size}.0f);"
@@ -416,6 +610,62 @@ class CppEmitter:
         lines.append(f"    {self._half_write(node.outputs[0], '0')} = reduction;")
         return lines
 
+    def _pointwise_program_value(self, steps, output_id: int, index: str, read, half: bool,
+                                 indent: str, prefix: str) -> tuple[list[str], str]:
+        lines: list[str] = []
+        region_values: dict[int, str] = {}
+
+        def operand(value: int) -> str:
+            if value in region_values:
+                return region_values[value]
+            return read(value, index)
+
+        for step_index, step in enumerate(steps):
+            if step["op"] == "ElementwiseChain":
+                current = ""
+                for chain_index, chain_step in enumerate(step["attributes"]["steps"]):
+                    operands = [current if value == "prev" else operand(int(value))
+                                for value in chain_step["inputs"]]
+                    if len(operands) == 1:
+                        expression = (
+                            self._half_unary(str(chain_step["op"]), operands[0], chain_step.get("attributes", {}))
+                            if half else self._unary(
+                                str(chain_step["op"]), operands[0], chain_step.get("attributes", {})
+                            )
+                        )
+                    else:
+                        expression = self._binary(str(chain_step["op"]), operands[0], operands[1], half=half)
+                    current = f"{prefix}_{step_index}_{chain_index}"
+                    scalar_type = "ponni::TwoHalf" if half else "Scalar"
+                    lines.append(f"{indent}{scalar_type} const {current} = {expression};")
+            else:
+                input_ids = [int(value) for value in step["inputs"]]
+                operands = [operand(value) for value in input_ids]
+                expression = self._pointwise_expression(
+                    str(step["op"]), operands, step["attributes"], input_ids, half,
+                    [DType(value) for value in step["input_dtypes"]],
+                )
+                current = f"{prefix}_{step_index}"
+                output_dtype = DType(step["output_dtype"])
+                scalar_type = (
+                    "ponni::TwoMask" if half and output_dtype == DType.BOOL else
+                    "ponni::TwoHalf" if half else "bool" if output_dtype == DType.BOOL else "Scalar"
+                )
+                lines.append(f"{indent}{scalar_type} const {current} = {expression};")
+            region_values[int(step["outputs"][0])] = current
+        return lines, region_values[output_id]
+
+    def _emit_pointwise_region(self, node: Node, read, write, half: bool) -> list[str]:
+        output_size = self._size(node.outputs[0])
+        lines = [f"    for (int i = 0; i < {output_size}; i++) {{"]
+        program_lines, value = self._pointwise_program_value(
+            node.attributes["steps"], node.outputs[0], "i", read, half, "      ", "region_value",
+        )
+        lines.extend(program_lines)
+        lines.append(f"      {write(node.outputs[0], 'i')} = {value};")
+        lines.append("    }")
+        return lines
+
     def _emit_node(self, node: Node, batch: bool = False, access=None) -> list[str]:
         output_id = node.outputs[0]
         output_size = self._size(output_id)
@@ -425,9 +675,10 @@ class CppEmitter:
         else:
             read, write = access
         lines: list[str] = []
-        if node.op in {"Dense", "DenseBiasActivation"}:
+        if node.op in {"Dense", "DenseBiasActivation", "DenseResidualActivation", "DenseEpilogue"}:
             input_id = node.inputs[0]
-            input_size = self._size(input_id)
+            input_map = node.attributes.get("input_map")
+            input_size = len(input_map) if input_map is not None else self._size(input_id)
             weight_id = int(node.attributes["weight"])
             if self._size(weight_id) != output_size * input_size:
                 raise CompilerError(f"canonical dense weight size is inconsistent at node {node.id}")
@@ -437,14 +688,32 @@ class CppEmitter:
                 lines.append("      Scalar sum = static_cast<Scalar>(0);")
             else:
                 lines.append(f"      Scalar sum = {read(int(bias_id), 'i')};")
-            lines.append(f"      for (int j = 0; j < {input_size}; j++) {{")
-            weight = read(weight_id, f"i * {input_size} + j")
-            lines.append(f"        sum += {weight} * {read(input_id, 'j')};")
-            lines.append("      }")
+            if input_map is None:
+                lines.append(f"      for (int j = 0; j < {input_size}; j++) {{")
+                weight = read(weight_id, f"i * {input_size} + j")
+                lines.append(f"        sum += {weight} * {read(input_id, 'j')};")
+                lines.append("      }")
+            else:
+                for begin, end, tensor_id, source_begin in self._input_map_runs(input_map):
+                    if end == begin + 1:
+                        weight = read(weight_id, f"i * {input_size} + {begin}")
+                        lines.append(f"      sum += {weight} * {read(tensor_id, str(source_begin))};")
+                    else:
+                        lines.append(f"      for (int j = {begin}; j < {end}; j++) {{")
+                        weight = read(weight_id, f"i * {input_size} + j")
+                        source_index = f"{source_begin} + j - {begin}"
+                        lines.append(f"        sum += {weight} * {read(tensor_id, source_index)};")
+                        lines.append("      }")
             value = "sum"
             if node.op == "DenseBiasActivation":
                 value = self._activation(str(node.attributes["activation"]), value,
                                          node.attributes.get("activation_attributes", {}))
+            elif node.op == "DenseResidualActivation":
+                added = self._binary("Add", value, read(int(node.attributes["residual"]), "i"))
+                value = self._activation(str(node.attributes["activation"]), added,
+                                         node.attributes.get("activation_attributes", {}))
+            elif node.op == "DenseEpilogue":
+                value = self._dense_epilogue_value(node, value, "i", read, False)
             lines.append(f"      {write(output_id, 'i')} = {value};")
             lines.append("    }")
             return lines
@@ -667,37 +936,64 @@ class CppEmitter:
             for step_index, step in enumerate(node.attributes["steps"]):
                 operands = ["value" if value == "prev" else read(int(value), "i")
                             for value in step["inputs"]]
-                expression = self._binary(str(step["op"]), operands[0], operands[1])
+                if len(operands) == 1:
+                    expression = self._unary(str(step["op"]), operands[0], step.get("attributes", {}))
+                else:
+                    expression = self._binary(str(step["op"]), operands[0], operands[1])
                 declaration = "Scalar value =" if step_index == 0 else "value ="
                 lines.append(f"      {declaration} {expression};")
             lines.append(f"      {write(output_id, 'i')} = value;")
             lines.append("    }")
             return lines
+        if node.op == "PointwiseRegion":
+            return self._emit_pointwise_region(node, read, write, half=False)
         raise CompilerError(f"C++ emitter has no implementation for canonical operation {node.op}")
 
     def _emit_half_node(self, node: Node) -> list[str]:
         output_id = node.outputs[0]
         output_size = self._size(output_id)
         lines: list[str] = []
-        if node.op in {"Dense", "DenseBiasActivation"}:
+        if node.op in {"Dense", "DenseBiasActivation", "DenseResidualActivation", "DenseEpilogue"}:
             input_id = node.inputs[0]
-            input_size = self._size(input_id)
+            input_map = node.attributes.get("input_map")
+            input_size = len(input_map) if input_map is not None else self._size(input_id)
             weight_id = int(node.attributes["weight"])
             bias_id = node.attributes.get("bias")
             lines.append(f"    for (int i = 0; i < {output_size}; i++) {{")
             initial = "ponni::TwoHalf::zero()" if bias_id is None else self._half_read(int(bias_id), "i")
             lines.append(f"      ponni::TwoHalf sum = {initial};")
-            lines.append(f"      for (int j = 0; j < {input_size}; j++) {{")
-            weight = self._half_read(weight_id, f"i * {input_size} + j")
-            lines.append(
-                f"        sum = ponni::TwoHalf::fma({weight}, {self._half_read(input_id, 'j')}, sum);"
-            )
-            lines.append("      }")
+            if input_map is None:
+                lines.append(f"      for (int j = 0; j < {input_size}; j++) {{")
+                weight = self._half_read(weight_id, f"i * {input_size} + j")
+                lines.append(
+                    f"        sum = ponni::TwoHalf::fma({weight}, {self._half_read(input_id, 'j')}, sum);"
+                )
+                lines.append("      }")
+            else:
+                for begin, end, tensor_id, source_begin in self._input_map_runs(input_map):
+                    if end == begin + 1:
+                        weight = self._half_read(weight_id, f"i * {input_size} + {begin}")
+                        value = self._half_read(tensor_id, str(source_begin))
+                        lines.append(f"      sum = ponni::TwoHalf::fma({weight}, {value}, sum);")
+                    else:
+                        lines.append(f"      for (int j = {begin}; j < {end}; j++) {{")
+                        weight = self._half_read(weight_id, f"i * {input_size} + j")
+                        value = self._half_read(tensor_id, f"{source_begin} + j - {begin}")
+                        lines.append(f"        sum = ponni::TwoHalf::fma({weight}, {value}, sum);")
+                        lines.append("      }")
             if node.op == "DenseBiasActivation":
                 value = self._half_unary(
                     str(node.attributes["activation"]), "sum",
                     node.attributes.get("activation_attributes", {}),
                 )
+            elif node.op == "DenseResidualActivation":
+                added = f"(sum + {self._half_read(int(node.attributes['residual']), 'i')})"
+                value = self._half_unary(
+                    str(node.attributes["activation"]), added,
+                    node.attributes.get("activation_attributes", {}),
+                )
+            elif node.op == "DenseEpilogue":
+                value = self._dense_epilogue_value(node, "sum", "i", self._half_read, True)
             else:
                 value = "sum"
             lines.append(f"      {self._half_write(output_id, 'i')} = {value};")
@@ -948,12 +1244,17 @@ class CppEmitter:
             for step_index, step in enumerate(node.attributes["steps"]):
                 operands = ["value" if value == "prev" else self._half_read(int(value), "i")
                             for value in step["inputs"]]
-                expression = self._binary(str(step["op"]), operands[0], operands[1], half=True)
+                if len(operands) == 1:
+                    expression = self._half_unary(str(step["op"]), operands[0], step.get("attributes", {}))
+                else:
+                    expression = self._binary(str(step["op"]), operands[0], operands[1], half=True)
                 declaration = "ponni::TwoHalf value =" if step_index == 0 else "value ="
                 lines.append(f"      {declaration} {expression};")
             lines.append(f"      {self._half_write(output_id, 'i')} = value;")
             lines.append("    }")
             return lines
+        if node.op == "PointwiseRegion":
+            return self._emit_pointwise_region(node, self._half_read, self._half_write, half=True)
         raise CompilerError(f"half2 C++ emitter has no implementation for canonical operation {node.op}")
 
     def _emit_streaming_dense_pair(self, producer: Node, consumer: Node, batch: bool,
@@ -996,9 +1297,22 @@ class CppEmitter:
             weight_value = read(producer_weight, f"ihidden * {input_size} + iinput")
             lines.append(f"        hidden += {weight_value} * {read(input_id, 'iinput')};")
             lines.append("      }")
-        lines.append(
-            f"      hidden = {self._activation(str(producer.attributes['activation']), 'hidden', producer.attributes.get('activation_attributes', {}))};"
-        )
+        hidden = "hidden"
+        if producer.op == "DenseBiasActivation":
+            hidden = self._activation(
+                str(producer.attributes["activation"]), hidden,
+                producer.attributes.get("activation_attributes", {}),
+            )
+        elif producer.op == "DenseResidualActivation":
+            hidden = self._activation(
+                str(producer.attributes["activation"]),
+                self._binary("Add", hidden, read(int(producer.attributes["residual"]), "ihidden")),
+                producer.attributes.get("activation_attributes", {}),
+            )
+        elif producer.op == "DenseEpilogue":
+            hidden = self._dense_epilogue_value(producer, hidden, "ihidden", read, False)
+        if hidden != "hidden":
+            lines.append(f"      hidden = {hidden};")
         for ioutput in range(output_size):
             weight_value = read(consumer_weight, f"{ioutput} * {hidden_size} + ihidden")
             lines.append(f"      output_accumulator_{ioutput} += {weight_value} * hidden;")
@@ -1008,6 +1322,16 @@ class CppEmitter:
             if consumer.op == "DenseBiasActivation":
                 value = self._activation(str(consumer.attributes["activation"]), value,
                                          consumer.attributes.get("activation_attributes", {}))
+            elif consumer.op == "DenseResidualActivation":
+                added = self._binary(
+                    "Add", value, read(int(consumer.attributes["residual"]), str(ioutput))
+                )
+                value = self._activation(
+                    str(consumer.attributes["activation"]), added,
+                    consumer.attributes.get("activation_attributes", {}),
+                )
+            elif consumer.op == "DenseEpilogue":
+                value = self._dense_epilogue_value(consumer, value, str(ioutput), read, False)
             lines.append(f"    {write(output_id, str(ioutput))} = {value};")
         return lines
 
@@ -1042,9 +1366,22 @@ class CppEmitter:
             f"{self._half_read(input_id, 'iinput')}, hidden);"
         )
         lines.append("      }")
-        lines.append(
-            f"      hidden = {self._half_unary(str(producer.attributes['activation']), 'hidden', producer.attributes.get('activation_attributes', {}))};"
-        )
+        hidden = "hidden"
+        if producer.op == "DenseBiasActivation":
+            hidden = self._half_unary(
+                str(producer.attributes["activation"]), hidden,
+                producer.attributes.get("activation_attributes", {}),
+            )
+        elif producer.op == "DenseResidualActivation":
+            added = f"(hidden + {self._half_read(int(producer.attributes['residual']), 'ihidden')})"
+            hidden = self._half_unary(
+                str(producer.attributes["activation"]), added,
+                producer.attributes.get("activation_attributes", {}),
+            )
+        elif producer.op == "DenseEpilogue":
+            hidden = self._dense_epilogue_value(producer, hidden, "ihidden", self._half_read, True)
+        if hidden != "hidden":
+            lines.append(f"      hidden = {hidden};")
         for ioutput in range(output_size):
             weight = self._half_read(consumer_weight, f"{ioutput} * {hidden_size} + ihidden")
             lines.append(
@@ -1058,6 +1395,16 @@ class CppEmitter:
                 value = self._half_unary(
                     str(consumer.attributes["activation"]), value,
                     consumer.attributes.get("activation_attributes", {}),
+                )
+            elif consumer.op == "DenseResidualActivation":
+                added = f"({value} + {self._half_read(int(consumer.attributes['residual']), str(ioutput))})"
+                value = self._half_unary(
+                    str(consumer.attributes["activation"]), added,
+                    consumer.attributes.get("activation_attributes", {}),
+                )
+            elif consumer.op == "DenseEpilogue":
+                value = self._dense_epilogue_value(
+                    consumer, value, str(ioutput), self._half_read, True,
                 )
             lines.append(f"    {self._half_write(output_id, str(ioutput))} = {value};")
         return lines

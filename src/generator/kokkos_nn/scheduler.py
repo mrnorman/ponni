@@ -6,6 +6,9 @@ from .ir import DType, Graph, Node
 from .planner import plan_storage
 
 
+DENSE_OPS = {"Dense", "DenseBiasActivation", "DenseEpilogue", "DenseResidualActivation"}
+
+
 @dataclass(frozen=True)
 class ActivationDecision:
     tensor_id: int
@@ -45,10 +48,13 @@ class DenseChainSchedule:
         nodes = {node.id: node for node in graph.nodes}
         extensions: dict[int, set[int]] = {}
         for decision in self.decisions.values():
-            if decision.action != "recompute":
+            if decision.action not in {"recompute", "stream"}:
                 continue
             producer = nodes[decision.producer_id]
-            extensions.setdefault(producer.inputs[0], set()).update(decision.consumer_ids)
+            for input_id in producer.inputs:
+                if graph.tensors[input_id].is_constant:
+                    continue
+                extensions.setdefault(input_id, set()).update(decision.consumer_ids)
         return extensions
 
     def to_dict(self) -> dict[str, object]:
@@ -70,9 +76,14 @@ class DenseChainSchedule:
 
 
 def _dense_pair_eligible(graph: Graph, producer: Node, consumer: Node) -> bool:
-    if producer.op != "DenseBiasActivation" or consumer.op not in {"Dense", "DenseBiasActivation"}:
+    if producer.op not in DENSE_OPS or consumer.op not in DENSE_OPS:
         return False
     if producer.outputs[0] != consumer.inputs[0]:
+        return False
+    # Virtual Concat/Gather inputs are described by an index map rather than by
+    # consumer.inputs[0].  The dense-pair emitter must not mistake the first
+    # mapped source for the complete logical dense input.
+    if "input_map" in producer.attributes or "input_map" in consumer.attributes:
         return False
     hidden_size = graph.tensors[producer.outputs[0]].sample_size
     output_size = graph.tensors[consumer.outputs[0]].sample_size
@@ -94,7 +105,7 @@ def _maximum_weight_path_edges(edges: list[tuple[int, int, int]]) -> set[tuple[i
 
 def _terminal_dense_consumer(graph: Graph, nodes: dict[int, Node], consumer: Node) -> bool:
     return not any(
-        nodes[next_id].op in {"Dense", "DenseBiasActivation"}
+        nodes[next_id].op in DENSE_OPS
         for next_id in graph.tensors[consumer.outputs[0]].consumers
     )
 
@@ -102,16 +113,19 @@ def _terminal_dense_consumer(graph: Graph, nodes: dict[int, Node], consumer: Nod
 def _recompute_candidates(graph: Graph, nodes: dict[int, Node], aggressiveness: int) -> list[Node]:
     candidates: list[Node] = []
     for producer in graph.nodes:
-        if producer.op != "DenseBiasActivation":
+        if producer.op not in DENSE_OPS:
             continue
         tensor = graph.tensors[producer.outputs[0]]
         consumers = [nodes[consumer_id] for consumer_id in tensor.consumers]
         if len(consumers) < 2:
             continue
         if not all(
-            consumer.op in {"Dense", "DenseBiasActivation"} and consumer.inputs[0] == tensor.id
+            consumer.op in DENSE_OPS and
+            consumer.inputs[0] == tensor.id and "input_map" not in consumer.attributes
             for consumer in consumers
         ):
+            continue
+        if "input_map" in producer.attributes:
             continue
         if aggressiveness == 4 and (
             len(consumers) != 2 or
@@ -123,13 +137,14 @@ def _recompute_candidates(graph: Graph, nodes: dict[int, Node], aggressiveness: 
 
 
 def _selected_linear_pairs(graph: Graph, nodes: dict[int, Node], aggressiveness: int,
-                           blocked_nodes: set[int]) -> set[tuple[int, int]]:
+                           blocked_nodes: set[int], base_excluded: set[int] | None = None,
+                           extensions: dict[int, set[int]] | None = None) -> set[tuple[int, int]]:
     candidates: dict[int, tuple[int, int]] = {}
     incoming: dict[int, int] = {}
     if aggressiveness < 2:
         return set()
     for producer in graph.nodes:
-        if producer.id in blocked_nodes or producer.op != "DenseBiasActivation":
+        if producer.id in blocked_nodes or producer.op not in DENSE_OPS:
             continue
         tensor = graph.tensors[producer.outputs[0]]
         if len(tensor.consumers) != 1:
@@ -144,7 +159,7 @@ def _selected_linear_pairs(graph: Graph, nodes: dict[int, Node], aggressiveness:
         incoming[consumer.id] = producer.id
 
     visited: set[int] = set()
-    selected: set[tuple[int, int]] = set()
+    paths: list[list[tuple[int, int, int]]] = []
     starts = sorted(producer_id for producer_id in candidates if producer_id not in incoming)
     for start in starts:
         path: list[tuple[int, int, int]] = []
@@ -154,8 +169,51 @@ def _selected_linear_pairs(graph: Graph, nodes: dict[int, Node], aggressiveness:
             consumer_id, weight = candidates[producer_id]
             path.append((producer_id, consumer_id, weight))
             producer_id = consumer_id
-        selected.update(_maximum_weight_path_edges(path))
-    return selected
+        paths.append(path)
+    edges = [edge for path in paths for edge in path]
+    if len(edges) > 12:
+        selected: set[tuple[int, int]] = set()
+        for path in paths:
+            selected.update(_maximum_weight_path_edges(path))
+        return selected
+
+    # For the small dense graphs PONNI targets, score every legal non-overlapping
+    # subset by the arena high-water it actually produces.  This catches cases
+    # where H-O is a poor proxy because unrelated live ranges dominate storage.
+    best_key: tuple[int, int, tuple[tuple[int, int], ...]] | None = None
+    best: set[tuple[int, int]] = set()
+    for mask in range(1 << len(edges)):
+        used_nodes: set[int] = set()
+        selected_edges: set[tuple[int, int]] = set()
+        eliminated = 0
+        legal = True
+        for index, (producer_id, consumer_id, weight) in enumerate(edges):
+            if not mask & (1 << index):
+                continue
+            if producer_id in used_nodes or consumer_id in used_nodes:
+                legal = False
+                break
+            used_nodes.update({producer_id, consumer_id})
+            selected_edges.add((producer_id, consumer_id))
+            eliminated += weight
+        if not legal:
+            continue
+        excluded = set(base_excluded or ())
+        excluded.update(nodes[producer_id].outputs[0] for producer_id, _ in selected_edges)
+        candidate_extensions = {tensor_id: set(consumers) for tensor_id, consumers in (extensions or {}).items()}
+        for producer_id, consumer_id in selected_edges:
+            for input_id in nodes[producer_id].inputs:
+                if graph.tensors[input_id].is_constant:
+                    continue
+                candidate_extensions.setdefault(input_id, set()).add(consumer_id)
+        extent = plan_storage(
+            graph, excluded, candidate_extensions, {DType.FLOAT32, DType.FLOAT64}, placement="heuristic",
+        ).total_elements
+        key = (extent, -eliminated, tuple(sorted(selected_edges)))
+        if best_key is None or key < best_key:
+            best_key = key
+            best = selected_edges
+    return best
 
 
 def _scheduled_workspace_extent(graph: Graph, nodes: dict[int, Node], aggressiveness: int,
@@ -167,11 +225,21 @@ def _scheduled_workspace_extent(graph: Graph, nodes: dict[int, Node], aggressive
         producer = nodes[producer_id]
         tensor = graph.tensors[producer.outputs[0]]
         excluded.add(tensor.id)
-        extensions.setdefault(producer.inputs[0], set()).update(tensor.consumers)
+        for input_id in producer.inputs:
+            if graph.tensors[input_id].is_constant:
+                continue
+            extensions.setdefault(input_id, set()).update(tensor.consumers)
         blocked_nodes.add(producer_id)
         blocked_nodes.update(tensor.consumers)
-    for producer_id, _ in _selected_linear_pairs(graph, nodes, aggressiveness, blocked_nodes):
+    selected_pairs = _selected_linear_pairs(
+        graph, nodes, aggressiveness, blocked_nodes, excluded, extensions,
+    )
+    for producer_id, consumer_id in selected_pairs:
         excluded.add(nodes[producer_id].outputs[0])
+        for input_id in nodes[producer_id].inputs:
+            if graph.tensors[input_id].is_constant:
+                continue
+            extensions.setdefault(input_id, set()).add(consumer_id)
     return plan_storage(
         graph, excluded, extensions, {DType.FLOAT32, DType.FLOAT64},
     ).total_elements
@@ -180,10 +248,45 @@ def _scheduled_workspace_extent(graph: Graph, nodes: dict[int, Node], aggressive
 def _select_recomputation(graph: Graph, nodes: dict[int, Node], aggressiveness: int) -> set[int]:
     if aggressiveness < 4:
         return set()
+    candidates = _recompute_candidates(graph, nodes, aggressiveness)
+    if len(candidates) <= 8:
+        best: set[int] = set()
+        best_key = (_scheduled_workspace_extent(graph, nodes, aggressiveness, best), 0, ())
+        for mask in range(1, 1 << len(candidates)):
+            selected: set[int] = set()
+            occupied: set[int] = set()
+            extra_madds = 0
+            legal = True
+            for index, producer in enumerate(candidates):
+                if not mask & (1 << index):
+                    continue
+                tensor = graph.tensors[producer.outputs[0]]
+                candidate_nodes = {producer.id, *tensor.consumers}
+                if occupied & candidate_nodes:
+                    legal = False
+                    break
+                occupied.update(candidate_nodes)
+                selected.add(producer.id)
+                extra_madds += (
+                    graph.tensors[producer.inputs[0]].sample_size * tensor.sample_size *
+                    (len(tensor.consumers) - 1)
+                )
+            if not legal:
+                continue
+            key = (
+                _scheduled_workspace_extent(graph, nodes, aggressiveness, selected),
+                extra_madds,
+                tuple(sorted(selected)),
+            )
+            if key < best_key:
+                best_key = key
+                best = selected
+        return best
+
     selected: set[int] = set()
     current = _scheduled_workspace_extent(graph, nodes, aggressiveness, selected)
     blocked_nodes: set[int] = set()
-    for producer in _recompute_candidates(graph, nodes, aggressiveness):
+    for producer in candidates:
         tensor = graph.tensors[producer.outputs[0]]
         candidate_nodes = {producer.id, *tensor.consumers}
         if candidate_nodes & blocked_nodes:
@@ -224,8 +327,16 @@ def schedule_dense_chains(graph: Graph, workspace_reduction_aggressiveness: int 
         input_size = graph.tensors[producer.inputs[0]].sample_size
         recompute_madds[tensor.id] = input_size * tensor.sample_size * (len(tensor.consumers) - 1)
 
+    base_excluded = {nodes[producer_id].outputs[0] for producer_id in recomputed_producers}
+    extensions: dict[int, set[int]] = {}
+    for producer_id in recomputed_producers:
+        producer = nodes[producer_id]
+        for input_id in producer.inputs:
+            if graph.tensors[input_id].is_constant:
+                continue
+            extensions.setdefault(input_id, set()).update(graph.tensors[producer.outputs[0]].consumers)
     selected_linear_pairs = _selected_linear_pairs(
-        graph, nodes, workspace_reduction_aggressiveness, blocked_nodes,
+        graph, nodes, workspace_reduction_aggressiveness, blocked_nodes, base_excluded, extensions,
     )
     for producer_id, consumer_id in sorted(selected_linear_pairs):
         producer = nodes[producer_id]
