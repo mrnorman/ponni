@@ -15,6 +15,11 @@ namespace ponni {
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?
     bool static constexpr save            = true;
+
+    // Saving is an observable materialization point used by a later branch, so
+    // it must remain a fusion barrier. Custom layers with side effects or
+    // externally consumed state must also remain barriers.
+    LayerFusionKind static constexpr fusion_kind = LayerFusionKind::barrier;
     int  static constexpr index           = ISAVE;
 
     int static constexpr INPUT_SIZE  = static_cast<int>(N);
@@ -84,4 +89,3 @@ namespace ponni {
   };
 
 }
-

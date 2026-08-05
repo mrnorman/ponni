@@ -15,6 +15,11 @@ namespace ponni {
     bool static constexpr overwrite_input = true;
     bool static constexpr binop = false;
     bool static constexpr save = false;
+
+    // LogSoftmax depends on every feature and needs multiple passes, so it is a
+    // fusion barrier. Custom cross-feature layers should make the same choice
+    // unless Inference also implements a dedicated fused executor for them.
+    LayerFusionKind static constexpr fusion_kind = LayerFusionKind::barrier;
     int static constexpr INPUT_SIZE = static_cast<int>(N);
     int static constexpr OUTPUT_SIZE = static_cast<int>(N);
     struct Params { int num_inputs; };

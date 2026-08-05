@@ -154,6 +154,8 @@ int main(int argc, char** argv) {
 
     require_true(nearly_equal(out_host(0, 0), 4.0f), "Model output(0,0) should be 4.0");
     require_true(nearly_equal(out_host(1, 0), 4.0f), "Model output(1,0) should be 4.0");
+    require_true(!model.params.tmp1.is_allocated() && !model.params.tmp2.is_allocated(),
+                 "A single fused dense block should write directly to output without scratch Views");
 
     // The default model starts without batch scratch, grows on demand, keeps
     // larger capacity for reuse, and permits an explicit exact shrink.
@@ -171,6 +173,76 @@ int main(int argc, char** argv) {
     require_true(model.internal_state_capacity() == 2,
                  "Explicit internal-state reallocation should shrink capacity");
     require_true(larger_output.extent(1) == 4, "Larger batch output should retain its requested extent");
+
+    // Exercise a dynamically shaped four-block network. The block widths are
+    // deliberately asymmetric: intermediate widths 5, 3, and 7 assign tmp1 a
+    // capacity of 7 and tmp2 a capacity of 3. Bias, parameter-free activations,
+    // and parameterized activations are all folded into the dense output loops.
+    {
+      real2d w1("fused_w1", 2, 5);
+      real2d w2("fused_w2", 5, 3);
+      real2d w3("fused_w3", 3, 7);
+      real2d w4("fused_w4", 7, 2);
+      real1d b1("fused_b1", 5);
+      real1d b2("fused_b2", 3);
+      real1d b3("fused_b3", 7);
+      real1d b4("fused_b4", 2);
+      Kokkos::deep_copy(w1, 1.0f);
+      Kokkos::deep_copy(w2, 1.0f);
+      Kokkos::deep_copy(w3, 1.0f);
+      Kokkos::deep_copy(w4, 1.0f);
+      Kokkos::deep_copy(b1,  0.5f);
+      Kokkos::deep_copy(b2, -0.25f);
+      Kokkos::deep_copy(b3,  0.1f);
+      Kokkos::deep_copy(b4, -0.2f);
+
+      auto fused_model = ponni::create_inference_model(
+          ponni::Matvec<float>(w1), ponni::Bias<float>(b1), ponni::Relu<float>(5), ponni::Tanh<float>(5),
+          ponni::Matvec<float>(w2), ponni::Bias<float>(b2), ponni::Sigmoid<float>(3),
+          ponni::Matvec<float>(w3), ponni::Bias<float>(b3), ponni::LeakyRelu<float>(7, 0.2f),
+          ponni::Matvec<float>(w4), ponni::Bias<float>(b4), ponni::HardSwish<float>(2));
+
+      Kokkos::View<float**, Kokkos::LayoutRight, Kokkos::HostSpace> fused_input_h("fused_input_h", 2, 3);
+      fused_input_h(0,0) =  1.0f; fused_input_h(1,0) =  2.0f;
+      fused_input_h(0,1) = -2.0f; fused_input_h(1,1) =  0.5f;
+      fused_input_h(0,2) =  0.0f; fused_input_h(1,2) =  0.0f;
+      auto fused_input = ponni::create_device_copy(fused_input_h);
+      auto fused_output = fused_model.forward_batch_parallel(fused_input);
+      auto fused_output_h = ponni::create_host_copy(fused_output);
+
+      // The same block traversal is available to callers already inside a
+      // larger Kokkos kernel, using the workspace allocated by the batch call.
+      real2d fused_output_in_kernel("fused_output_in_kernel", 2, 3);
+      auto const fused_params = fused_model.params;
+      using FusedModel = decltype(fused_model);
+      Kokkos::parallel_for(PONNI_AUTO_LABEL(), 3, KOKKOS_LAMBDA(int ibatch) {
+        FusedModel::forward_batch_parallel_in_kernel(fused_input, fused_output_in_kernel, fused_params, ibatch);
+      });
+      auto fused_output_in_kernel_h = ponni::create_host_copy(fused_output_in_kernel);
+
+      require_true(fused_model.params.tmp1.extent(0) == 7 && fused_model.params.tmp1.extent(1) == 3,
+                   "Fused tmp1 should use the largest even intermediate block width");
+      require_true(fused_model.params.tmp2.extent(0) == 3 && fused_model.params.tmp2.extent(1) == 3,
+                   "Fused tmp2 should use the largest odd intermediate block width");
+
+      for (int ibatch = 0; ibatch < 3; ibatch++) {
+        float const input_sum = fused_input_h(0,ibatch) + fused_input_h(1,ibatch);
+        float const hidden1 = std::tanh(std::max(0.0f, input_sum + 0.5f));
+        float const dense2 = 5.0f * hidden1 - 0.25f;
+        float const hidden2 = 1.0f / (1.0f + std::exp(-dense2));
+        float const dense3 = 3.0f * hidden2 + 0.1f;
+        float const hidden3 = dense3 > 0.0f ? dense3 : 0.2f * dense3;
+        float const dense4 = 7.0f * hidden3 - 0.2f;
+        float const expected = dense4 <= -3.0f ? 0.0f :
+                               dense4 >=  3.0f ? dense4 : dense4 * (dense4 + 3.0f) / 6.0f;
+        for (int feature = 0; feature < 2; feature++) {
+          require_true(nearly_equal(fused_output_h(feature,ibatch), expected, 1e-4f),
+                       "Fused dynamically shaped network produced an incorrect output");
+          require_true(nearly_equal(fused_output_in_kernel_h(feature,ibatch), expected, 1e-4f),
+                       "Intra-kernel fused dynamically shaped network produced an incorrect output");
+        }
+      }
+    }
 
     // The factory is the only place where users select execution and memory.
     // It rebinds all supplied layers, including their learned parameters.

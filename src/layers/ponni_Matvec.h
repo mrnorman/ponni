@@ -20,6 +20,11 @@ namespace ponni {
     bool static constexpr binop           = false; // Use two inputs?
     bool static constexpr save            = false;
 
+    // A dense layer starts a fused feed-forward block. Custom dense layers may
+    // use this trait when they also provide the device-safe compute_output()
+    // scalar interface below. The runtime feature dimensions remain in Params.
+    LayerFusionKind static constexpr fusion_kind = LayerFusionKind::dense;
+
     int static constexpr INPUT_SIZE  = static_cast<int>(N_IN );
     int static constexpr OUTPUT_SIZE = static_cast<int>(N_OUT);
 
@@ -55,18 +60,26 @@ namespace ponni {
     int    get_num_trainable_parameters () const { return params.trainable ? params.weights.size() : 0; }
     int    get_array_representation_size() const { return params.weights.size() + 3; }
 
+    // Compute one output without storing it. Inference uses this scalar result
+    // to apply Bias and activation epilogues before touching workspace.
+    template <class InputView>
+    KOKKOS_INLINE_FUNCTION static real compute_output(InputView const & input, int irow, int ibatch,
+                                                       Params const & params_in) {
+      real value = 0;
+      for (int k = 0; k < get_num_inputs(params_in); k++) {
+        value += params_in.weights(k,irow) * input(k,ibatch);
+      }
+      return value;
+    }
+
     template <class InputView, class OutputView>
     KOKKOS_INLINE_FUNCTION static void compute_all_outputs( InputView const & input     ,
                                                             OutputView const & output    ,
                                                             int            ibatch    ,
                                                             Params const & params_in ) {
-      int num_inputs  = get_num_inputs (params_in);
       int num_outputs = get_num_outputs(params_in);
-      auto &weights = params_in.weights;
       for (int irow = 0; irow < num_outputs; irow++) {
-        real tmp = 0;
-        for (int k=0; k < num_inputs; k++) { tmp += weights(k,irow) * input(k,ibatch); }
-        output(irow,ibatch) = tmp;
+        output(irow,ibatch) = compute_output(input, irow, ibatch, params_in);
       }
     }
 

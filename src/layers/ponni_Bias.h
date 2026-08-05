@@ -18,6 +18,11 @@ namespace ponni {
     bool static constexpr binop           = false; // Use two inputs?
     bool static constexpr save            = false;
 
+    // Bias is pointwise even though its parameter depends on the feature
+    // index. Custom indexed pointwise layers may use this trait and the same
+    // apply_fused(value, feature, params) contract to join a dense epilogue.
+    LayerFusionKind static constexpr fusion_kind = LayerFusionKind::pointwise;
+
     int static constexpr INPUT_SIZE  = static_cast<int>(N);
     int static constexpr OUTPUT_SIZE = static_cast<int>(N);
 
@@ -52,15 +57,18 @@ namespace ponni {
     int get_num_trainable_parameters () const { return params.trainable ? params.weights.size() : 0; }
     int get_array_representation_size() const { return params.weights.size() + 2; }
 
+    KOKKOS_INLINE_FUNCTION static real apply_fused(real value, int feature, Params const & params_in) {
+      return value + params_in.weights(feature);
+    }
+
     template <class InputView, class OutputView>
     KOKKOS_INLINE_FUNCTION static void compute_all_outputs( InputView const & input     ,
                                                             OutputView const & output    ,
                                                             int            ibatch    ,
                                                             Params const & params_in ) {
       int num_outputs = get_num_outputs(params_in);
-      auto &weights = params_in.weights;
       for (int irow = 0; irow < num_outputs; irow++) {
-        output(irow,ibatch) = input(irow,ibatch) + weights(irow);
+        output(irow,ibatch) = apply_fused(input(irow,ibatch), irow, params_in);
       }
     }
 
@@ -107,4 +115,3 @@ namespace ponni {
   };
 
 }
-

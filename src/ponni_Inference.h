@@ -65,6 +65,52 @@ namespace ponni {
       }
     }
 
+    // A tuple is eligible for the optimized dynamic-View path only when it
+    // starts with a dense layer and every remaining operation is either dense
+    // or pointwise. Barriers use the established general traversal unchanged.
+    template <int I=0>
+    bool static constexpr is_fused_feed_forward() {
+      using LAYER_TYPE = std::tuple_element_t<I,TUPLE>;
+      if constexpr (I == 0 && !is_dense_layer_v<LAYER_TYPE>) {
+        return false;
+      } else if constexpr (!is_dense_layer_v<LAYER_TYPE> && !is_pointwise_layer_v<LAYER_TYPE>) {
+        return false;
+      } else if constexpr (I + 1 < num_layers) {
+        return is_fused_feed_forward<I + 1>();
+      } else {
+        return true;
+      }
+    }
+
+    // Locate the next dense layer at compile time. All intervening operations
+    // in an eligible tuple are pointwise epilogues of the preceding dense.
+    template <int I>
+    int static constexpr next_dense_layer() {
+      if constexpr (I >= num_layers) {
+        return num_layers;
+      } else if constexpr (is_dense_layer_v<std::tuple_element_t<I,TUPLE>>) {
+        return I;
+      } else {
+        return next_dense_layer<I + 1>();
+      }
+    }
+
+    // Return the largest materialized dense-block output assigned to one of
+    // the two ping-pong buffers. The final block writes directly to the caller,
+    // so a one-block model needs no temporary View and a two-block model needs
+    // only tmp1.
+    template <int I=0, int BUFFER=0>
+    int get_fused_temporary_size(int requested_buffer) const {
+      int constexpr next_dense = next_dense_layer<I + 1>();
+      if constexpr (next_dense == num_layers) {
+        return 0;
+      } else {
+        auto const & dense = std::get<I>(params.layers);
+        int const this_size = BUFFER == requested_buffer ? dense.get_num_outputs() : 0;
+        return std::max(this_size, get_fused_temporary_size<next_dense,1 - BUFFER>(requested_buffer));
+      }
+    }
+
     // A saved state is used for things like ResNet or DenseNet
     // "size" might seem redundant, but the size of the state is large enough to hold the *largest* state and
     //    may not be indicative of the actual size. Think of this as a partially filled array pattern
@@ -90,6 +136,7 @@ namespace ponni {
 
     Params params;
     ExecutionSpace execution_space_;
+    int internal_state_capacity_ = 0;
  
     // **********************************
     // ** BEGIN CLASS MEMBER FUNCTIONS **
@@ -113,15 +160,32 @@ namespace ponni {
       if (batch_size < 0) Kokkos::abort("Inference internal-state batch size must be nonnegative");
       execution_space_.fence("PONNI internal-state reallocation");
       reallocate_saved_states(batch_size);
-      Kokkos::realloc(Kokkos::view_alloc(execution_space_, Kokkos::WithoutInitializing),
-                      params.tmp1, get_temporary_size(), batch_size);
-      Kokkos::realloc(Kokkos::view_alloc(execution_space_, Kokkos::WithoutInitializing),
-                      params.tmp2, get_temporary_size(), batch_size);
+      if constexpr (is_fused_feed_forward()) {
+        reallocate_temporary(params.tmp1, get_fused_temporary_size(0), batch_size);
+        reallocate_temporary(params.tmp2, get_fused_temporary_size(1), batch_size);
+      } else {
+        reallocate_temporary(params.tmp1, get_temporary_size(), batch_size);
+        reallocate_temporary(params.tmp2, get_temporary_size(), batch_size);
+      }
+      internal_state_capacity_ = batch_size;
     }
 
 
 
-    int internal_state_capacity() const { return static_cast<int>(params.tmp1.extent(1)); }
+    int internal_state_capacity() const { return internal_state_capacity_; }
+
+
+
+    // Avoid retaining a meaningless (0,batch) allocation when block planning
+    // proves that a ping-pong buffer is unused.
+    void reallocate_temporary(real2d & temporary, int feature_size, int batch_size) {
+      if (feature_size == 0 || batch_size == 0) {
+        temporary = real2d();
+      } else {
+        Kokkos::realloc(Kokkos::view_alloc(execution_space_, Kokkos::WithoutInitializing),
+                        temporary, feature_size, batch_size);
+      }
+    }
 
 
     // Grow on demand, but retain larger allocations for later calls.
@@ -234,7 +298,13 @@ namespace ponni {
       if (output.extent(0) != layer_last.get_num_outputs() || output.extent(1) != input.extent(1)) {
         Kokkos::abort("Error: Provided output dimensions do not match the model and input batch");
       }
-      if constexpr (num_layers == 1) {  // Trivial case for one layer
+      if constexpr (is_fused_feed_forward()) {
+        Kokkos::parallel_for(PONNI_AUTO_LABEL(),
+                             Kokkos::RangePolicy<ExecutionSpace>(execution_space_, 0, batch_size),
+                             KOKKOS_LAMBDA(int ibatch) {
+          traverse_fused_feed_forward(layers, input, output, tmp1, tmp2, ibatch);
+        });
+      } else if constexpr (num_layers == 1) {  // Trivial case for one layer
         Kokkos::parallel_for(PONNI_AUTO_LABEL(),
                              Kokkos::RangePolicy<ExecutionSpace>(execution_space_, 0, batch_size),
                              KOKKOS_LAMBDA(int ibatch) {
@@ -263,13 +333,74 @@ namespace ponni {
           Kokkos::abort("Error: Provided # inputs differs from model's # inputs");
         }
       #endif
-      if constexpr (num_layers == 1) {
+      if constexpr (is_fused_feed_forward()) {
+        traverse_fused_feed_forward(params_in.layers, input, output, params_in.tmp1, params_in.tmp2, ibatch);
+      } else if constexpr (num_layers == 1) {
         layer0.compute_all_outputs(input,output,ibatch,layer0.params);
       } else {
         traverse_layers_batch_parallel(params_in.layers,params_in.saved_states,input,output,
                                        params_in.tmp1,params_in.tmp2,ibatch);
       }
     } // forward_batch_parallel_in_kernel
+
+
+
+    // Apply the pointwise layers following a dense layer to a register scalar.
+    // Since BEGIN and END are compile-time tuple indices, the compiler sees a
+    // direct sequence of calls rather than runtime dispatch.
+    template <int BEGIN, int END>
+    KOKKOS_INLINE_FUNCTION static real apply_fused_epilogue(real value, int feature, TUPLE const & layers) {
+      if constexpr (BEGIN < END) {
+        using LAYER_TYPE = std::tuple_element_t<BEGIN,TUPLE>;
+        auto const & layer = std::get<BEGIN>(layers);
+        value = apply_fused_layer<LAYER_TYPE>(value, feature, layer.params);
+        return apply_fused_epilogue<BEGIN + 1,END>(value, feature, layers);
+      } else {
+        return value;
+      }
+    }
+
+
+
+    // Compute a dense layer and all of its pointwise epilogues in one output
+    // loop. Only the fully transformed value is written to a View.
+    template <int BEGIN, int END, class InputView, class OutputView>
+    KOKKOS_INLINE_FUNCTION static void compute_fused_dense_block(TUPLE const & layers,
+                                                                 InputView const & input,
+                                                                 OutputView const & output,
+                                                                 int ibatch) {
+      using DENSE_TYPE = std::tuple_element_t<BEGIN,TUPLE>;
+      auto const & dense = std::get<BEGIN>(layers);
+      int const num_outputs = dense.get_num_outputs(dense.params);
+      for (int feature = 0; feature < num_outputs; feature++) {
+        real value = DENSE_TYPE::compute_output(input, feature, ibatch, dense.params);
+        value = apply_fused_epilogue<BEGIN + 1,END>(value, feature, layers);
+        output(feature,ibatch) = value;
+      }
+    }
+
+
+
+    // Traverse materialized dense blocks rather than individual layers. Dense
+    // outputs alternate between tmp1 and tmp2; the last block bypasses scratch
+    // and writes directly to the application-provided output View.
+    template <int BEGIN=0, class InputView, class OutputView>
+    KOKKOS_INLINE_FUNCTION static void traverse_fused_feed_forward(TUPLE const & layers,
+                                                                    InputView const & input,
+                                                                    OutputView const & output,
+                                                                    real2d const & tmp1,
+                                                                    real2d const & tmp2,
+                                                                    int ibatch,
+                                                                    bool write_tmp1=true) {
+      int constexpr next_dense = next_dense_layer<BEGIN + 1>();
+      if constexpr (next_dense == num_layers) {
+        compute_fused_dense_block<BEGIN,num_layers>(layers, input, output, ibatch);
+      } else {
+        real2d const next_state = write_tmp1 ? tmp1 : tmp2;
+        compute_fused_dense_block<BEGIN,next_dense>(layers, input, next_state, ibatch);
+        traverse_fused_feed_forward<next_dense>(layers, next_state, output, tmp1, tmp2, ibatch, !write_tmp1);
+      }
+    }
 
 
 

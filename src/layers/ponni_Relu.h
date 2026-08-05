@@ -15,6 +15,12 @@ namespace ponni {
     bool static constexpr binop           = false;
     bool static constexpr save            = false;
 
+    // This activation is independently applicable to each scalar, so the
+    // dynamic inference path may fold apply() into a preceding dense output.
+    // Custom layers should use pointwise only when they preserve feature count
+    // and never inspect another feature; otherwise use the default barrier.
+    LayerFusionKind static constexpr fusion_kind = LayerFusionKind::pointwise;
+
     int static constexpr INPUT_SIZE  = static_cast<int>(N);
     int static constexpr OUTPUT_SIZE = static_cast<int>(N);
 

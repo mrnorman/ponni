@@ -15,6 +15,11 @@ namespace ponni {
     bool static constexpr binop           = false;
     bool static constexpr save            = false;
 
+    // MinMaxNorm reads the complete feature vector to obtain its extrema, so
+    // it is a fusion barrier. This is the safe model for any custom layer with
+    // a cross-feature dependency or multiple feature passes.
+    LayerFusionKind static constexpr fusion_kind = LayerFusionKind::barrier;
+
     int static constexpr INPUT_SIZE  = static_cast<int>(N);
     int static constexpr OUTPUT_SIZE = static_cast<int>(N);
 

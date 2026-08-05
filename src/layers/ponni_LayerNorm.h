@@ -18,6 +18,11 @@ namespace ponni {
     bool static constexpr binop           = false;
     bool static constexpr save            = false;
 
+    // LayerNorm needs statistics from the complete input feature vector, so it
+    // is a fusion barrier. A custom reduction or normalization should remain a
+    // barrier until it has an explicit whole-vector fusion implementation.
+    LayerFusionKind static constexpr fusion_kind = LayerFusionKind::barrier;
+
     int static constexpr INPUT_SIZE  = static_cast<int>(N);
     int static constexpr OUTPUT_SIZE = static_cast<int>(N);
 

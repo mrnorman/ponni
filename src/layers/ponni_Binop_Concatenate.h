@@ -19,6 +19,11 @@ namespace ponni {
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = true; // Use two inputs?
     bool static constexpr save            = false;
+
+    // Concatenation consumes saved state and changes the feature extent, so it
+    // is a fusion barrier. Custom shape-changing or multi-input layers should
+    // use the same conservative classification.
+    LayerFusionKind static constexpr fusion_kind = LayerFusionKind::barrier;
     int  static constexpr index           = ISAVE;
 
     int static constexpr INPUT_SIZE  = static_cast<int>(N1);

@@ -15,6 +15,11 @@ namespace ponni {
     bool static constexpr overwrite_input = true;
     bool static constexpr binop = false;
     bool static constexpr save = false;
+
+    // Softmax depends on every feature to compute its maximum and denominator,
+    // so it is a fusion barrier. Custom cross-feature or multi-pass layers
+    // should likewise remain barriers unless a dedicated fused executor exists.
+    LayerFusionKind static constexpr fusion_kind = LayerFusionKind::barrier;
     int static constexpr INPUT_SIZE = static_cast<int>(N);
     int static constexpr OUTPUT_SIZE = static_cast<int>(N);
     struct Params { int num_inputs; };

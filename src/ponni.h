@@ -21,7 +21,9 @@ namespace ponni {
 #include <fstream>
 #include <random>
 #include <algorithm>
+#include <type_traits>
 #include "initializers/ponni_initializer.h"
+#include "ponni_LayerTraits.h"
 #include "layers/ponni_Matvec.h"
 #include "layers/ponni_Bias.h"
 #include "layers/ponni_Relu.h"

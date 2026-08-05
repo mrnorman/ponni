@@ -15,6 +15,11 @@ namespace ponni {
     bool static constexpr overwrite_input = true;
     bool static constexpr binop = false;
     bool static constexpr save = false;
+
+    // Pointwise permits apply() to run on a dense accumulator before it is
+    // written. Custom layers must preserve feature count and have no
+    // cross-feature dependency to make the same declaration safely.
+    LayerFusionKind static constexpr fusion_kind = LayerFusionKind::pointwise;
     int static constexpr INPUT_SIZE = static_cast<int>(N);
     int static constexpr OUTPUT_SIZE = static_cast<int>(N);
 

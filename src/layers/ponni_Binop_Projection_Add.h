@@ -19,6 +19,11 @@ namespace ponni {
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = true;
     bool static constexpr save            = false;
+
+    // Projection-add reads a second saved vector and performs its own dense
+    // operation, so it is a fusion barrier. Custom branch-merging layers should
+    // remain barriers until their data dependencies are explicitly planned.
+    LayerFusionKind static constexpr fusion_kind = LayerFusionKind::barrier;
     int  static constexpr index           = ISAVE;
 
     int static constexpr INPUT_SIZE  = static_cast<int>(NIN);

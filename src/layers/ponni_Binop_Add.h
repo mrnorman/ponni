@@ -15,6 +15,11 @@ namespace ponni {
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = true; // Use two inputs?
     bool static constexpr save            = false;
+
+    // This layer consumes a separately saved state, which makes it a fusion
+    // barrier in the general tuple traversal. Custom multi-input layers should
+    // remain barriers until their saved-state lifetime is explicitly planned.
+    LayerFusionKind static constexpr fusion_kind = LayerFusionKind::barrier;
     int  static constexpr index           = ISAVE;
 
     int static constexpr INPUT_SIZE  = static_cast<int>(N);
@@ -90,4 +95,3 @@ namespace ponni {
   };
 
 }
-
