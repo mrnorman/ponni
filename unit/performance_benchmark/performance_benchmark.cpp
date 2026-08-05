@@ -4,10 +4,9 @@
 
 int main( int argc , char **argv ) {
   Kokkos::initialize( argc , argv );
-  ponni::init_device_pool(4ULL*1024ULL*1024ULL*1024ULL); // 4 GB
   {
-    typedef Kokkos::View<float * ,Kokkos::LayoutRight,ponni::DeviceSpace> real1d;
-    typedef Kokkos::View<float **,Kokkos::LayoutRight,ponni::DeviceSpace> real2d;
+    typedef Kokkos::View<float * ,Kokkos::LayoutRight,typename Kokkos::DefaultExecutionSpace::memory_space> real1d;
+    typedef Kokkos::View<float **,Kokkos::LayoutRight,typename Kokkos::DefaultExecutionSpace::memory_space> real2d;
     using ponni::create_inference_model;
     using ponni::Matvec;
     using ponni::Bias;
@@ -54,6 +53,5 @@ int main( int argc , char **argv ) {
       throw std::runtime_error("Error: Batched inference failed");
     }
   }
-  ponni::finalize_device_pool();
   Kokkos::finalize();
 }

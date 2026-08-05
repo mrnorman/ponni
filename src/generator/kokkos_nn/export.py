@@ -1,3 +1,9 @@
+"""Export deterministic PyTorch fixtures and verify them with ONNX Runtime.
+
+The exported models are build inputs, not runtime dependencies of generated
+C++. Every export records feature-major metadata and numerical references.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -11,6 +17,7 @@ from .onnx_reference import run_onnx_reference
 
 @dataclass
 class ExportResult:
+    """Paths and numerical error bounds produced by one verified export."""
     model_path: Path
     reference_path: Path
     max_onnx_absolute_error: float
@@ -57,6 +64,7 @@ def _normalize_feature_batch_boundaries(model, num_inputs: int, exporter: str) -
 
 def export_module(module, num_inputs: int, output_dir: str | Path, name: str,
                   batch_sizes: tuple[int, ...] = (1, 2, 7, 32, 67), seed: int = 8128) -> ExportResult:
+    """Export one PyTorch module and write deterministic reference cases."""
     torch, onnx = _dependencies()
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -135,6 +143,7 @@ def export_module(module, num_inputs: int, output_dir: str | Path, name: str,
 
 
 def make_example_models():
+    """Create the small introductory MLP and residual fixtures."""
     torch, _ = _dependencies()
     torch.manual_seed(20260802)
 
@@ -161,6 +170,7 @@ def make_example_models():
 
 
 def make_functionality_models():
+    """Create structural fixtures for depth, branches, and workspace policies."""
     """Return small deterministic DAGs that stress depth, liveness, branching, and activation diversity."""
     torch, _ = _dependencies()
     torch.manual_seed(20260803)
@@ -266,7 +276,7 @@ def make_functionality_models():
 
 def export_operator_zoo(output_dir: str | Path, batch_sizes: tuple[int, ...] = (1, 2, 3, 7, 11),
                         seed: int = 20260804) -> ExportResult:
-    """Create a deterministic ONNX fixture covering the broader scalar/reduction operator families."""
+    """Create a schema-rich ONNX fixture for supported operator families."""
     _, onnx = _dependencies()
     from onnx import TensorProto, helper, numpy_helper
 

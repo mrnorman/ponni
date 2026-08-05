@@ -1,3 +1,5 @@
+"""Serialize learned constants into PONNI's versioned weight blob."""
+
 from __future__ import annotations
 
 import json
@@ -11,12 +13,15 @@ from .errors import CompilerError
 from .ir import DType, Graph
 
 
+# Generated C++ validates this fixed little-endian envelope before allocating
+# or copying any parameter data to the device.
 MAGIC = b"PNNWGT1\0"
 FORMAT_VERSION = 1
 HEADER = struct.Struct("<8sIIQQ")
 
 
 def fnv1a64(data: bytes) -> int:
+    """Compute the checksum implemented by Python and generated C++."""
     value = 14695981039346656037
     for byte in data:
         value ^= byte
@@ -25,6 +30,7 @@ def fnv1a64(data: bytes) -> int:
 
 
 def write_weights(graph: Graph, output_dir: Path) -> tuple[dict[int, int], dict[str, object]]:
+    """Write learned constants in deterministic tensor-ID order."""
     dtype = graph.tensors[graph.inputs[0]].dtype
     numpy_dtype = np.dtype("<f4" if dtype == DType.FLOAT32 else "<f8")
     scalar_code = 1 if dtype == DType.FLOAT32 else 2
@@ -79,6 +85,7 @@ def write_weights(graph: Graph, output_dir: Path) -> tuple[dict[int, int], dict[
 
 
 def validate_weight_blob(path: str | Path, manifest: dict[str, object] | None = None) -> dict[str, int]:
+    """Validate the binary envelope and, when supplied, its manifest."""
     blob = Path(path).read_bytes()
     if len(blob) < HEADER.size:
         raise CompilerError(f"weight file {path} is shorter than the {HEADER.size}-byte header")

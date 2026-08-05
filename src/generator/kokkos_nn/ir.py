@@ -1,3 +1,11 @@
+"""Framework-neutral graph objects shared by every generator phase.
+
+The importer creates this deliberately small IR. Optimization passes mutate it,
+the planner assigns its temporary tensors to storage, and the emitter consumes
+the final graph. Keeping those phases on one representation makes invariants
+such as feature-major shapes and producer/consumer links visible in one place.
+"""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
@@ -9,6 +17,7 @@ import numpy as np
 
 
 class DType(str, Enum):
+    """Scalar types that generated PONNI kernels can represent."""
     BOOL = "bool"
     FLOAT32 = "float32"
     FLOAT64 = "float64"
@@ -18,6 +27,7 @@ class DType(str, Enum):
 
 @dataclass(frozen=True)
 class Symbol:
+    """A symbolic dimension; currently only the dynamic batch axis is legal."""
     name: str
 
 
@@ -26,6 +36,7 @@ Dimension = int | Symbol
 
 @dataclass
 class ConstantTensor:
+    """Compile-time tensor data, including learned parameters and shape data."""
     name: str
     shape: tuple[int, ...]
     dtype: DType
@@ -45,6 +56,7 @@ class ConstantTensor:
 
 @dataclass
 class TensorValue:
+    """A typed edge in the canonical graph."""
     id: int
     name: str
     shape: tuple[Dimension, ...]
@@ -58,6 +70,7 @@ class TensorValue:
 
     @property
     def sample_shape(self) -> tuple[int, ...]:
+        """Return the static per-sample dimensions with the batch axis removed."""
         return tuple(dim for dim in self.shape if isinstance(dim, int))
 
     @property
@@ -76,6 +89,7 @@ class TensorValue:
 
 @dataclass
 class Node:
+    """One canonical operation with tensor IDs as its edges."""
     id: int
     op: str
     inputs: list[int]
@@ -89,6 +103,7 @@ class Node:
 
 @dataclass
 class Graph:
+    """Mutable canonical graph plus source-model compatibility metadata."""
     inputs: list[int]
     outputs: list[int]
     tensors: dict[int, TensorValue]
@@ -97,6 +112,7 @@ class Graph:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def rebuild_links(self) -> None:
+        """Recompute producer/consumer links after a pass changes nodes or edges."""
         for tensor in self.tensors.values():
             tensor.producer = None
             tensor.consumers = []
@@ -107,6 +123,7 @@ class Graph:
                 self.tensors[tensor_id].producer = node.id
 
     def renumber_nodes(self) -> None:
+        """Restore dense, topological node IDs after nodes are inserted or removed."""
         for node_id, node in enumerate(self.nodes):
             node.id = node_id
         self.rebuild_links()

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Export all native PyTorch fixtures consumed by the CMake test pipeline."""
+
 from __future__ import annotations
 
 import argparse
@@ -13,6 +15,8 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--quiet", action="store_true", help="do not print the JSON report to stdout")
     args = parser.parse_args()
+    # Introductory models stay separate from the broader structural fixtures so
+    # examples remain small while CMake still exercises difficult graph shapes.
     mlp, residual = make_example_models()
     results = {
         "mlp": export_module(mlp, 4, args.output_dir, "mlp"),
@@ -23,6 +27,8 @@ def main() -> None:
             model, num_inputs, args.output_dir, name, batch_sizes=(1, 2, 3, 7, 11), seed=8128 + len(results)
         )
     results["operator_zoo"] = export_operator_zoo(args.output_dir)
+    # Keep the report path-only and JSON serializable; large numerical reference
+    # arrays live in their dedicated text files.
     summary = {
         name: {
             "model": str(result.model_path),

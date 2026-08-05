@@ -35,8 +35,9 @@ All tests are registered with CTest except `performance_benchmark`, which is bui
 - `Softmax`, `LogSoftmax`, `Softplus`, `HardSigmoid`, `HardSwish`, and `Mish`
 
 For each activation, the test covers validation and metadata, the zero-trainable-parameter API, `to_array()` and
-`from_array()` round trips, fixed-size `SArray` evaluation, and `DeviceSpace` `Kokkos::View` evaluation. This makes the
-GPU debug profile useful for detecting accidental host access to device memory.
+`from_array()` round trips, fixed-size `SArray` evaluation, and ordinary default-memory `Kokkos::View` evaluation.
+The core test also verifies factory-selected host execution/memory, automatic scratch growth and reuse, and explicit
+scratch shrinking. The GPU debug profile remains useful for detecting accidental host access to GPU memory.
 
 ## Python-generated test data (Keras/PyTorch tests)
 

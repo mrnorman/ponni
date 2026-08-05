@@ -1,3 +1,10 @@
+"""Render an optimized PONNI graph as portable, header-only Kokkos C++.
+
+Three access modes share the same canonical operations: inline scalar
+inference, batched View inference, and packed two-sample FP16 inference.
+Mode-specific accessors keep their storage differences explicit.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -17,6 +24,7 @@ def _identifier(value: str) -> str:
 
 
 class CppEmitter:
+    """Stateful renderer for one optimized graph and execution schedule."""
     def __init__(self, graph: Graph, sample_plan: StoragePlan, sample_mask_plan: StoragePlan,
                  schedule: DenseChainSchedule, weight_offsets: dict[int, int], model_name: str) -> None:
         self.graph = graph
@@ -49,6 +57,7 @@ class CppEmitter:
         return ["    {"] + [f"  {line}" for line in lines] + ["    }"]
 
     def _read(self, tensor_id: int, index: str) -> str:
+        """Spell a scalar read for device-inline ``infer_one``."""
         tensor = self.graph.tensors[tensor_id]
         if tensor.dtype == DType.BOOL:
             return self._mask_read(tensor_id, index)
@@ -75,6 +84,7 @@ class CppEmitter:
         return f"workspace[{self.sample_plan.slots[tensor_id].offset} + {index}]"
 
     def _batch_read(self, tensor_id: int, index: str) -> str:
+        """Spell a scalar read after a batched sample is staged locally."""
         tensor = self.graph.tensors[tensor_id]
         if tensor.dtype == DType.BOOL:
             return self._batch_mask_read(tensor_id, index)
@@ -103,6 +113,7 @@ class CppEmitter:
         return f"workspace[{self.sample_plan.slots[tensor_id].offset} + {index}]"
 
     def _half_read(self, tensor_id: int, index: str) -> str:
+        """Spell a packed-half read for two adjacent samples."""
         tensor = self.graph.tensors[tensor_id]
         if tensor.dtype == DType.BOOL:
             return self._half_mask_read(tensor_id, index)
@@ -264,6 +275,7 @@ class CppEmitter:
     def _pointwise_expression(self, op: str, operands: list[str], attributes: dict[str, object],
                               input_ids: list[int], half: bool,
                               input_dtypes: list[DType] | None = None) -> str:
+        """Render one expression shared by standalone and fused nodes."""
         if op in {"Add", "Div", "Max", "Min", "Mul", "Pow", "Sub"}:
             return self._binary(op, operands[0], operands[1], half=half)
         if op in {"Equal", "Greater", "GreaterOrEqual", "Less", "LessOrEqual"}:
@@ -667,6 +679,7 @@ class CppEmitter:
         return lines
 
     def _emit_node(self, node: Node, batch: bool = False, access=None) -> list[str]:
+        """Emit one node for scalar or direct-batch inference."""
         output_id = node.outputs[0]
         output_size = self._size(output_id)
         if access is None:
@@ -950,6 +963,7 @@ class CppEmitter:
         raise CompilerError(f"C++ emitter has no implementation for canonical operation {node.op}")
 
     def _emit_half_node(self, node: Node) -> list[str]:
+        """Emit one node using ``ponni::TwoHalf``/``TwoMask`` values."""
         output_id = node.outputs[0]
         output_size = self._size(output_id)
         lines: list[str] = []
@@ -1410,6 +1424,7 @@ class CppEmitter:
         return lines
 
     def emit(self, output_path: Path, payload_elements: int, payload_scalar_code: int) -> None:
+        """Write the complete generated model header."""
         num_inputs = self._size(self.graph.inputs[0])
         num_outputs = self._size(self.graph.outputs[0])
         learned_tensors = [
@@ -1504,8 +1519,8 @@ class CppEmitter:
             f"          ponni::TwoMask mask_workspace[{local_mask_workspace_elements}];\n"
             if local_mask_workspace_elements > 0 else ""
         )
-        batch_launch = f"""    InputView const input_view = inputs;
-    OutputView const output_view = outputs;
+        batch_launch = f"""    auto const input_view = inputs;
+    auto const output_view = outputs;
     ParameterView const parameters = parameters_;
     Kokkos::parallel_for(
         "GeneratedModel::infer_batch",
@@ -1518,8 +1533,8 @@ class CppEmitter:
 {batch_workspace_declaration}{batch_mask_workspace_declaration}{batch_body_text}
           for (int i = 0; i < num_outputs; i++) output_view(i,ibatch) = outputs(i);
         }});"""
-        half_launch = f"""    InputView const input_view = inputs;
-    OutputView const output_view = outputs;
+        half_launch = f"""    auto const input_view = inputs;
+    auto const output_view = outputs;
     HalfParameterView const half_weights = half_parameters_;
     int const pair_count = (batch_size + 1) / 2;
     Kokkos::parallel_for(
@@ -1556,7 +1571,9 @@ class CppEmitter:
 
 namespace ponni::generated {{
 
-template <class Scalar = float>
+template <class Scalar = float,
+          class ExecutionSpace = Kokkos::DefaultExecutionSpace,
+          class MemorySpace = typename ExecutionSpace::memory_space>
 class {self.model_name} {{
 public:
   static_assert(std::is_same_v<Scalar,float> || std::is_same_v<Scalar,double>,
@@ -1569,12 +1586,19 @@ public:
   int static constexpr stored_scalar_code = {payload_scalar_code};
   int static constexpr stored_scalar_bytes = {4 if payload_scalar_code == 1 else 8};
   using scalar_type = Scalar;
-  using execution_space = Kokkos::DefaultExecutionSpace;
-  using InputView = Kokkos::View<Scalar**,Kokkos::LayoutRight,ponni::DeviceSpace>;
-  using OutputView = Kokkos::View<Scalar**,Kokkos::LayoutRight,ponni::DeviceSpace>;
-  using ParameterView = Kokkos::View<Scalar*,Kokkos::LayoutRight,ponni::DeviceSpace>;
+  static_assert(Kokkos::is_execution_space_v<ExecutionSpace>,
+                "GeneratedModel ExecutionSpace must be a Kokkos execution space");
+  static_assert(Kokkos::is_memory_space_v<MemorySpace>,
+                "GeneratedModel MemorySpace must be a Kokkos memory space");
+  static_assert(Kokkos::SpaceAccessibility<ExecutionSpace,MemorySpace>::accessible,
+                "GeneratedModel ExecutionSpace cannot access its MemorySpace");
+  using execution_space = ExecutionSpace;
+  using memory_space = MemorySpace;
+  using InputView = Kokkos::View<Scalar**,Kokkos::LayoutRight,MemorySpace>;
+  using OutputView = Kokkos::View<Scalar**,Kokkos::LayoutRight,MemorySpace>;
+  using ParameterView = Kokkos::View<Scalar*,Kokkos::LayoutRight,MemorySpace>;
   using HalfParameterView =
-      Kokkos::View<Kokkos::Experimental::half_t*,Kokkos::LayoutRight,ponni::DeviceSpace>;
+      Kokkos::View<Kokkos::Experimental::half_t*,Kokkos::LayoutRight,MemorySpace>;
 
 private:
   ParameterView parameters_;
@@ -1585,7 +1609,8 @@ private:
 {parameter_index_body}
   }}
 
-  static int checked_batch_size(InputView const & inputs) {{
+  template <class InputViewType>
+  static int checked_batch_size(InputViewType const & inputs) {{
     std::size_t const batch_size = inputs.extent(1);
     if (batch_size > static_cast<std::size_t>(std::numeric_limits<int>::max())) {{
       Kokkos::abort("GeneratedModel batch extent exceeds the generated 32-bit index range");
@@ -1765,11 +1790,11 @@ public:
     return true;
   }}
 
-  template <class ExecutionSpace = execution_space>
-  void refresh_half_parameters(ExecutionSpace const & execution = ExecutionSpace()) {{
-    static_assert(Kokkos::is_execution_space_v<ExecutionSpace>,
+  template <class RefreshExecutionSpace = execution_space>
+  void refresh_half_parameters(RefreshExecutionSpace const & execution = RefreshExecutionSpace()) {{
+    static_assert(Kokkos::is_execution_space_v<RefreshExecutionSpace>,
                   "refresh_half_parameters requires a Kokkos execution space");
-    static_assert(Kokkos::SpaceAccessibility<ExecutionSpace,ponni::DeviceSpace>::accessible,
+    static_assert(Kokkos::SpaceAccessibility<RefreshExecutionSpace,MemorySpace>::accessible,
                   "refresh_half_parameters execution space cannot access the model parameter memory space");
     if (!parameters_.is_allocated() || !half_parameters_.is_allocated()) {{
       Kokkos::abort("GeneratedModel::refresh_half_parameters called before load_weights");
@@ -1778,7 +1803,7 @@ public:
     HalfParameterView const half_parameters = half_parameters_;
     Kokkos::parallel_for(
         "GeneratedModel::refresh_half_parameters",
-        Kokkos::RangePolicy<ExecutionSpace>(execution, 0, storage_parameter_elements),
+        Kokkos::RangePolicy<RefreshExecutionSpace>(execution, 0, storage_parameter_elements),
         KOKKOS_LAMBDA(int i) {{
           half_parameters(i) = Kokkos::Experimental::cast_to_half(static_cast<float>(parameters(i)));
         }});
@@ -1789,19 +1814,19 @@ public:
     static_assert(Kokkos::is_view_v<ParameterViewType>, "get_parameters requires a Kokkos::View");
     static_assert(ParameterViewType::rank == 1, "get_parameters requires a rank-one Kokkos::View");
     using ParameterScalar = typename ParameterViewType::non_const_value_type;
-    using MemorySpace = typename ParameterViewType::memory_space;
-    using ExecutionSpace = typename MemorySpace::execution_space;
+    using DestinationMemorySpace = typename ParameterViewType::memory_space;
+    using DestinationExecutionSpace = typename DestinationMemorySpace::execution_space;
     static_assert(std::is_same_v<ParameterScalar,float> || std::is_same_v<ParameterScalar,double>,
                   "get_parameters destination scalar must be float or double");
     static_assert(!std::is_const_v<typename ParameterViewType::value_type>,
                   "get_parameters destination must be writable");
-    static_assert(Kokkos::SpaceAccessibility<ExecutionSpace,MemorySpace>::accessible,
+    static_assert(Kokkos::SpaceAccessibility<DestinationExecutionSpace,DestinationMemorySpace>::accessible,
                   "get_parameters destination execution space cannot access its memory space");
     if (!weights_loaded()) Kokkos::abort("GeneratedModel::get_parameters called before load_weights");
     if (destination.extent(0) != static_cast<std::size_t>(get_num_parameters())) {{
       Kokkos::abort("GeneratedModel::get_parameters destination extent is incorrect");
     }}
-    Kokkos::View<Scalar*,ponni::DeviceSpace> learned_parameters(
+    Kokkos::View<Scalar*,MemorySpace> learned_parameters(
         "generated_get_parameters_device", learned_parameter_elements);
     ParameterView const parameters = parameters_;
     execution_space const model_execution;
@@ -1810,43 +1835,43 @@ public:
         Kokkos::RangePolicy<execution_space>(model_execution, 0, learned_parameter_elements),
         KOKKOS_LAMBDA(int i) {{ learned_parameters(i) = parameters(parameter_storage_index(i)); }});
     model_execution.fence("GeneratedModel::get_parameters gather");
-    Kokkos::View<Scalar*,MemorySpace> converted_parameters(
+    Kokkos::View<Scalar*,DestinationMemorySpace> converted_parameters(
         "generated_get_parameters_converted", learned_parameter_elements);
     Kokkos::deep_copy(converted_parameters, learned_parameters);
-    ExecutionSpace const destination_execution;
+    DestinationExecutionSpace const destination_execution;
     Kokkos::parallel_for(
         "GeneratedModel::get_parameters",
-        Kokkos::RangePolicy<ExecutionSpace>(destination_execution, 0, learned_parameter_elements),
+        Kokkos::RangePolicy<DestinationExecutionSpace>(destination_execution, 0, learned_parameter_elements),
         KOKKOS_LAMBDA(int i) {{ destination(i) = static_cast<ParameterScalar>(converted_parameters(i)); }});
     destination_execution.fence("GeneratedModel::get_parameters conversion");
   }}
 
   template <class ParameterViewType,
-            class ExecutionSpace = typename ParameterViewType::memory_space::execution_space>
+            class SourceExecutionSpace = typename ParameterViewType::memory_space::execution_space>
   void set_parameters(ParameterViewType const & source,
-                      ExecutionSpace const & execution = ExecutionSpace()) {{
+                      SourceExecutionSpace const & execution = SourceExecutionSpace()) {{
     static_assert(Kokkos::is_view_v<ParameterViewType>, "set_parameters requires a Kokkos::View");
     static_assert(ParameterViewType::rank == 1, "set_parameters requires a rank-one Kokkos::View");
     using ParameterScalar = typename ParameterViewType::non_const_value_type;
-    using MemorySpace = typename ParameterViewType::memory_space;
+    using SourceMemorySpace = typename ParameterViewType::memory_space;
     static_assert(std::is_same_v<ParameterScalar,float> || std::is_same_v<ParameterScalar,double>,
                   "set_parameters source scalar must be float or double");
-    static_assert(Kokkos::is_execution_space_v<ExecutionSpace>,
+    static_assert(Kokkos::is_execution_space_v<SourceExecutionSpace>,
                   "set_parameters requires a Kokkos execution space");
-    static_assert(Kokkos::SpaceAccessibility<ExecutionSpace,MemorySpace>::accessible,
+    static_assert(Kokkos::SpaceAccessibility<SourceExecutionSpace,SourceMemorySpace>::accessible,
                   "set_parameters execution space cannot access the source memory space");
     if (!weights_loaded()) Kokkos::abort("GeneratedModel::set_parameters called before load_weights");
     if (source.extent(0) != static_cast<std::size_t>(get_num_parameters())) {{
       Kokkos::abort("GeneratedModel::set_parameters source extent is incorrect");
     }}
-    Kokkos::View<Scalar*,MemorySpace> converted_parameters(
+    Kokkos::View<Scalar*,SourceMemorySpace> converted_parameters(
         "generated_set_parameters_converted", learned_parameter_elements);
     Kokkos::parallel_for(
         "GeneratedModel::convert_set_parameters",
-        Kokkos::RangePolicy<ExecutionSpace>(execution, 0, learned_parameter_elements),
+        Kokkos::RangePolicy<SourceExecutionSpace>(execution, 0, learned_parameter_elements),
         KOKKOS_LAMBDA(int i) {{ converted_parameters(i) = static_cast<Scalar>(source(i)); }});
     execution.fence("GeneratedModel::set_parameters source conversion");
-    Kokkos::View<Scalar*,ponni::DeviceSpace> learned_parameters(
+    Kokkos::View<Scalar*,MemorySpace> learned_parameters(
         "generated_set_parameters_device", learned_parameter_elements);
     Kokkos::deep_copy(learned_parameters, converted_parameters);
     ParameterView const parameters = parameters_;
@@ -1896,7 +1921,18 @@ public:
 {inline_workspace_declaration}{inline_mask_workspace_declaration}{body_text}
   }}
 
-  void infer_batch(InputView const & inputs, OutputView const & outputs) const {{
+  template <class InputViewType, class OutputViewType>
+  void infer_batch(InputViewType const & inputs, OutputViewType const & outputs) const {{
+    static_assert(Kokkos::is_view_v<InputViewType> && InputViewType::rank == 2,
+                  "GeneratedModel input must be a rank-two Kokkos::View");
+    static_assert(Kokkos::is_view_v<OutputViewType> && OutputViewType::rank == 2,
+                  "GeneratedModel output must be a rank-two Kokkos::View");
+    static_assert(!std::is_const_v<typename OutputViewType::value_type>,
+                  "GeneratedModel output View must be writable");
+    static_assert(Kokkos::SpaceAccessibility<execution_space,typename InputViewType::memory_space>::accessible,
+                  "GeneratedModel execution space cannot access the input View");
+    static_assert(Kokkos::SpaceAccessibility<execution_space,typename OutputViewType::memory_space>::accessible,
+                  "GeneratedModel execution space cannot access the output View");
 #if defined(KOKKOS_ENABLE_DEBUG)
     if (!weights_loaded()) Kokkos::abort(\"GeneratedModel::infer_batch called before load_weights\");
     if (inputs.extent(0) != num_inputs) Kokkos::abort(\"GeneratedModel input feature extent is incorrect\");
@@ -1907,7 +1943,18 @@ public:
 {batch_launch}
   }}
 
-  void infer_batch_half2(InputView const & inputs, OutputView const & outputs) const {{
+  template <class InputViewType, class OutputViewType>
+  void infer_batch_half2(InputViewType const & inputs, OutputViewType const & outputs) const {{
+    static_assert(Kokkos::is_view_v<InputViewType> && InputViewType::rank == 2,
+                  "GeneratedModel input must be a rank-two Kokkos::View");
+    static_assert(Kokkos::is_view_v<OutputViewType> && OutputViewType::rank == 2,
+                  "GeneratedModel output must be a rank-two Kokkos::View");
+    static_assert(!std::is_const_v<typename OutputViewType::value_type>,
+                  "GeneratedModel output View must be writable");
+    static_assert(Kokkos::SpaceAccessibility<execution_space,typename InputViewType::memory_space>::accessible,
+                  "GeneratedModel execution space cannot access the input View");
+    static_assert(Kokkos::SpaceAccessibility<execution_space,typename OutputViewType::memory_space>::accessible,
+                  "GeneratedModel execution space cannot access the output View");
 #if defined(KOKKOS_ENABLE_DEBUG)
     if (!weights_loaded()) Kokkos::abort("GeneratedModel::infer_batch_half2 called before load_weights");
     if (inputs.extent(0) != num_inputs) Kokkos::abort("GeneratedModel input feature extent is incorrect");

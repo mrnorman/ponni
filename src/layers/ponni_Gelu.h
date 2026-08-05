@@ -5,11 +5,13 @@
 
 namespace ponni {
 
-  template <class real = float, int N = 1>
+  template <class real = float, int N = 1, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
   struct Gelu {
+    using memory_space = MemorySpace;
+    template <class NewMemorySpace> using rebind_memory_space = Gelu<real,N,NewMemorySpace>;
     typedef Kokkos::View<double *, Kokkos::LayoutRight, Kokkos::HostSpace> doubleHost1d;
-    typedef Kokkos::View<real *, Kokkos::LayoutRight, ponni::DeviceSpace> real1d;
-    typedef Kokkos::View<real **, Kokkos::LayoutRight, ponni::DeviceSpace> real2d;
+    typedef Kokkos::View<real *, Kokkos::LayoutRight, MemorySpace> real1d;
+    typedef Kokkos::View<real **, Kokkos::LayoutRight, MemorySpace> real2d;
     bool static constexpr overwrite_input = true;
     bool static constexpr binop = false;
     bool static constexpr save = false;
@@ -43,7 +45,8 @@ namespace ponni {
       real constexpr sqrt_2 = static_cast<real>(1.4142135623730950488);
       return static_cast<real>(0.5) * x * (static_cast<real>(1) + std::erf(x / sqrt_2));
     }
-    KOKKOS_INLINE_FUNCTION static void compute_all_outputs(real2d const & in, real2d const & out,
+    template <class InputView, class OutputView>
+    KOKKOS_INLINE_FUNCTION static void compute_all_outputs(InputView const & in, OutputView const & out,
                                                            int ibatch, Params const & p) {
       for (int i = 0; i < p.num_inputs; i++) out(i,ibatch) = apply(in(i,ibatch), p);
     }
@@ -65,6 +68,9 @@ namespace ponni {
     }
   };
 
-  template <class real = float, int N = 1> using GELU = Gelu<real,N>;
+  template <class real = float,
+            int N = 1,
+            class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
+  using GELU = Gelu<real,N,MemorySpace>;
 
 }

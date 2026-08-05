@@ -4,11 +4,17 @@
 
 namespace ponni {
 
-  template <int ISAVE, class real = float, int N1 = 1, int N2 = 1>
+  template <int ISAVE,
+            class real = float,
+            int N1 = 1,
+            int N2 = 1,
+            class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
   struct Binop_Concatenate {
+    using memory_space = MemorySpace;
+    template <class NewMemorySpace> using rebind_memory_space = Binop_Concatenate<ISAVE,real,N1,N2,NewMemorySpace>;
     typedef Kokkos::View<double * ,Kokkos::LayoutRight,Kokkos::HostSpace > doubleHost1d;
-    typedef Kokkos::View<real   * ,Kokkos::LayoutRight,ponni::DeviceSpace> real1d;
-    typedef Kokkos::View<real   **,Kokkos::LayoutRight,ponni::DeviceSpace> real2d;
+    typedef Kokkos::View<real   * ,Kokkos::LayoutRight,MemorySpace> real1d;
+    typedef Kokkos::View<real   **,Kokkos::LayoutRight,MemorySpace> real2d;
     
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = true; // Use two inputs?
@@ -44,9 +50,10 @@ namespace ponni {
     int    get_num_trainable_parameters () const { return 0; }
     int    get_array_representation_size() const { return 4; }
 
-    KOKKOS_INLINE_FUNCTION static void compute_all_outputs( real2d const & input1    ,
-                                                            real2d const & input2    ,
-                                                            real2d const & output    ,
+    template <class InputView1, class InputView2, class OutputView>
+    KOKKOS_INLINE_FUNCTION static void compute_all_outputs( InputView1 const & input1    ,
+                                                            InputView2 const & input2    ,
+                                                            OutputView const & output    ,
                                                             int            ibatch    ,
                                                             Params const & params_in ) {
       if (params_in.after) {
@@ -105,4 +112,3 @@ namespace ponni {
   };
 
 }
-

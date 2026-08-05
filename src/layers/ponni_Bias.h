@@ -5,12 +5,14 @@
 namespace ponni {
 
 
-  template <class real = float, int N = 1>
+  template <class real = float, int N = 1, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
   struct Bias {
+    using memory_space = MemorySpace;
+    template <class NewMemorySpace> using rebind_memory_space = Bias<real,N,NewMemorySpace>;
     typedef Kokkos::View<double * ,Kokkos::LayoutRight,Kokkos::HostSpace > doubleHost1d;
     typedef Kokkos::View<real   * ,Kokkos::LayoutRight,Kokkos::HostSpace > realHost1d;
-    typedef Kokkos::View<real   * ,Kokkos::LayoutRight,ponni::DeviceSpace> real1d;
-    typedef Kokkos::View<real   **,Kokkos::LayoutRight,ponni::DeviceSpace> real2d;
+    typedef Kokkos::View<real   * ,Kokkos::LayoutRight,MemorySpace> real1d;
+    typedef Kokkos::View<real   **,Kokkos::LayoutRight,MemorySpace> real2d;
     
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?
@@ -50,8 +52,9 @@ namespace ponni {
     int get_num_trainable_parameters () const { return params.trainable ? params.weights.size() : 0; }
     int get_array_representation_size() const { return params.weights.size() + 2; }
 
-    KOKKOS_INLINE_FUNCTION static void compute_all_outputs( real2d const & input     ,
-                                                            real2d const & output    ,
+    template <class InputView, class OutputView>
+    KOKKOS_INLINE_FUNCTION static void compute_all_outputs( InputView const & input     ,
+                                                            OutputView const & output    ,
                                                             int            ibatch    ,
                                                             Params const & params_in ) {
       int num_outputs = get_num_outputs(params_in);
@@ -94,7 +97,7 @@ namespace ponni {
       bool trainable     = data(1) == 1;
       realHost1d weights("Bias_weights",num_inputs);
       for (int i=0; i < num_inputs; i++) { weights(i) = data(2+i); }
-      init( ponni::create_device_copy(weights) , trainable );
+      init( ponni::create_memory_space_copy(weights, MemorySpace()) , trainable );
     }
 
     void validate() const {

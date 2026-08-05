@@ -1,8 +1,0 @@
-numpy
-onnx
-onnxruntime
-onnxscript
-torch
-keras
-tensorflow
-tf2onnx

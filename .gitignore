@@ -1,10 +1,4 @@
 __pycache__/
-*.py[cod]
-
-/unit/build/python_env/
-/unit/build/python_cpu_env/
-/unit/build/uv_env/
-/unit/build/uv_path.txt
 
 /unit/build/CMakeCache.txt
 /unit/build/CMakeFiles/
@@ -22,4 +16,6 @@ __pycache__/
 /unit/build/performance_benchmark/
 /unit/build/ponni/
 /unit/build/projection_skip/
+/unit/build/python_cpu_env/
 /unit/build/pytorch_resnet/
+/unit/build/uv_env/

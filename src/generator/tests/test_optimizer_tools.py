@@ -1,3 +1,5 @@
+"""Tests for optional ONNX preprocessing and workspace-analysis tools."""
+
 from __future__ import annotations
 
 import importlib.util
@@ -62,6 +64,7 @@ def _fragmented_arena_graph() -> Graph:
 
 
 class OptimizerToolTests(unittest.TestCase):
+    """Keep diagnostics separate from the normal deterministic compile path."""
     def test_onnxscript_preprocessing_is_optional_and_reported(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             model = _constant_expression_model(Path(directory) / "constant.onnx")

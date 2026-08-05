@@ -1,3 +1,5 @@
+"""Export verified Keras and TensorFlow fixtures into PONNI's ONNX contract."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -32,6 +34,7 @@ def _set_dimension(dimension, value: int | str) -> None:
 
 
 def _annotate_feature_batch_model(model_path: Path, num_inputs: int, num_outputs: int, exporter: str) -> None:
+    """Normalize framework boundaries and attach PONNI contract metadata."""
     _, _, _, onnx = _dependencies()
     model = onnx.load(model_path)
     if len(model.graph.input) != 1 or len(model.graph.output) != 1:
@@ -76,6 +79,7 @@ def _write_reference(reference_path: Path, cases: list[tuple[np.ndarray, np.ndar
 
 def _verify_and_write(model_path: Path, reference_path: Path, framework, num_inputs: int,
                       batch_sizes: tuple[int, ...], seed: int) -> ExportResult:
+    """Compare framework and ONNX Runtime outputs and persist references."""
     _, _, _, onnx = _dependencies()
     model = onnx.load(model_path)
     input_name = model.graph.input[0].name

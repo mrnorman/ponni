@@ -1,3 +1,5 @@
+# All Python framework work is build-time only. Generated C++ is compiled and
+# tested with the Kokkos backend selected by the enclosing unit build.
 set(PONNI_GENERATOR_SOURCE_DIR ${CMAKE_SOURCE_DIR}/../src/generator)
 set(PONNI_GENERATOR_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
 set(PONNI_GENERATOR_ENV ${CMAKE_COMMAND} -E env
@@ -8,6 +10,9 @@ if (NOT Kokkos_ENABLE_CUDA)
        CUDA_VISIBLE_DEVICES=-1 JAX_PLATFORMS=cpu TF_CPP_MIN_LOG_LEVEL=3)
 endif()
 
+# Phase 1: export deterministic framework models plus numerical references.
+# Listing every output lets CMake skip expensive framework imports when all
+# fixtures are already current.
 set(PONNI_GENERATOR_MODELS
     ${PONNI_GENERATOR_BUILD_DIR}/mlp.onnx
     ${PONNI_GENERATOR_BUILD_DIR}/residual.onnx
@@ -51,6 +56,9 @@ add_custom_command(
   COMMENT "Exporting PONNI generator PyTorch, Keras, and TensorFlow examples to ONNX"
   VERBATIM)
 
+# Phase 2: compile every exported ONNX model into its own generated directory.
+# Workspace levels intentionally compile the same graph five ways so the tests
+# can compare scheduling policy without conflating it with model structure.
 set(PONNI_MLP_DIR ${PONNI_GENERATOR_BUILD_DIR}/mlp_generated)
 set(PONNI_RESIDUAL_DIR ${PONNI_GENERATOR_BUILD_DIR}/residual_generated)
 set(PONNI_DEEP10_DIR ${PONNI_GENERATOR_BUILD_DIR}/deep10_generated)
@@ -163,9 +171,12 @@ add_custom_command(
 add_custom_target(generator_model_generation DEPENDS ${PONNI_GENERATED_OUTPUTS})
 add_dependencies(generator_model_generation ponni_python_env)
 
+# Phase 3: compile generated headers and compare all public inference paths with
+# the references written in phase 1.
 add_executable(generator_integration ${PONNI_GENERATOR_SOURCE_DIR}/tests/test_generated.cpp)
 add_dependencies(generator_integration generator_model_generation)
 target_include_directories(generator_integration PRIVATE
+  ${PONNI_GENERATOR_SOURCE_DIR}/tests
   ${PONNI_MLP_DIR} ${PONNI_RESIDUAL_DIR} ${PONNI_DEEP10_DIR} ${PONNI_RESNET10_DIR}
   ${PONNI_DENSENET_DIR} ${PONNI_BRANCHING_DIR} ${PONNI_OPERATOR_ZOO_DIR}
   ${PONNI_WORKSPACE_LEVEL_INCLUDE_DIRS})
@@ -196,6 +207,7 @@ add_test(
 add_executable(generator_framework_integration ${PONNI_GENERATOR_SOURCE_DIR}/tests/test_framework_generated.cpp)
 add_dependencies(generator_framework_integration generator_model_generation)
 target_include_directories(generator_framework_integration PRIVATE
+  ${PONNI_GENERATOR_SOURCE_DIR}/tests
   ${PONNI_KERAS_DIR} ${PONNI_KERAS_NORMALIZATION_DIR} ${PONNI_TENSORFLOW_DIR})
 target_link_libraries(generator_framework_integration ponni Kokkos::kokkos ${PONNI_LINK_FLAGS})
 target_compile_options(generator_framework_integration PUBLIC $<$<COMPILE_LANGUAGE:CXX>:${PONNI_CXX_FLAGS}>)
@@ -214,4 +226,6 @@ add_test(
           --densenet ${PONNI_DENSENET_DIR} --branching ${PONNI_BRANCHING_DIR}
           --operator-zoo ${PONNI_OPERATOR_ZOO_DIR}
           --workspace-levels ${PONNI_WORKSPACE_LEVEL_ROOT})
+# Structural checks consume reports produced by the integration build and are
+# most useful after numerical execution has already succeeded.
 set_tests_properties(generator_structure_test PROPERTIES DEPENDS generator_integration_test)

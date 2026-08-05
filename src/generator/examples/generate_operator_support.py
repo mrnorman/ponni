@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Generate the user-facing operator table from ONNX and importer schemas."""
+
 from __future__ import annotations
 
 import argparse
@@ -18,6 +20,9 @@ from kokkos_nn.importer import (
 DOCUMENT_PATH = Path(__file__).resolve().parents[1] / "ONNX_OPERATOR_SUPPORT.md"
 ONNX_OPERATOR_URL = "https://onnx.ai/onnx/operators/onnx__{name}.html"
 
+# Restrictions live next to the document generator rather than being parsed
+# from implementation text. The schema registry remains authoritative for what
+# is accepted; these strings explain the narrower PONNI contract to users.
 OPERATOR_RESTRICTIONS = {
     "And": "Boolean inputs and output; only scalar and exact per-sample shape broadcasting.",
     "BatchNormalization": "Five-input inference mode; parameters must be constant scalars or feature-sized tensors.",
@@ -78,6 +83,7 @@ UNARY_OPERATORS = {
 
 
 def _schemas_reached_by_supported_opsets() -> dict[str, set[int]]:
+    """Resolve the schema version each accepted opset selects per operator."""
     histories = defaultdict(list)
     for schema in onnx.defs.get_all_schemas_with_history():
         if schema.domain == "":
@@ -127,6 +133,7 @@ def _escape(value: str) -> str:
 
 
 def render_document() -> str:
+    """Render a complete deterministic Markdown support matrix."""
     reached = _schemas_reached_by_supported_opsets()
     unknown = sorted(set(SUPPORTED_OPERATOR_SCHEMAS) - set(reached))
     if unknown:

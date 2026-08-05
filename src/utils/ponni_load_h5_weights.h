@@ -7,16 +7,17 @@
 
 namespace ponni {
 
-  template <int N>
-  inline Kokkos::View<typename ponni::TypeIntToViewType<float,N>::type,Kokkos::LayoutRight,ponni::DeviceSpace> 
+  template <int N, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
+  inline Kokkos::View<typename ponni::TypeIntToViewType<float,N>::type,Kokkos::LayoutRight,MemorySpace>
   load_h5_weights( std::string file_name    ,
                    std::string group_name   ,
                    std::string dataset_name ,
                    bool transpose = false   ) {
     static_assert( N >= 1 && N <= 4 , "ERROR: load_h5_weights array rank must be betwee 1 and 4" );
     using view_t   = typename ponni::TypeIntToViewType<float,N>::type;
-    using ARR_TYPE = Kokkos::View<view_t,Kokkos::LayoutRight,ponni::DeviceSpace>;
+    using ARR_TYPE = Kokkos::View<view_t,Kokkos::LayoutRight,MemorySpace>;
     using ARR_HOST = Kokkos::View<view_t,Kokkos::LayoutRight,Kokkos::HostSpace >;
+    using ExecutionSpace = typename MemorySpace::execution_space;
     auto f_id = H5Fopen( file_name.c_str() , H5F_ACC_RDONLY , H5P_DEFAULT );
     auto g_id = H5Gopen( f_id , group_name  .c_str() , H5P_DEFAULT );
     auto d_id = H5Dopen( g_id , dataset_name.c_str() , H5P_DEFAULT );
@@ -34,13 +35,14 @@ namespace ponni {
     H5Fclose( f_id );
 
     if ( N == 1 || (! transpose) ) {
-      return ponni::create_device_copy( weights_host );
+      return ponni::create_memory_space_copy(weights_host, MemorySpace());
     } else {
-      auto weights_tmp = ponni::create_device_copy( weights_host );
+      auto weights_tmp = ponni::create_memory_space_copy(weights_host, MemorySpace());
       if        constexpr (N == 2) {
         ARR_TYPE weights_transposed("weights_transposed",dims[1],dims[0]);
         Kokkos::parallel_for( PONNI_AUTO_LABEL() ,
-                              Kokkos::MDRangePolicy<Kokkos::Rank<2>>({0,0},{dims[0],dims[1]}) ,
+                              Kokkos::MDRangePolicy<ExecutionSpace,Kokkos::Rank<2>>(
+                                  {0,0},{dims[0],dims[1]}) ,
                               KOKKOS_LAMBDA (int i0, int i1) {
           weights_transposed(i1,i0) = weights_tmp(i0,i1);
         });
@@ -48,7 +50,8 @@ namespace ponni {
       } else if constexpr (N == 3) {
         ARR_TYPE weights_transposed("weights_transposed",dims[2],dims[1],dims[0]);
         Kokkos::parallel_for( PONNI_AUTO_LABEL() ,
-                              Kokkos::MDRangePolicy<Kokkos::Rank<3>>({0,0,0},{dims[0],dims[1],dims[2]}) ,
+                              Kokkos::MDRangePolicy<ExecutionSpace,Kokkos::Rank<3>>(
+                                  {0,0,0},{dims[0],dims[1],dims[2]}) ,
                               KOKKOS_LAMBDA (int i0, int i1, int i2) {
           weights_transposed(i2,i1,i0) = weights_tmp(i0,i1,i2);
         });
@@ -56,7 +59,8 @@ namespace ponni {
       } else if constexpr (N == 4) {
         ARR_TYPE weights_transposed("weights_transposed",dims[3],dims[2],dims[1],dims[0]);
         Kokkos::parallel_for( PONNI_AUTO_LABEL() ,
-                              Kokkos::MDRangePolicy<Kokkos::Rank<4>>({0,0,0,0},{dims[0],dims[1],dims[2],dims[3]}) ,
+                              Kokkos::MDRangePolicy<ExecutionSpace,Kokkos::Rank<4>>(
+                                  {0,0,0,0},{dims[0],dims[1],dims[2],dims[3]}) ,
                               KOKKOS_LAMBDA (int i0, int i1, int i2, int i3) {
           weights_transposed(i3,i2,i1,i0) = weights_tmp(i0,i1,i2,i3);
         });
@@ -68,5 +72,3 @@ namespace ponni {
   }
 
 }
-
-

@@ -4,12 +4,17 @@
 
 namespace ponni {
 
-  template <class real = float, int N_IN = 1, int N_OUT = 1>
+  template <class real = float,
+            int N_IN = 1,
+            int N_OUT = 1,
+            class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
   struct Matvec {
+    using memory_space = MemorySpace;
+    template <class NewMemorySpace> using rebind_memory_space = Matvec<real,N_IN,N_OUT,NewMemorySpace>;
     typedef Kokkos::View<double * ,Kokkos::LayoutRight,Kokkos::HostSpace > doubleHost1d;
     typedef Kokkos::View<real   * ,Kokkos::LayoutRight,Kokkos::HostSpace > realHost1d;
-    typedef Kokkos::View<real   * ,Kokkos::LayoutRight,ponni::DeviceSpace> real1d;
-    typedef Kokkos::View<real   **,Kokkos::LayoutRight,ponni::DeviceSpace> real2d;
+    typedef Kokkos::View<real   * ,Kokkos::LayoutRight,MemorySpace> real1d;
+    typedef Kokkos::View<real   **,Kokkos::LayoutRight,MemorySpace> real2d;
     
     bool static constexpr overwrite_input = false;
     bool static constexpr binop           = false; // Use two inputs?
@@ -50,8 +55,9 @@ namespace ponni {
     int    get_num_trainable_parameters () const { return params.trainable ? params.weights.size() : 0; }
     int    get_array_representation_size() const { return params.weights.size() + 3; }
 
-    KOKKOS_INLINE_FUNCTION static void compute_all_outputs( real2d const & input     ,
-                                                            real2d const & output    ,
+    template <class InputView, class OutputView>
+    KOKKOS_INLINE_FUNCTION static void compute_all_outputs( InputView const & input     ,
+                                                            OutputView const & output    ,
                                                             int            ibatch    ,
                                                             Params const & params_in ) {
       int num_inputs  = get_num_inputs (params_in);
@@ -104,7 +110,7 @@ namespace ponni {
       realHost1d weights_flat("Matvec_weights",num_inputs*num_outputs);
       for (int i=0; i < weights_flat.size(); i++) { weights_flat(i) = data(3+i); }
       real2d weights("Matvec_weights",num_inputs,num_outputs);
-      Kokkos::deep_copy(ponni::flatten(weights), ponni::create_device_copy(weights_flat));
+      Kokkos::deep_copy(ponni::flatten(weights), ponni::create_memory_space_copy(weights_flat, MemorySpace()));
       init( weights , trainable );
     }
 
@@ -117,4 +123,3 @@ namespace ponni {
   };
 
 }
-

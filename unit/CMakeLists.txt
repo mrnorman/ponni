@@ -13,6 +13,8 @@ endif()
 
 set(PONNI_PYTHON_VERSION "" CACHE STRING "Build-local Python major.minor version (auto-select when empty)")
 
+# Keep downloaded Python tooling under the unit build tree. This makes the
+# test workflow hermetic and prevents accidental use of user-site packages.
 set(PONNI_UNIT_BUILD_DIR "${CMAKE_SOURCE_DIR}/build")
 set(PONNI_UV_ENV_DIR "${PONNI_UNIT_BUILD_DIR}/uv_env")
 set(PONNI_UV_PATH_FILE "${PONNI_UV_ENV_DIR}/uv_path.txt")
@@ -27,6 +29,7 @@ add_custom_command(
 
 add_custom_target(ponni_uv_tool DEPENDS ${PONNI_UV_PATH_FILE})
 
+# Coverage flags must be attached before any PONNI or Kokkos targets are added.
 if (PONNI_ENABLE_COVERAGE)
 	if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 		add_compile_options(-O0 -g --coverage)
@@ -36,8 +39,10 @@ if (PONNI_ENABLE_COVERAGE)
 	endif()
 endif()
 
-add_subdirectory($ENV{KOKKOS_HOME} ./kokkos )
-add_subdirectory(..                ./ponni  )
+# Build Kokkos and PONNI once; individual test directories only define fixtures
+# and executables against these targets.
+add_subdirectory($ENV{KOKKOS_HOME} ./kokkos)
+add_subdirectory(.. ./ponni)
 
 # Frameworks only export and validate backend-neutral ONNX. Generated C++ is
 # tested with the configured Kokkos backend independently.
@@ -75,12 +80,15 @@ if (NOT Kokkos_ENABLE_CUDA)
 endif()
 list(APPEND PONNI_TEST_PYTHON_COMMAND ${PONNI_TEST_PYTHON_EXECUTABLE})
 
+# The legacy C++ tests read HDF5 fixtures directly. Generator tests use ONNX and
+# their build-local Python environment, but share this top-level configuration.
 include(FindHDF5)
 find_package(HDF5 REQUIRED)
 include_directories(${HDF5_INCLUDE_DIRS})
 link_directories(${HDF5_LIBRARY_DIRS})
 
-# Unit test directories
+# Test suites. Keep the generator last because it consumes the Python target
+# and produces the largest set of generated build artifacts.
 add_subdirectory(keras_sequential)
 add_subdirectory(performance_benchmark)
 add_subdirectory(pytorch_resnet)
@@ -89,6 +97,8 @@ add_subdirectory(projection_skip)
 add_subdirectory(core core_unit_tests)
 add_subdirectory(generator)
 
+# Coverage is an explicit post-build workflow: run all tests first, then collect
+# compiler data into a stable text report and optional gcovr HTML output.
 if (PONNI_ENABLE_COVERAGE)
 	find_program(GCOV_EXECUTABLE gcov)
 	find_program(GCOVR_EXECUTABLE gcovr)

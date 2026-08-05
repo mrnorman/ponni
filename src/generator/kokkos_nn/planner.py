@@ -1,3 +1,10 @@
+"""Assign live canonical tensors to compact per-sample storage arenas.
+
+Planning is a compile-time interval-placement problem. Legal in-place aliases
+first join tensors into storage groups; the remaining groups are packed using
+deterministic heuristics, bounded enumeration, or an optional exact oracle.
+"""
+
 from __future__ import annotations
 
 import json
@@ -12,6 +19,7 @@ from .ir import DType, Graph
 
 @dataclass
 class StorageSlot:
+    """One tensor's offset, extent, and inclusive live interval."""
     tensor_id: int
     offset: int
     size: int
@@ -21,6 +29,7 @@ class StorageSlot:
 
 @dataclass
 class StoragePlan:
+    """A complete arena layout and provenance for the placement strategy."""
     slots: dict[int, StorageSlot]
     total_elements: int
     reused_tensors: int
@@ -50,6 +59,12 @@ def plan_storage(graph: Graph, excluded_tensors: set[int] | None = None,
                  dtypes: set[DType] | None = None,
                  placement: Literal["native", "heuristic", "exact"] = "native",
                  exact_group_limit: int = 9) -> StoragePlan:
+    """Plan reusable local storage for the selected tensor types.
+
+    ``excluded_tensors`` are streamed or recomputed instead of materialized.
+    ``additional_consumers`` extends liveness when those decisions reread an
+    earlier input at a later consumer.
+    """
     graph.rebuild_links()
     excluded_tensors = excluded_tensors or set()
     additional_consumers = additional_consumers or {}
@@ -60,6 +75,8 @@ def plan_storage(graph: Graph, excluded_tensors: set[int] | None = None,
         not tensor.is_input and not tensor.is_constant and tensor_id not in graph.outputs and
         tensor.producer is not None
     }
+    # Union-find groups tensors that may legally alias in place. A group takes
+    # the maximum member size and spans the union of all member live ranges.
     parent = {tensor_id: tensor_id for tensor_id in eligible}
 
     def find(tensor_id: int) -> int:
@@ -74,6 +91,9 @@ def plan_storage(graph: Graph, excluded_tensors: set[int] | None = None,
         if output_root != input_root:
             parent[output_root] = input_root
 
+    # Pointwise operations may reuse a dead input of matching type and adequate
+    # size. Whole-vector operations have the same storage rule even though they
+    # read the complete feature vector before producing each result.
     pointwise = {
         "Abs", "Acos", "Acosh", "Add", "And", "Asin", "Asinh", "Atan", "Atanh", "BatchNormalization",
         "Cast", "Ceil", "Celu", "Clip", "CompareSelect", "Cos", "Cosh", "Div", "ElementwiseChain", "Elu",
@@ -110,6 +130,7 @@ def plan_storage(graph: Graph, excluded_tensors: set[int] | None = None,
             join(output_id, input_id)
             break
 
+    # Collapse alias groups into the intervals consumed by arena placement.
     groups: dict[int, list[int]] = {}
     for tensor_id in eligible:
         groups.setdefault(find(tensor_id), []).append(tensor_id)
@@ -126,6 +147,7 @@ def plan_storage(graph: Graph, excluded_tensors: set[int] | None = None,
     intervals.sort(key=lambda item: (item[0], item[2]))
 
     def place(order) -> tuple[int, dict[int, int]]:
+        """Bottom-left pack one deterministic ordering of live intervals."""
         placed: list[tuple[int, int, int, int]] = []
         offsets: dict[int, int] = {}
         high_water = 0
@@ -142,6 +164,8 @@ def plan_storage(graph: Graph, excluded_tensors: set[int] | None = None,
             high_water = max(high_water, offset + size)
         return high_water, offsets
 
+    # Try complementary greedy orders: source order, largest-first, and a
+    # size-weighted lifetime order. The smallest arena wins deterministically.
     orders = [
         intervals,
         sorted(intervals, key=lambda item: (-item[3], item[0], item[2])),
@@ -229,6 +253,8 @@ def _cp_sat_place_in_process(intervals) -> tuple[int, dict[int, int], bool] | No
         return None
     if not intervals:
         return 0, {}, True
+    # The sum of all group sizes is always a safe arena upper bound, even when
+    # every live range overlaps every other live range.
     upper_bound = sum(item[3] for item in intervals)
     model = cp_model.CpModel()
     offsets = {

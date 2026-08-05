@@ -1,45 +1,17 @@
 #include "KerasModel.hpp"
 #include "KerasNormalizationModel.hpp"
 #include "TensorFlowModel.hpp"
+#include "generator_test_utils.hpp"
 
 #include <cmath>
-#include <fstream>
 #include <iostream>
 #include <string>
-#include <vector>
 
 namespace {
 
-struct ReferenceCase {
-  int batch_size;
-  std::vector<float> inputs;
-  std::vector<float> outputs;
-};
-
-struct ReferenceData {
-  int num_inputs;
-  int num_outputs;
-  std::vector<ReferenceCase> cases;
-};
-
-ReferenceData load_reference(std::string const & path) {
-  std::ifstream stream(path);
-  if (!stream) throw std::runtime_error("cannot open reference file: " + path);
-  int num_cases;
-  ReferenceData data;
-  stream >> num_cases >> data.num_inputs >> data.num_outputs;
-  for (int icase = 0; icase < num_cases; icase++) {
-    ReferenceCase reference;
-    stream >> reference.batch_size;
-    reference.inputs.resize(data.num_inputs * reference.batch_size);
-    reference.outputs.resize(data.num_outputs * reference.batch_size);
-    for (float & value : reference.inputs) stream >> value;
-    for (float & value : reference.outputs) stream >> value;
-    data.cases.push_back(std::move(reference));
-  }
-  if (!stream) throw std::runtime_error("malformed reference file: " + path);
-  return data;
-}
+using ponni::test::ReferenceCase;
+using ponni::test::ReferenceData;
+using ponni::test::load_reference;
 
 template <class Model>
 bool check_model(std::string const & weight_path, std::string const & reference_path, std::string const & label,
@@ -61,6 +33,7 @@ bool check_model(std::string const & weight_path, std::string const & reference_
     typename Model::OutputView batch_outputs("framework_batch", Model::num_outputs, test.batch_size);
     typename Model::OutputView inline_outputs("framework_inline", Model::num_outputs, test.batch_size);
     typename Model::OutputView half2_outputs("framework_half2", Model::num_outputs, test.batch_size);
+    // Framework references are host data; stage them through a host mirror.
     auto inputs_host = Kokkos::create_mirror_view(inputs);
     for (int i = 0; i < Model::num_inputs; i++) {
       for (int ibatch = 0; ibatch < test.batch_size; ibatch++) {
@@ -71,6 +44,7 @@ bool check_model(std::string const & weight_path, std::string const & reference_
     model.infer_batch(inputs, batch_outputs);
     model.infer_batch_half2(inputs, half2_outputs);
 
+    // Exercise infer_one in its intended setting: embedded in a device kernel.
     auto const device_model = model;
     Kokkos::parallel_for("FrameworkModel::embedded_infer_one", test.batch_size, KOKKOS_LAMBDA(int ibatch) {
       ponni::SArray<float,Model::num_inputs> sample_inputs;
@@ -115,7 +89,6 @@ int main(int argc, char ** argv) {
     return 2;
   }
   Kokkos::initialize(argc, argv);
-  ponni::init_device_pool(32ULL * 1024ULL * 1024ULL);
   bool passed = true;
   float maximum_error = 0;
   {
@@ -126,7 +99,6 @@ int main(int argc, char ** argv) {
     passed = check_model<KerasNormalization>(argv[3], argv[4], "Keras normalization", maximum_error) && passed;
     passed = check_model<TensorFlow>(argv[5], argv[6], "TensorFlow residual", maximum_error) && passed;
   }
-  ponni::finalize_device_pool();
   Kokkos::finalize();
   std::cout << "framework generator maximum absolute error: " << maximum_error << std::endl;
   return passed ? 0 : 1;

@@ -1,3 +1,5 @@
+"""Command-line interface for validation, compilation, and diagnostics."""
+
 from __future__ import annotations
 
 import argparse
@@ -12,51 +14,44 @@ from .weights import validate_weight_blob
 
 
 def _disabled(values: list[str]) -> set[str]:
+    """Normalize repeated and comma-separated ``--disable-pass`` values."""
     result: set[str] = set()
     for value in values:
         result.update(item.strip() for item in value.split(",") if item.strip())
     return result
 
 
+def _add_pipeline_options(command: argparse.ArgumentParser) -> None:
+    """Add options shared by validation and compilation."""
+    command.add_argument("model", type=Path)
+    command.add_argument("--disable-pass", action="append", default=[], metavar="NAME[,NAME]")
+    command.add_argument(
+        "--onnx-preprocess", action="store_true",
+        help="run provider-neutral ONNX Script canonicalization before PONNI import",
+    )
+    command.add_argument(
+        "--analyze-workspace", action="store_true",
+        help="compare native arena placement with the heuristic and exact small-graph oracle",
+    )
+    command.add_argument(
+        "--workspace-reduction-aggressiveness", type=int, choices=range(1, 6), default=3,
+        help="cross-layer streaming and one-hop recomputation level (1-5; default: 3)",
+    )
+    command.add_argument("--quiet", action="store_true", help="do not print the JSON report to stdout")
+
+
 def _parser() -> argparse.ArgumentParser:
+    """Build the CLI grammar in the same order as the compiler pipeline."""
     parser = argparse.ArgumentParser(prog="kokkos_nn", description="Compile fixed-shape ONNX inference DAGs to Kokkos")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     validate = subparsers.add_parser("validate", help="validate, canonicalize, and report a model")
-    validate.add_argument("model", type=Path)
-    validate.add_argument("--disable-pass", action="append", default=[], metavar="NAME[,NAME]")
-    validate.add_argument(
-        "--onnx-preprocess", action="store_true",
-        help="run provider-neutral ONNX Script canonicalization before PONNI import",
-    )
-    validate.add_argument(
-        "--analyze-workspace", action="store_true",
-        help="compare native arena placement with the heuristic and exact small-graph oracle",
-    )
-    validate.add_argument(
-        "--workspace-reduction-aggressiveness", type=int, choices=range(1, 6), default=3,
-        help="cross-layer streaming and one-hop recomputation level (1-5; default: 3)",
-    )
-    validate.add_argument("--quiet", action="store_true", help="do not print the JSON report to stdout")
+    _add_pipeline_options(validate)
 
     compile_command = subparsers.add_parser("compile", help="generate Kokkos C++ and a weight blob")
-    compile_command.add_argument("model", type=Path)
+    _add_pipeline_options(compile_command)
     compile_command.add_argument("--output-dir", type=Path, required=True)
     compile_command.add_argument("--model-name", default="GeneratedModel")
-    compile_command.add_argument("--disable-pass", action="append", default=[], metavar="NAME[,NAME]")
-    compile_command.add_argument(
-        "--onnx-preprocess", action="store_true",
-        help="run provider-neutral ONNX Script canonicalization before PONNI import",
-    )
-    compile_command.add_argument(
-        "--analyze-workspace", action="store_true",
-        help="compare native arena placement with the heuristic and exact small-graph oracle",
-    )
-    compile_command.add_argument(
-        "--workspace-reduction-aggressiveness", type=int, choices=range(1, 6), default=3,
-        help="cross-layer streaming and one-hop recomputation level (1-5; default: 3)",
-    )
-    compile_command.add_argument("--quiet", action="store_true", help="do not print the JSON report to stdout")
 
     passes = subparsers.add_parser("list-passes", help="list deterministic optimization pass names")
     passes.set_defaults(list_passes=True)
@@ -68,6 +63,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Dispatch one command and translate compiler failures to exit code 2."""
     parser = _parser()
     args = parser.parse_args(argv)
     try:

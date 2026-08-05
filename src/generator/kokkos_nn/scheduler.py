@@ -1,3 +1,11 @@
+"""Choose dense streaming and bounded recomputation before storage planning.
+
+The scheduler trades extra arithmetic for smaller local arrays. Its output is
+declarative: the emitter follows selected producer/consumer pairs, while the
+planner uses eliminated tensors and extended liveness to size the remaining
+arena accurately.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -11,6 +19,7 @@ DENSE_OPS = {"Dense", "DenseBiasActivation", "DenseEpilogue", "DenseResidualActi
 
 @dataclass(frozen=True)
 class ActivationDecision:
+    """Human-readable disposition of one materializable activation."""
     tensor_id: int
     producer_id: int
     consumer_ids: tuple[int, ...]
@@ -33,6 +42,7 @@ class ActivationDecision:
 
 @dataclass
 class DenseChainSchedule:
+    """All streaming/recomputation choices needed by planning and emission."""
     aggressiveness: int
     decisions: dict[int, ActivationDecision]
     pair_by_consumer: dict[int, int]
@@ -40,11 +50,8 @@ class DenseChainSchedule:
     skipped_producers: set[int]
     recompute_extra_madds: int
 
-    @property
-    def has_streaming(self) -> bool:
-        return bool(self.pair_by_consumer)
-
     def recompute_liveness_extensions(self, graph: Graph) -> dict[int, set[int]]:
+        """Extend producer-input lifetimes through consumers that reevaluate them."""
         nodes = {node.id: node for node in graph.nodes}
         extensions: dict[int, set[int]] = {}
         for decision in self.decisions.values():
@@ -76,6 +83,7 @@ class DenseChainSchedule:
 
 
 def _dense_pair_eligible(graph: Graph, producer: Node, consumer: Node) -> bool:
+    """Return whether a dense output can be accumulated directly by its consumer."""
     if producer.op not in DENSE_OPS or consumer.op not in DENSE_OPS:
         return False
     if producer.outputs[0] != consumer.inputs[0]:
@@ -111,6 +119,7 @@ def _terminal_dense_consumer(graph: Graph, nodes: dict[int, Node], consumer: Nod
 
 
 def _recompute_candidates(graph: Graph, nodes: dict[int, Node], aggressiveness: int) -> list[Node]:
+    """Find one-hop dense branches eligible for levels four and five."""
     candidates: list[Node] = []
     for producer in graph.nodes:
         if producer.op not in DENSE_OPS:
@@ -139,6 +148,7 @@ def _recompute_candidates(graph: Graph, nodes: dict[int, Node], aggressiveness: 
 def _selected_linear_pairs(graph: Graph, nodes: dict[int, Node], aggressiveness: int,
                            blocked_nodes: set[int], base_excluded: set[int] | None = None,
                            extensions: dict[int, set[int]] | None = None) -> set[tuple[int, int]]:
+    """Select non-overlapping linear dense pairs with minimum planned high-water."""
     candidates: dict[int, tuple[int, int]] = {}
     incoming: dict[int, int] = {}
     if aggressiveness < 2:
@@ -158,6 +168,8 @@ def _selected_linear_pairs(graph: Graph, nodes: dict[int, Node], aggressiveness:
         candidates[producer.id] = (consumer.id, tensor.sample_size - output_size)
         incoming[consumer.id] = producer.id
 
+    # Candidate edges form disjoint paths because each activation has exactly
+    # one consumer. Split those paths before choosing nonadjacent edges.
     visited: set[int] = set()
     paths: list[list[tuple[int, int, int]]] = []
     starts = sorted(producer_id for producer_id in candidates if producer_id not in incoming)
@@ -246,10 +258,13 @@ def _scheduled_workspace_extent(graph: Graph, nodes: dict[int, Node], aggressive
 
 
 def _select_recomputation(graph: Graph, nodes: dict[int, Node], aggressiveness: int) -> set[int]:
+    """Select non-overlapping branches whose recomputation strictly saves space."""
     if aggressiveness < 4:
         return set()
     candidates = _recompute_candidates(graph, nodes, aggressiveness)
     if len(candidates) <= 8:
+        # Small candidate sets are cheap enough to score exhaustively against
+        # the real storage planner, with extra multiply-adds as the tie-breaker.
         best: set[int] = set()
         best_key = (_scheduled_workspace_extent(graph, nodes, aggressiveness, best), 0, ())
         for mask in range(1, 1 << len(candidates)):
@@ -283,6 +298,7 @@ def _select_recomputation(graph: Graph, nodes: dict[int, Node], aggressiveness: 
                 best = selected
         return best
 
+    # Larger graphs use a stable greedy fallback to keep compile time bounded.
     selected: set[int] = set()
     current = _scheduled_workspace_extent(graph, nodes, aggressiveness, selected)
     blocked_nodes: set[int] = set()
@@ -313,6 +329,8 @@ def schedule_dense_chains(graph: Graph, workspace_reduction_aggressiveness: int 
     eliminated_tensors: set[int] = set()
     skipped_producers: set[int] = set()
     blocked_nodes: set[int] = set()
+    # Recomputed branches reserve their producer and all consumers before
+    # linear streaming pairs are considered; the two mechanisms cannot overlap.
     recomputed_producers = _select_recomputation(graph, nodes, workspace_reduction_aggressiveness)
     recompute_madds: dict[int, int] = {}
     for producer_id in sorted(recomputed_producers):
@@ -344,6 +362,8 @@ def schedule_dense_chains(graph: Graph, workspace_reduction_aggressiveness: int 
         eliminated_tensors.add(producer.outputs[0])
         skipped_producers.add(producer_id)
 
+    # Record every ordinary activation, not only optimized ones. Complete
+    # decisions make the JSON report useful when diagnosing retained storage.
     decisions: dict[int, ActivationDecision] = {}
     for tensor_id, tensor in sorted(graph.tensors.items()):
         if tensor.is_input or tensor.is_constant or tensor_id in graph.outputs or tensor.producer is None:

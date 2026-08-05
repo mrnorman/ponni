@@ -6,7 +6,6 @@
 
 int main(int argc, char** argv) {
   Kokkos::initialize(argc, argv);
-  ponni::init_device_pool(128ULL * 1024ULL * 1024ULL);
 
   bool ok = true;
 
@@ -56,7 +55,6 @@ int main(int argc, char** argv) {
     }
   }
 
-  ponni::finalize_device_pool();
   Kokkos::finalize();
 
   if (!ok) return 1;

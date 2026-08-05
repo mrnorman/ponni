@@ -1,4 +1,4 @@
-"""Ahead-of-time fixed-shape ONNX to Kokkos compiler for PONNI."""
+"""Public API for PONNI's ahead-of-time ONNX-to-Kokkos compiler."""
 
 from .compiler import compile_model, load_and_optimize, validate_model
 from .errors import CompilerError

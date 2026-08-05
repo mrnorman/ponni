@@ -10,7 +10,6 @@ int main( int argc , char **argv ) {
   using ponni::Save_State;
   using ponni::Binop_Add;
   Kokkos::initialize( argc , argv );
-  ponni::init_device_pool(128ULL*1024ULL*1024ULL); // 128 MB
   {
     if (argc == 1) {
       std::cerr << "Usage: " << argv[0] << " <weights.h5>" << std::endl;
@@ -115,8 +114,8 @@ int main( int argc , char **argv ) {
       auto inputs = ponni::load_h5_weights<2>( fname_h5 , "/test" , "input" );
       auto expected = ponni::load_h5_weights<2>( fname_h5 , "/test" , "output" );
 
-      model.init( inputs.extent(1) );
-      Kokkos::View<float**,Kokkos::LayoutRight,ponni::DeviceSpace> outputs("outputs",expected.extent(0),expected.extent(1));
+      model.reallocate_internal_state( inputs.extent(1) );
+      Kokkos::View<float**,Kokkos::LayoutRight,typename Kokkos::DefaultExecutionSpace::memory_space> outputs("outputs",expected.extent(0),expected.extent(1));
       Kokkos::parallel_for( PONNI_AUTO_LABEL() , 1 , KOKKOS_LAMBDA (int ibatch) {
         model.forward_batch_parallel_in_kernel( inputs , outputs , model.params , ibatch );
       });
@@ -137,6 +136,5 @@ int main( int argc , char **argv ) {
     }
 
   }
-  ponni::finalize_device_pool();
   Kokkos::finalize();
 }

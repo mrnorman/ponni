@@ -10,11 +10,23 @@ namespace ponni {
   // State: a model state between operations such as input, output, or a "hidden layer"
   // Layer: An *operation* on a state to produce another state such as matrix multiplication
   // The only data held in this class are the saved states and each layer's parameters
-  template <class TUPLE, class real = float>
+  template <class TUPLE,
+            class real = float,
+            class ExecutionSpace = Kokkos::DefaultExecutionSpace,
+            class MemorySpace = typename ExecutionSpace::memory_space>
   struct Inference {
+    static_assert(Kokkos::is_execution_space_v<ExecutionSpace>,
+                  "Inference ExecutionSpace must be a Kokkos execution space");
+    static_assert(Kokkos::is_memory_space_v<MemorySpace>,
+                  "Inference MemorySpace must be a Kokkos memory space");
+    static_assert(Kokkos::SpaceAccessibility<ExecutionSpace,MemorySpace>::accessible,
+                  "Inference ExecutionSpace cannot access its MemorySpace");
+
+    using execution_space = ExecutionSpace;
+    using memory_space = MemorySpace;
     typedef typename Kokkos::View<double * ,Kokkos::LayoutRight,Kokkos::HostSpace > doubleHost1d;
-    typedef typename Kokkos::View<real   * ,Kokkos::LayoutRight,ponni::DeviceSpace> real1d;
-    typedef typename Kokkos::View<real   **,Kokkos::LayoutRight,ponni::DeviceSpace> real2d;
+    typedef typename Kokkos::View<real   * ,Kokkos::LayoutRight,MemorySpace> real1d;
+    typedef typename Kokkos::View<real   **,Kokkos::LayoutRight,MemorySpace> real2d;
     // ***********************************************************************
     // ** FUNCTIONS AND CONSTEXPR VARIABLES NEEDED TO DECLARE CLASS MEMBERS **
     // ***********************************************************************
@@ -77,6 +89,7 @@ namespace ponni {
     };
 
     Params params;
+    ExecutionSpace execution_space_;
  
     // **********************************
     // ** BEGIN CLASS MEMBER FUNCTIONS **
@@ -86,27 +99,35 @@ namespace ponni {
     ~Inference() = default;
 
     // This is not intended to be called directly by the user per se. It's easier to call ponni::create_inference_model
-    Inference(TUPLE const &layers, int batch_size = 1) {
+    Inference(TUPLE const & layers, ExecutionSpace const & execution_space = ExecutionSpace())
+      : execution_space_(execution_space) {
       this->params.layers = layers;
-      init(batch_size);
     }
 
 
 
-    // Set the batch size to allocate arrays to hold saved and temporary states. Mainly used for in-kernel inferencing
-    void init(int batch_size) {
-      allocate_saved_states(batch_size);
-      params.tmp1 = real2d("ponni_tmp1",get_temporary_size(),batch_size);
-      params.tmp2 = real2d("ponni_tmp2",get_temporary_size(),batch_size);
+    // Reallocate every batch-dependent internal view to exactly batch_size.
+    // Ordinary batch inference grows this storage automatically; this public
+    // method is useful for shrinking or releasing retained capacity.
+    void reallocate_internal_state(int batch_size) {
+      if (batch_size < 0) Kokkos::abort("Inference internal-state batch size must be nonnegative");
+      execution_space_.fence("PONNI internal-state reallocation");
+      reallocate_saved_states(batch_size);
+      Kokkos::realloc(Kokkos::view_alloc(execution_space_, Kokkos::WithoutInitializing),
+                      params.tmp1, get_temporary_size(), batch_size);
+      Kokkos::realloc(Kokkos::view_alloc(execution_space_, Kokkos::WithoutInitializing),
+                      params.tmp2, get_temporary_size(), batch_size);
     }
 
 
 
-    int get_batch_size() const { return params.tmp1.extent(1); }
+    int internal_state_capacity() const { return static_cast<int>(params.tmp1.extent(1)); }
 
 
-    
-    bool initialized() const { return params.tmp1.is_allocated(); }
+    // Grow on demand, but retain larger allocations for later calls.
+    void ensure_internal_state_capacity(int batch_size) {
+      if (batch_size > internal_state_capacity()) reallocate_internal_state(batch_size);
+    }
 
 
 
@@ -134,20 +155,19 @@ namespace ponni {
 
 
 
-    // Allocate all saved states at their appropriate sizes
-    // This is called by the model traversal, not by the user directly
+    // Resize every saved residual state alongside the two traversal buffers.
     template <int I=0>
-    void allocate_saved_states(int batch_size) const {
+    void reallocate_saved_states(int batch_size) {
       using LAYER_TYPE = typename std::tuple_element<I,TUPLE>::type;
-      auto &layer = std::get<I>(params.layers);
       if constexpr (I < num_layers) {
         if constexpr (LAYER_TYPE::save) {
           int constexpr index = LAYER_TYPE::index;
-          params.saved_states(index).state = real2d("saved_state",get_saved_state_size<index>(params.layers),
-                                                                  batch_size);
+          Kokkos::realloc(Kokkos::view_alloc(execution_space_, Kokkos::WithoutInitializing),
+                          params.saved_states(index).state,
+                          get_saved_state_size<index>(params.layers), batch_size);
         }
       }
-      if constexpr (I < num_layers-1) allocate_saved_states<I+1>( batch_size );
+      if constexpr (I < num_layers-1) reallocate_saved_states<I+1>(batch_size);
     }
 
 
@@ -176,49 +196,67 @@ namespace ponni {
 
 
     // Perform a forward inference pass through this model parallelizing only the batch dimension
-    real2d forward_batch_parallel( real2d input ) {
+    template <class InputView>
+    real2d forward_batch_parallel(InputView const & input) {
+      int const batch_size = static_cast<int>(input.extent(1));
+      real2d output("output", get_num_outputs(), batch_size);
+      forward_batch_parallel(input, output);
+      return output;
+    }
+
+
+
+    // Execute into caller-provided storage. Views may use any memory space the
+    // selected execution space can access; PONNI owns only retained scratch.
+    template <class InputView, class OutputView>
+    void forward_batch_parallel(InputView const & input, OutputView const & output) {
+      static_assert(Kokkos::is_view_v<InputView> && InputView::rank == 2,
+                    "Inference input must be a rank-two Kokkos::View");
+      static_assert(Kokkos::is_view_v<OutputView> && OutputView::rank == 2,
+                    "Inference output must be a rank-two Kokkos::View");
+      static_assert(!std::is_const_v<typename OutputView::value_type>,
+                    "Inference output View must be writable");
+      static_assert(Kokkos::SpaceAccessibility<ExecutionSpace,typename InputView::memory_space>::accessible,
+                    "Inference ExecutionSpace cannot access the input View");
+      static_assert(Kokkos::SpaceAccessibility<ExecutionSpace,typename OutputView::memory_space>::accessible,
+                    "Inference ExecutionSpace cannot access the output View");
+      int const batch_size = static_cast<int>(input.extent(1));
+      ensure_internal_state_capacity(batch_size);
       PONNI_SCOPE( layers       , this->params.layers       );
       PONNI_SCOPE( saved_states , this->params.saved_states );
       PONNI_SCOPE( tmp1         , this->params.tmp1         );
       PONNI_SCOPE( tmp2         , this->params.tmp2         );
-      // Get the number of inputs, outputs, and batch size
       auto &layer0      = std::get<0>(layers);
       auto &layer_last  = std::get<num_layers-1>(layers);
-      int num_inputs    = layer0    .get_num_inputs ();
-      int num_outputs   = layer_last.get_num_outputs();
-      int batch_size    = input.extent(1);
-      // Allocate the saved states (overrides default allocation for one batch in constructor)
-      init( batch_size );
-      // Ensure input dimension is correct
       if (input.extent(0) != layer0.get_num_inputs()) {
         Kokkos::abort("Error: Provided # inputs differs from model's # inputs");
       }
-      // Allocate the output array
-      real2d output("output",num_outputs,batch_size);
+      if (output.extent(0) != layer_last.get_num_outputs() || output.extent(1) != input.extent(1)) {
+        Kokkos::abort("Error: Provided output dimensions do not match the model and input batch");
+      }
       if constexpr (num_layers == 1) {  // Trivial case for one layer
-        // GPU kernel threading over batches
-        Kokkos::parallel_for( PONNI_AUTO_LABEL() , batch_size , KOKKOS_LAMBDA (int ibatch) {
+        Kokkos::parallel_for(PONNI_AUTO_LABEL(),
+                             Kokkos::RangePolicy<ExecutionSpace>(execution_space_, 0, batch_size),
+                             KOKKOS_LAMBDA(int ibatch) {
           layer0.compute_all_outputs(input, output, ibatch, layer0.params);
         });
       } else {
-        // We'll need to store the temporary states in alternating arrays
-        // This overrides the default allocate of batch size of one
-        int temp_size = get_temporary_size();
-        // GPU kernel threading over batch size that traverses the model's layers
-        Kokkos::parallel_for( PONNI_AUTO_LABEL() , batch_size , KOKKOS_LAMBDA (int ibatch) {
+        Kokkos::parallel_for(PONNI_AUTO_LABEL(),
+                             Kokkos::RangePolicy<ExecutionSpace>(execution_space_, 0, batch_size),
+                             KOKKOS_LAMBDA(int ibatch) {
           traverse_layers_batch_parallel(layers, saved_states, input, output, tmp1, tmp2, ibatch);
         });
       }
-      return output;
     } // forward_batch_parallel
 
 
 
     // Perform a forward inference pass through this model parallelizing only the batch dimension
-    KOKKOS_INLINE_FUNCTION static void forward_batch_parallel_in_kernel( real2d const & input     ,
-                                                                         real2d const & output    ,
-                                                                         Params const & params_in ,
-                                                                         int            ibatch    ) {
+    template <class InputView, class OutputView>
+    KOKKOS_INLINE_FUNCTION static void forward_batch_parallel_in_kernel(InputView const & input,
+                                                                        OutputView const & output,
+                                                                        Params const & params_in,
+                                                                        int ibatch) {
       auto &layer0 = std::get<0>(params_in.layers);
       #ifdef PONNI_DEBUG
         if (input.extent(0) != layer0.get_num_inputs(layer0.params)) {
@@ -236,58 +274,62 @@ namespace ponni {
 
 
     // Traverse the layers of this model inside a GPU kernel
-    template <int I=0>
-    KOKKOS_INLINE_FUNCTION void static traverse_layers_batch_parallel( TUPLE      const & layers                 ,
-                                                                       SAVED_TYPE const & saved_states           ,
-                                                                       real2d     const & input_glob             ,
-                                                                       real2d     const & output_glob            ,
-                                                                       real2d     const & tmp1                   ,
-                                                                       real2d     const & tmp2                   ,
-                                                                       int                ibatch                 ,
-                                                                       bool               output_in_tmp1 = false ) {
+    template <int I=0, class InputView, class OutputView>
+    KOKKOS_INLINE_FUNCTION void static traverse_layers_batch_parallel(TUPLE const & layers,
+                                                                      SAVED_TYPE const & saved_states,
+                                                                      InputView const & input_glob,
+                                                                      OutputView const & output_glob,
+                                                                      real2d const & tmp1,
+                                                                      real2d const & tmp2,
+                                                                      int ibatch,
+                                                                      bool output_in_tmp1 = false) {
       using LAYER_TYPE = typename std::tuple_element<I,TUPLE>::type;
       auto &layer = std::get<I>(layers);
-      // These are placeholder arrays to point to the appropriate tempoarary array, input, or output
-      real2d in;
-      real2d out;
+
+      // Only the first and last operations touch application-owned Views.
+      // All intermediate operations use model-owned Views in MemorySpace.
       if constexpr (I == 0) {
-        // First layer has global input as the input array and tmp1 as the output
-        in = input_glob;
-        out = tmp1;
+        real2d out = tmp1;
+        if constexpr (LAYER_TYPE::save) {
+          out = saved_states(LAYER_TYPE::index).state;
+          saved_states(LAYER_TYPE::index).size = layer.get_num_inputs(layer.params);
+        }
+        layer.compute_all_outputs(input_glob, out, ibatch, layer.params);
         output_in_tmp1 = true;
       } else if constexpr (I < num_layers-1) {
+        real2d in;
+        real2d out;
         if constexpr (LAYER_TYPE::overwrite_input) {
-          // If we can overwrite the input, then input and output will be the same tmp array
           if (output_in_tmp1) { in = tmp1;   out = tmp1; }
           else                { in = tmp2;   out = tmp2; }
         } else {
-          // Otherwise, the input is the current tmp array, and the output is the other one
           if (output_in_tmp1) { in = tmp1;   out = tmp2;   output_in_tmp1 = false; }
           else                { in = tmp2;   out = tmp1;   output_in_tmp1 = true ; }
         }
+
+        if constexpr (LAYER_TYPE::save) {
+          out = saved_states(LAYER_TYPE::index).state;
+          saved_states(LAYER_TYPE::index).size = layer.get_num_inputs(layer.params);
+        }
+        if constexpr (LAYER_TYPE::binop) {
+          auto &saved = saved_states(LAYER_TYPE::index).state;
+          layer.compute_all_outputs(in, saved, out, ibatch, layer.params);
+        } else {
+          layer.compute_all_outputs(in, out, ibatch, layer.params);
+        }
       } else {
-        // If this is the last layer, then output is the global output array
-        if (output_in_tmp1) { in = tmp1;   out = output_glob; }
-        else                { in = tmp2;   out = output_glob; }
+        real2d const in = output_in_tmp1 ? tmp1 : tmp2;
+        if constexpr (LAYER_TYPE::binop) {
+          auto &saved = saved_states(LAYER_TYPE::index).state;
+          layer.compute_all_outputs(in, saved, output_glob, ibatch, layer.params);
+        } else {
+          layer.compute_all_outputs(in, output_glob, ibatch, layer.params);
+        }
       }
-      // If this is a "save" layer, then save the current state into the declared index of the saved state arrays
-      if constexpr (LAYER_TYPE::save) {
-        out = saved_states(LAYER_TYPE::index).state;
-        saved_states(LAYER_TYPE::index).size = layer.get_num_inputs(layer.params);
-      }
-      if constexpr (LAYER_TYPE::binop) {
-        // If this is a binary operator (meaning an operation of the current state against a saved state), then get the
-        //    correct saved state and perform the requested operation (usually addition or concatenation)
-        auto &saved = saved_states(LAYER_TYPE::index).state;
-        layer.compute_all_outputs(in,saved,out,ibatch,layer.params);
-      } else {
-        // Otherwise, apply this layer to the current state to produce the next state
-        layer.compute_all_outputs(in,out,ibatch,layer.params);
-      }
-      // If this isn't the last layer, then call the next layer recursively with template recursion
+
       if constexpr (I < num_layers-1) {
-        traverse_layers_batch_parallel<I+1>(layers,saved_states,input_glob,output_glob,
-                                            tmp1,tmp2,ibatch,output_in_tmp1);
+        traverse_layers_batch_parallel<I+1>(layers, saved_states, input_glob, output_glob,
+                                            tmp1, tmp2, ibatch, output_in_tmp1);
       }
     } // traverse_layers_batch_parallel
 
@@ -311,11 +353,12 @@ namespace ponni {
 
     // Traverse the layers of this model inside a GPU kernel
     template <int I = 0>
-    KOKKOS_INLINE_FUNCTION void static traverse_layers_batch_parallel( TUPLE                      const & layers   ,
-                                                                       ponni::SArray<real,IN_GL > const & in_glob  ,
-                                                                       ponni::SArray<real,OUT_GL>       & out_glob ,
-                                                                       ponni::SArray<real,std::tuple_element_t<I,TUPLE>::INPUT_SIZE > const & in  ,
-                                                                       ponni::SArray<real,std::tuple_element_t<I,TUPLE>::OUTPUT_SIZE>       & out ) {
+    KOKKOS_INLINE_FUNCTION void static traverse_layers_batch_parallel(
+        TUPLE const & layers,
+        ponni::SArray<real,IN_GL> const & in_glob,
+        ponni::SArray<real,OUT_GL> & out_glob,
+        ponni::SArray<real,std::tuple_element_t<I,TUPLE>::INPUT_SIZE> const & in,
+        ponni::SArray<real,std::tuple_element_t<I,TUPLE>::OUTPUT_SIZE> & out) {
       auto &layer = std::get<I>(layers);
       if constexpr (I == 0) {
         ponni::SArray<real,std::tuple_element_t<I,TUPLE>::OUTPUT_SIZE> tmp;
@@ -504,5 +547,3 @@ namespace ponni {
   };
 
 }
-
-

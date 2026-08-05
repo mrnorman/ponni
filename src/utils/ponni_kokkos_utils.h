@@ -46,8 +46,6 @@ namespace ponni {
   #endif
 }
 
-#include "ponni_LinearAllocator.h"
-#include "ponni_DeviceSpace.h"
 #include "ponni_TwoHalf.h"
 #include "ponni_TwoMask.h"
 #include "ponni_SArray.h"

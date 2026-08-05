@@ -1,3 +1,5 @@
+"""Tests for the ONNX schema, opset, shape, dtype, and semantic boundary."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -40,6 +42,7 @@ def _save(path: Path, nodes, initializers=(), *, opset=18, input_shape=(4, "batc
 
 
 class OnnxContractTests(unittest.TestCase):
+    """Ensure accepted ONNX has one unambiguous canonical interpretation."""
     def test_export_normalizes_emitter_chosen_batch_symbols(self) -> None:
         graph = helper.make_graph(
             [helper.make_node("Identity", ["input"], ["output"])],

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Export Keras/TensorFlow fixtures consumed by the CMake test pipeline."""
+
 from __future__ import annotations
 
 import argparse
@@ -6,7 +8,9 @@ import json
 import os
 from pathlib import Path
 
-# Framework export is a CPU build-time activity, even when generated inference targets a GPU.
+# Framework export is CPU build-time work even when generated inference targets
+# a GPU. Set this before importing either framework so they cannot initialize a
+# device runtime as a side effect.
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
@@ -18,6 +22,7 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--quiet", action="store_true", help="do not print the JSON report to stdout")
     args = parser.parse_args()
+    # Each helper performs its own framework-versus-ONNX numerical validation.
     results = {
         "keras_mlp": export_keras_model(args.output_dir),
         "keras_normalization": export_keras_normalization_model(args.output_dir),

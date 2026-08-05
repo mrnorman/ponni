@@ -7,6 +7,8 @@
 #include <iostream>
 #include <limits>
 #include <string>
+#include <tuple>
+#include <type_traits>
 
 namespace {
 
@@ -26,7 +28,7 @@ bool is_ieee_nan(float value) {
 
 template <class Layer>
 std::array<float,3> compute_activation_view(Layer const & layer) {
-  using real2d = Kokkos::View<float**, Kokkos::LayoutRight, ponni::DeviceSpace>;
+  using real2d = Kokkos::View<float**, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
 
   real2d input("activation_input", 3, 1);
   auto input_h = ponni::create_host_copy(input);
@@ -47,7 +49,7 @@ std::array<float,3> compute_activation_view(Layer const & layer) {
 template <int NIn, int NOut, class Layer>
 Kokkos::View<float*, Kokkos::LayoutRight, Kokkos::HostSpace>
 compute_sarray_unary(Layer const & layer, std::array<float,NIn> const & values) {
-  using real1d = Kokkos::View<float*, Kokkos::LayoutRight, ponni::DeviceSpace>;
+  using real1d = Kokkos::View<float*, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
 
   real1d input("sarray_unary_input", NIn);
   auto input_h = ponni::create_host_copy(input);
@@ -71,7 +73,7 @@ Kokkos::View<float*, Kokkos::LayoutRight, Kokkos::HostSpace>
 compute_sarray_binary(Layer const & layer,
                       std::array<float,N1> const & values_1,
                       std::array<float,N2> const & values_2) {
-  using real1d = Kokkos::View<float*, Kokkos::LayoutRight, ponni::DeviceSpace>;
+  using real1d = Kokkos::View<float*, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
 
   real1d input_1("sarray_binary_input_1", N1);
   real1d input_2("sarray_binary_input_2", N2);
@@ -100,7 +102,6 @@ compute_sarray_binary(Layer const & layer,
 
 int main(int argc, char** argv) {
   Kokkos::initialize(argc, argv);
-  ponni::init_device_pool(128ULL * 1024ULL * 1024ULL);
 
   bool ok = true;
   auto require_true = [&](bool cond, const std::string& msg) {
@@ -111,8 +112,8 @@ int main(int argc, char** argv) {
   };
 
   {
-    using real1d = Kokkos::View<float*, Kokkos::LayoutRight, ponni::DeviceSpace>;
-    using real2d = Kokkos::View<float**, Kokkos::LayoutRight, ponni::DeviceSpace>;
+    using real1d = Kokkos::View<float*, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
+    using real2d = Kokkos::View<float**, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
 
     // Verify Initializer_None performs no write.
     real1d unchanged("unchanged", 8);
@@ -153,6 +154,49 @@ int main(int argc, char** argv) {
 
     require_true(nearly_equal(out_host(0, 0), 4.0f), "Model output(0,0) should be 4.0");
     require_true(nearly_equal(out_host(1, 0), 4.0f), "Model output(1,0) should be 4.0");
+
+    // The default model starts without batch scratch, grows on demand, keeps
+    // larger capacity for reuse, and permits an explicit exact shrink.
+    require_true(model.internal_state_capacity() == 1,
+                 "First batch inference should allocate one scratch column");
+    real2d larger_input("larger_input", 2, 4);
+    Kokkos::deep_copy(larger_input, 1.0f);
+    auto larger_output = model.forward_batch_parallel(larger_input);
+    require_true(model.internal_state_capacity() == 4,
+                 "Model scratch should grow to fit a larger batch");
+    model.forward_batch_parallel(ponni::create_device_copy(in_host));
+    require_true(model.internal_state_capacity() == 4,
+                 "A smaller batch should retain existing scratch capacity");
+    model.reallocate_internal_state(2);
+    require_true(model.internal_state_capacity() == 2,
+                 "Explicit internal-state reallocation should shrink capacity");
+    require_true(larger_output.extent(1) == 4, "Larger batch output should retain its requested extent");
+
+    // The factory is the only place where users select execution and memory.
+    // It rebinds all supplied layers, including their learned parameters.
+    using HostExecutionSpace = Kokkos::DefaultHostExecutionSpace;
+    using HostMemorySpace = Kokkos::HostSpace;
+    auto host_model = ponni::create_inference_model(
+        HostExecutionSpace(),
+        HostMemorySpace(),
+        ponni::Matvec<float>(weights),
+        ponni::Bias<float>(bias),
+        ponni::LeakyRelu<float>(2, 0.1f));
+    static_assert(std::is_same_v<typename decltype(host_model)::execution_space,HostExecutionSpace>);
+    static_assert(std::is_same_v<typename decltype(host_model)::memory_space,HostMemorySpace>);
+    static_assert(std::is_same_v<
+        typename std::tuple_element_t<0,decltype(host_model.params.layers)>::memory_space,
+        HostMemorySpace>);
+
+    // LayoutLeft deliberately differs from the model's internal LayoutRight
+    // Views, proving that public inputs and outputs are generic accessible Views.
+    Kokkos::View<float**, Kokkos::LayoutLeft, HostMemorySpace> host_input("host_input", 2, 1);
+    Kokkos::View<float**, Kokkos::LayoutLeft, HostMemorySpace> host_output("host_output", 2, 1);
+    host_input(0,0) = 1.0f;
+    host_input(1,0) = 2.0f;
+    host_model.forward_batch_parallel(host_input, host_output);
+    require_true(nearly_equal(host_output(0,0), 4.0f) && nearly_equal(host_output(1,0), 4.0f),
+                 "Custom host execution/memory model produced incorrect output");
 
     // Cover view reduction path.
     float out_sum = ponni::intrinsics::sum(out_dev);
@@ -274,8 +318,8 @@ int main(int argc, char** argv) {
 
     // Cover layer-level API options: trainable flags, to_array/from_array, and set/get trainable parameters.
     {
-      using real1d = Kokkos::View<float*, Kokkos::LayoutRight, ponni::DeviceSpace>;
-      using real2d = Kokkos::View<float**, Kokkos::LayoutRight, ponni::DeviceSpace>;
+      using real1d = Kokkos::View<float*, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
+      using real2d = Kokkos::View<float**, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
 
       real2d mv_w("mv_w", 2, 3);
       auto mv_w_h = ponni::create_host_copy(mv_w);
@@ -412,9 +456,9 @@ int main(int argc, char** argv) {
                    "Projection skip to_array/from_array should preserve non-trainable option");
     }
 
-    // Cover every activation's host API plus its SArray and DeviceSpace compute paths.
+    // Cover every activation's host API plus its SArray and default Kokkos memory-space compute paths.
     {
-      using real1d = Kokkos::View<float*, Kokkos::LayoutRight, ponni::DeviceSpace>;
+      using real1d = Kokkos::View<float*, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
 
       auto check_activation = [&]<class Layer>(Layer layer,
                                                 std::array<float,3> const & expected,
@@ -504,8 +548,8 @@ int main(int argc, char** argv) {
 
     // Cover LayerNorm forward path plus trainable parameter set/get and serialization.
     {
-      using real1d = Kokkos::View<float*, Kokkos::LayoutRight, ponni::DeviceSpace>;
-      using real2d = Kokkos::View<float**, Kokkos::LayoutRight, ponni::DeviceSpace>;
+      using real1d = Kokkos::View<float*, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
+      using real2d = Kokkos::View<float**, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
 
       real1d gamma("ln_gamma", 4);
       real1d beta("ln_beta", 4);
@@ -578,14 +622,14 @@ int main(int argc, char** argv) {
 
     // Cover MinMaxNorm forward path and serialization.
     {
-      using real2d = Kokkos::View<float**, Kokkos::LayoutRight, ponni::DeviceSpace>;
+      using real2d = Kokkos::View<float**, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
       ponni::MinMaxNorm<float> mm(3, -1.0f, 1.0f);
       require_true(std::string(mm.get_label()) == "MinMaxNorm", "MinMaxNorm label is incorrect");
       require_true(mm.get_num_inputs() == 3 && mm.get_num_outputs() == 3 &&
                    ponni::MinMaxNorm<float>::get_num_inputs(mm.params) == 3 &&
                    ponni::MinMaxNorm<float>::get_num_outputs(mm.params) == 3,
                    "MinMaxNorm input/output size is incorrect");
-      Kokkos::View<float*, Kokkos::LayoutRight, ponni::DeviceSpace> no_mm_parameters;
+      Kokkos::View<float*, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space> no_mm_parameters;
       mm.set_trainable_parameters(no_mm_parameters);
       require_true(mm.get_num_trainable_parameters() == 0 &&
                    !mm.get_trainable_parameters().is_allocated(),
@@ -625,8 +669,8 @@ int main(int argc, char** argv) {
 
     // Cover projection skip layer including trainable parameters and serialization.
     {
-      using real1d = Kokkos::View<float*, Kokkos::LayoutRight, ponni::DeviceSpace>;
-      using real2d = Kokkos::View<float**, Kokkos::LayoutRight, ponni::DeviceSpace>;
+      using real1d = Kokkos::View<float*, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
+      using real2d = Kokkos::View<float**, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
       real2d proj_w("proj_w", 2, 3);
       real1d proj_b("proj_b", 3);
       auto proj_w_h = ponni::create_host_copy(proj_w);
@@ -691,7 +735,7 @@ int main(int argc, char** argv) {
 
     // Cover advanced initializer suite with simple sanity checks.
     {
-      using real2d = Kokkos::View<float**, Kokkos::LayoutRight, ponni::DeviceSpace>;
+      using real2d = Kokkos::View<float**, Kokkos::LayoutRight, typename Kokkos::DefaultExecutionSpace::memory_space>;
       real2d x("init_x", 8, 6);
 
       ponni::Initializer_Zeros<float>().fill(x);
@@ -731,7 +775,7 @@ int main(int argc, char** argv) {
 
     // Exercise both lanes and the packed multiply-add on the active device backend.
     {
-      Kokkos::View<float*,ponni::DeviceSpace> result("two_half_result", 16);
+      Kokkos::View<float*,typename Kokkos::DefaultExecutionSpace::memory_space> result("two_half_result", 16);
       Kokkos::parallel_for(PONNI_AUTO_LABEL(), 1, KOKKOS_LAMBDA(int) {
         ponni::TwoHalf const left = ponni::TwoHalf::from_floats(2.0f, -3.0f);
         ponni::TwoHalf const right = ponni::TwoHalf::from_floats(4.0f, 5.0f);
@@ -781,7 +825,6 @@ int main(int argc, char** argv) {
     }
   }
 
-  ponni::finalize_device_pool();
   Kokkos::finalize();
 
   if (!ok) return 1;

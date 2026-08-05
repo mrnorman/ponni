@@ -1,131 +1,293 @@
 # PONNI: POrtable Neural Network Inferencing
-### Efficient in-loop neural network inferencing made easy in C++
 
-Author: Matt Norman, Oak Ridge National Laboratory, https://mrnorman.github.io
+PONNI targets a specific HPC niche: **small neural networks evaluated over very large batches of independent
+samples**. Typical examples include applying the same compact network to every grid column, cell, particle, ensemble
+member, or other local state inside a larger simulation. PONNI uses Kokkos so the same inference code can run on the
+CPU and accelerator backends supported by the surrounding application.
 
-PONNI provides a convenient way to build an efficient, portable Neural Network inference model in C++ with minimal syntax and full disclosure of exactly how the model is running on an accelerator device. It uses the Kokkos portable C++ library.
+PONNI is not intended to be a general runtime for large language models, dynamic sequence models, or arbitrary ONNX
+graphs. Its strength is transparent, portable C++ inference for networks small enough to embed directly in an HPC
+workflow, while the batch or outer simulation provides abundant parallelism.
 
-## Using PONNI in your CMake project
-```CMake
-cmake_minimum_required(VERSION 3.22)
-project(MyProject)
-add_subdirectory(/path/to/kokkos kokkos) # or use find_package for Kokkos
-add_subdirectory(/path/to/ponni  ponni )
-add_library(MyProject ${MY_SOURCES})  # or add_executable
-target_link_libraries(MyProject ponni)
+Author: Matt Norman, Oak Ridge National Laboratory, <https://mrnorman.github.io>
+
+## Two ways to use PONNI
+
+PONNI supports two complementary workflows:
+
+1. **Template C++ mode:** construct a model directly from PONNI layer templates such as `Matvec`, `Bias`, and `Relu`.
+   This is the simplest option when the architecture is naturally expressed in C++ or the application already owns
+   the weights.
+2. **Ahead-of-time generator mode:** export a model to ONNX, then generate a specialized Kokkos model struct and a
+   versioned weight blob. This supports a broader graph of dense, residual, branched, normalization, reduction,
+   activation, and elementwise operations.
+
+Both modes use feature-major arrays: the first dimension is the feature index and the second is the batch index.
+
+## Mode 1: construct a model with C++ templates
+
+Include `ponni.h`, allocate ordinary Kokkos Views, and list the layers in execution order. By default, PONNI uses
+`Kokkos::DefaultExecutionSpace` and that execution space's native memory. The example below creates a `2 -> 3 -> 1`
+network and evaluates a large batch with one Kokkos iteration per sample.
+
+```cpp
+#include "ponni.h"
+
+#include <iostream>
+
+int main(int argc, char ** argv) {
+  Kokkos::initialize(argc, argv);
+  {
+    using ExecutionSpace = Kokkos::DefaultExecutionSpace;
+    using MemorySpace = typename ExecutionSpace::memory_space;
+    using DeviceMatrix = Kokkos::View<float**, Kokkos::LayoutRight, MemorySpace>;
+    using DeviceVector = Kokkos::View<float*, Kokkos::LayoutRight, MemorySpace>;
+
+    int constexpr batch_size = 1000000;
+
+    DeviceMatrix weights_1("weights_1", 2, 3);
+    DeviceVector bias_1("bias_1", 3);
+    DeviceMatrix weights_2("weights_2", 3, 1);
+    DeviceVector bias_2("bias_2", 1);
+
+    // Replace these constants with application or file-loaded parameters.
+    Kokkos::deep_copy(weights_1, 0.25f);
+    Kokkos::deep_copy(bias_1, 0.10f);
+    Kokkos::deep_copy(weights_2, 0.50f);
+    Kokkos::deep_copy(bias_2, -0.20f);
+
+    auto model = ponni::create_inference_model(
+        ponni::Matvec<float>(weights_1),
+        ponni::Bias<float>(bias_1),
+        ponni::Relu<float>(3),
+        ponni::Matvec<float>(weights_2),
+        ponni::Bias<float>(bias_2));
+    model.validate();
+
+    DeviceMatrix inputs("inputs", 2, batch_size);
+    Kokkos::deep_copy(inputs, 1.0f);
+
+    // Scratch storage grows automatically and is retained for later batches.
+    DeviceMatrix outputs = model.forward_batch_parallel(inputs);
+    auto const outputs_host = ponni::create_host_copy(outputs);
+    std::cout << "first prediction: " << outputs_host(0,0) << '\n';
+  }
+  Kokkos::finalize();
+  return 0;
+}
 ```
 
-## Ahead-of-time PyTorch/ONNX generator
+Template mode also provides layers for residual and concatenation graphs, normalization, and common activation
+functions. Layer parameters can be serialized, restored, and updated through the model API. PONNI has no custom
+allocator or pool lifecycle; model-owned parameters, saved states, and temporary Views use ordinary Kokkos memory.
 
-The experimental [Kokkos neural-network generator](src/generator/README.md) exports fixed-shape framework models to
-ONNX, validates and optimizes a framework-neutral IR, and generates allocation-free Kokkos C++ plus a versioned
-weight blob. ONNX and Python are build-time tools only; generated inference does not link an ML runtime.
+To select a different execution instance and accessible memory space, pass them before the layers. The factory
+rebinds every layer and its parameters, so the policy is specified once:
 
-The supported model class is a fixed-feature, inference-only vector DAG: dense MLPs, residual and branched networks,
-feature concatenation, supported activations, feature normalization/probabilities/reductions, scalar or exact-shape
-elementwise arithmetic, and typed Boolean comparisons, logical masks, and selection. One dynamic batch dimension is
-allowed. Convolution/pooling, attention,
-recurrent/control-flow models, dynamic hidden or sequence dimensions, multiple inputs/outputs, arbitrary
-broadcasting, training behavior, quantization, and custom ONNX operators are not yet supported. The generator emits
-three APIs: inline one-sample `infer_one`, View-based `infer_batch`, and packed two-sample FP16
-`infer_batch_half2`. See the generator documentation for the exact ONNX operator matrix and numerical semantics.
+```cpp
+Kokkos::DefaultHostExecutionSpace host_execution;
+Kokkos::HostSpace host_memory;
 
-## Activation layers
+auto host_model = ponni::create_inference_model(
+    host_execution,
+    host_memory,
+    ponni::Matvec<float>(weights_1),
+    ponni::Bias<float>(bias_1),
+    ponni::Relu<float>(3));
+```
 
-PONNI provides the following activation layers:
+Every layer has a trailing `MemorySpace` template parameter that defaults to the default execution space's native
+memory. Applications normally let `create_inference_model` rebind it. The model stores the supplied execution-space
+instance, preserving custom streams, and launches its `RangePolicy` on that instance. Internal batch storage grows
+only when a larger batch arrives; `reallocate_internal_state(batch_size)` performs an exact resize when an application
+wants to shrink retained capacity or prepare the View-based intra-kernel path.
 
-- `Relu` (`ReLU`), `LeakyRelu` (`LeakyReLU`), `Elu` (`ELU`), and `Selu` (`SELU`)
-- `Gelu` (`GELU`), `Silu` (`SiLU`), `Sigmoid`, and `Tanh`
-- `Softmax`, `LogSoftmax`, and `Softplus`
-- `HardSigmoid`, `HardSwish`, and `Mish`
+## Mode 2: generate a specialized Kokkos model from ONNX
 
-Include `ponni.h` to make all activation layers available. Each activation is implemented in its own
-`src/layers/ponni_<Activation>.h` header, following the same one-layer-per-header organization as the other PONNI
-layers.
+Install the generator from the repository root, validate the ONNX contract, and generate the C++ model:
 
-Every activation supports both dynamic `Kokkos::View` execution and fixed-size `SArray` execution. Activation
-configuration is validated by the layer itself and can be serialized with `to_array()` and restored with
-`from_array()`. Activation layers have no trainable parameters, so `get_num_trainable_parameters()` returns zero and
-`get_trainable_parameters()` returns an empty view.
+```bash
+python -m pip install -e src/generator
 
-## Unit tests
+python -m kokkos_nn validate model.onnx
 
-Run all unit tests:
+python -m kokkos_nn compile model.onnx \
+  --output-dir generated \
+  --model-name MyModel
+```
+
+The output directory contains:
+
+- `MyModel.hpp`: the specialized Kokkos model class;
+- `weights.bin`: learned parameters with version, size, scalar-type, and checksum metadata;
+- `weights.json`: a readable parameter manifest;
+- `canonical_ir.json`: the optimized compiler graph;
+- `optimization_report.json`: passes, fusions, storage, scheduling decisions, and verification results.
+
+Generated C++ depends only on PONNI and Kokkos. Python, ONNX, and the source framework are build-time tools.
+
+### Use the generated model inside an existing kernel
+
+`infer_one` is a `KOKKOS_INLINE_FUNCTION` that accepts fixed-size `ponni::SArray` values. Load weights on the host
+before launching the kernel, then capture the model's parameter Views by value. The fragment below belongs inside an
+initialized Kokkos scope, like the scope in the template-mode example.
+
+```cpp
+#include "MyModel.hpp"
+
+#include <stdexcept>
+#include <string>
+
+using Model = ponni::generated::MyModel<float>;
+int constexpr batch_size = 1000000;
+
+Model model;
+std::string error;
+if (!model.load_weights("generated/weights.bin", &error)) {
+  throw std::runtime_error(error);
+}
+
+Model::InputView inputs("inputs", Model::num_inputs, batch_size);
+Model::OutputView outputs("outputs", Model::num_outputs, batch_size);
+
+// Initialize inputs through a host mirror; do not index GPU-resident memory on the host.
+auto inputs_host = Kokkos::create_mirror_view(inputs);
+for (int ibatch = 0; ibatch < batch_size; ibatch++) {
+  for (int i = 0; i < Model::num_inputs; i++) {
+    inputs_host(i,ibatch) = static_cast<float>(i + ibatch % 4);
+  }
+}
+Kokkos::deep_copy(inputs, inputs_host);
+
+auto const device_model = model;
+Kokkos::parallel_for("application_with_embedded_nn", batch_size, KOKKOS_LAMBDA(int ibatch) {
+  ponni::SArray<float, Model::num_inputs> sample_inputs;
+  ponni::SArray<float, Model::num_outputs> sample_outputs;
+
+  for (int i = 0; i < Model::num_inputs; i++) {
+    sample_inputs(i) = inputs(i,ibatch);
+  }
+  device_model.infer_one(sample_inputs, sample_outputs);
+  for (int i = 0; i < Model::num_outputs; i++) {
+    outputs(i,ibatch) = sample_outputs(i);
+  }
+});
+```
+
+This is the intended path when inference is one step inside a larger application kernel. The application controls the
+outer launch and may combine model inputs or outputs with its other per-sample calculations.
+
+### Let the generated model launch a standalone batch kernel
+
+For ordinary batched inference, allocate feature-major Views and call `infer_batch`. This is the vanilla generated
+batch API; it launches one Kokkos iteration per sample.
+
+```cpp
+#include "MyModel.hpp"
+
+#include <stdexcept>
+#include <string>
+
+using Model = ponni::generated::MyModel<float>;
+int constexpr batch_size = 1000000;
+
+Model model;
+std::string error;
+if (!model.load_weights("generated/weights.bin", &error)) {
+  throw std::runtime_error(error);
+}
+
+Model::InputView inputs("inputs", Model::num_inputs, batch_size);
+Model::OutputView outputs("outputs", Model::num_outputs, batch_size);
+
+auto inputs_host = Kokkos::create_mirror_view(inputs);
+for (int ibatch = 0; ibatch < batch_size; ibatch++) {
+  for (int i = 0; i < Model::num_inputs; i++) {
+    inputs_host(i,ibatch) = static_cast<float>(i + ibatch % 4);
+  }
+}
+Kokkos::deep_copy(inputs, inputs_host);
+
+model.infer_batch(inputs, outputs);
+
+auto const outputs_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), outputs);
+// Read outputs_host(feature, sample) or pass it to the application's next step.
+```
+
+Call `load_weights` only after `Kokkos::initialize` and before inference. Keep the model alive while kernels using its
+parameter Views are in flight.
+
+## Include PONNI in a CMake project
+
+PONNI defines a `ponni` target that publicly links `Kokkos::kokkos` and publishes the PONNI include directories. Add
+Kokkos first, then PONNI, and link the application against `ponni`:
+
+```cmake
+cmake_minimum_required(VERSION 3.22)
+project(MyApplication LANGUAGES CXX)
+
+# These may also be provided through find_package() in an installed workflow.
+add_subdirectory(/path/to/kokkos kokkos)
+add_subdirectory(/path/to/ponni ponni)
+
+add_executable(my_application main.cpp)
+target_link_libraries(my_application PRIVATE ponni)
+
+# Add this only when main.cpp includes a generated header such as MyModel.hpp.
+target_include_directories(my_application PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/generated)
+```
+
+For template mode, `#include "ponni.h"` is sufficient. For generator mode, also include the generated model header and
+make its output directory visible to the target. The generated header includes `ponni.h` itself, but the application
+still links `ponni` to inherit PONNI's headers and the selected Kokkos backend.
+
+## Build and run the unit tests
+
+The repository carries Kokkos as a test submodule and provides machine profiles under `unit/build/machines`. From a
+fresh clone:
 
 ```bash
 git clone git@github.com:mrnorman/ponni.git
 cd ponni
 git submodule update --init --checkout -- unit/externals/kokkos
+
 cd unit/build
-# Choose or create a machine profile
+
+# Select the compiler, Kokkos backend, architecture, and debug/coverage settings.
 source machines/thatchroof/thatchroof_cpu_coverage.env
+
 ./cmakescript.sh
-make -j8
-ctest -V
+cmake --build . -j8
+ctest --output-on-failure
 ```
 
-Notes:
+Choose a different profile under `unit/build/machines`, or create one for the local platform. The sourced profile sets
+`KOKKOS_HOME`, compilers, backend and architecture options, and PONNI compile flags.
 
-- All unit tests are registered through CTest.
-- The core unit test covers every activation's host API, configuration serialization, fixed-size `SArray` path, and
-  accelerator-capable `DeviceSpace` path.
-- The performance benchmark executable is built, but it is not registered as a CTest test and is not run by `ctest`.
-- The `keras_sequential`, `keras_resnet`, and `pytorch_resnet` unit tests require Python-generated HDF5 test data.
+The build creates a repository-owned `uv` installation and CPU-only Python environment under `unit/build`; it does not
+install framework packages into the user's home environment. Python produces framework reference data and ONNX models,
+while the configured Kokkos backend compiles and runs the C++ tests. The performance benchmark is built but is not
+registered as a CTest test.
 
-### Python environment for unit tests
+See [unit/README.md](unit/README.md) for GPU-debug profiles, generator-test details, Python dependency behavior, and
+the gcov/gcovr coverage workflow.
 
-During the **make phase** (not configure), unit test dependencies are prepared with `uv`:
+## More documentation
 
-- CMake finds Python 3.x with `find_package(Python3 ...)`.
-- `uv` is resolved and installed locally in the build tree at `unit/build/uv_env` (no install into `~/.local`).
-- The CPU-only Python virtual environment is created in `unit/build/python_cpu_env` and installs packages used by tests and
-  ahead-of-time model generation:
-	- `torch`
-	- `keras`
-	- `tensorflow`
-	- `tf2onnx`
-	- `numpy`
-	- `h5py`
-	- `onnx`
-	- `onnxruntime`
-	- `onnxscript`
-- Python scripts generate test HDF5 files in the build tree, and C++ tests consume those generated files.
+- [Generator guide](src/generator/README.md): supported graph shape, CLI options, workspace-reduction levels,
+  generated APIs, weight management, and verification behavior.
+- [Generator tutorial](src/generator/kokkos_nn/TUTORIAL.md): a from-scratch explanation of ONNX import, the canonical
+  IR, optimization passes, scheduling, storage planning, C++ emission, debugging, testing, and extension workflows.
+- [ONNX operator support](src/generator/ONNX_OPERATOR_SUPPORT.md): authoritative reviewed opsets, operator schemas,
+  restrictions, and unsupported standard operators.
+- [Unit testing guide](unit/README.md): machine profiles, Python-generated test data, CTest coverage, generated
+  artifacts, and coverage reporting.
 
-This unit-test workflow keeps tooling and Python dependencies inside `ponni/unit/build` and does not place files in the user's `~/.local`.
+The template layer API includes dense matrix-vector operations, bias, residual-state save/add operations, feature
+concatenation and projection, normalization, and these activation families:
 
-This workflow is intended for Linux/macOS (Windows is not supported by this path).
-
-## Coverage tests with gcov
-
-To run tests with gcov instrumentation and print per-file coverage summaries for all files discovered under `ponni/src`:
-
-```bash
-cd unit/build
-source machines/thatchroof/thatchroof_cpu_coverage.env
-export PONNI_COVERAGE=ON
-./cmakescript.sh
-make -j8
-# Optional but recommended before collecting fresh coverage:
-find . -name '*.gcda' -delete
-ctest -V
-```
-
-The coverage `ctest` run also executes `src_gcov_summary_test`, which prints per-file coverage summaries for files under `src/`.
-
-The CTest run includes `src_gcov_summary_test`, which executes `unit/report_src_gcov_summary.sh` and reports:
-
-- Number of source files found recursively under `ponni/src`
-- Per-file gcov line coverage summaries
-- Files missing gcov data
-
-Coverage artifacts are written to:
-
-- `unit/build/coverage/src_gcov_summary.txt`
-- `unit/build/coverage/gcov_intermediate_all.txt`
-
-You can also run the summary script directly:
-
-```bash
-cd unit/build
-/bin/bash ../report_src_gcov_summary.sh "$PWD"
-```
+- `Relu`, `LeakyRelu`, `Elu`, and `Selu`;
+- `Gelu`, `Silu`, `Sigmoid`, and `Tanh`;
+- `Softmax`, `LogSoftmax`, and `Softplus`;
+- `HardSigmoid`, `HardSwish`, and `Mish`.

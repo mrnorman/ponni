@@ -1,3 +1,9 @@
+"""NumPy reference execution for canonical and optimized PONNI graphs.
+
+This is a verification interpreter, not a second runtime. Compilation uses it
+to prove that graph rewrites preserve deterministic per-sample semantics.
+"""
+
 from __future__ import annotations
 
 import numpy as np
@@ -7,6 +13,7 @@ from .ir import DType, Graph
 
 
 def _unary(name: str, value: np.ndarray, attributes: dict[str, object] | None = None) -> np.ndarray:
+    """Evaluate one canonical unary operation with ONNX-compatible semantics."""
     attributes = attributes or {}
     if name == "Relu":
         return np.maximum(value, 0)
@@ -100,6 +107,7 @@ def _unary(name: str, value: np.ndarray, attributes: dict[str, object] | None = 
 
 
 def _binary(op: str, left: np.ndarray, right: np.ndarray, output_size: int) -> np.ndarray:
+    """Apply PONNI's restricted scalar-or-exact-shape broadcasting."""
     if left.size not in (1, output_size) or right.size not in (1, output_size):
         raise CompilerError(
             f"unsupported {op} broadcasting: operand sizes {left.size} and {right.size}, output size {output_size}"
@@ -137,6 +145,7 @@ def _comparison(op: str, left: np.ndarray, right: np.ndarray) -> np.ndarray:
 
 def _pointwise_step(op: str, operands: list[np.ndarray], attributes: dict[str, object],
                     output_size: int, output_dtype: DType) -> np.ndarray:
+    """Evaluate one instruction embedded in a fused pointwise program."""
     if op in {"Add", "Div", "Max", "Min", "Mul", "Pow", "Sub"}:
         return _binary(op, operands[0], operands[1], output_size)
     if op in {"Equal", "Greater", "GreaterOrEqual", "Less", "LessOrEqual"}:
@@ -184,6 +193,9 @@ def _pointwise_step(op: str, operands: list[np.ndarray], attributes: dict[str, o
 
 
 def run_sample(graph: Graph, sample: np.ndarray) -> np.ndarray:
+    """Evaluate one feature vector through a canonical graph."""
+    # Values remain keyed by tensor ID, exactly as in the IR. Fused and
+    # unfused graphs can therefore use the same execution machinery.
     values: dict[int, np.ndarray] = {}
     input_id = graph.inputs[0]
     expected = graph.tensors[input_id].sample_size
@@ -416,6 +428,7 @@ def run_sample(graph: Graph, sample: np.ndarray) -> np.ndarray:
 
 
 def run_graph(graph: Graph, inputs: np.ndarray) -> np.ndarray:
+    """Evaluate a feature-major ``(features, batch)`` input matrix."""
     array = np.asarray(inputs)
     expected_inputs = graph.tensors[graph.inputs[0]].sample_size
     if array.ndim != 2 or array.shape[0] != expected_inputs:

@@ -3,11 +3,13 @@
 
 namespace ponni {
 
-  template <class real = float, int N = 1>
+  template <class real = float, int N = 1, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
   struct LeakyRelu {
+    using memory_space = MemorySpace;
+    template <class NewMemorySpace> using rebind_memory_space = LeakyRelu<real,N,NewMemorySpace>;
     typedef Kokkos::View<double *, Kokkos::LayoutRight, Kokkos::HostSpace> doubleHost1d;
-    typedef Kokkos::View<real *, Kokkos::LayoutRight, ponni::DeviceSpace> real1d;
-    typedef Kokkos::View<real **, Kokkos::LayoutRight, ponni::DeviceSpace> real2d;
+    typedef Kokkos::View<real *, Kokkos::LayoutRight, MemorySpace> real1d;
+    typedef Kokkos::View<real **, Kokkos::LayoutRight, MemorySpace> real2d;
 
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false;
@@ -42,7 +44,8 @@ namespace ponni {
       return x > static_cast<real>(0) ? x : params_in.negative_slope * x;
     }
 
-    KOKKOS_INLINE_FUNCTION static void compute_all_outputs(real2d const & input, real2d const & output,
+    template <class InputView, class OutputView>
+    KOKKOS_INLINE_FUNCTION static void compute_all_outputs(InputView const & input, OutputView const & output,
                                                            int ibatch, Params const & params_in) {
       for (int i = 0; i < params_in.num_inputs; i++) output(i,ibatch) = apply(input(i,ibatch), params_in);
     }
@@ -72,6 +75,9 @@ namespace ponni {
     }
   };
 
-  template <class real = float, int N = 1> using LeakyReLU = LeakyRelu<real,N>;
+  template <class real = float,
+            int N = 1,
+            class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
+  using LeakyReLU = LeakyRelu<real,N,MemorySpace>;
 
 }

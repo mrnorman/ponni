@@ -1,3 +1,11 @@
+"""Coordinate ONNX import, optimization, planning, verification, and emission.
+
+This module is intentionally orchestration-heavy. Semantic decisions belong in
+the importer and passes; storage decisions belong in the planner and scheduler;
+and C++ spelling belongs in the emitter. The public functions here assemble
+those phases and produce a stable, inspectable report.
+"""
+
 from __future__ import annotations
 
 from collections import Counter
@@ -19,6 +27,7 @@ from .weights import write_weights
 
 
 def _onnxscript_preprocess(model_path: str | Path):
+    """Apply the optional provider-neutral ONNX cleanup before PONNI import."""
     try:
         import onnx
         from onnxscript import optimizer
@@ -37,6 +46,10 @@ def _onnxscript_preprocess(model_path: str | Path):
 
 def load_and_optimize(model_path: str | Path, disabled_passes: set[str] | None = None,
                       onnx_preprocess: bool = False):
+    """Import both the source contract and the graph selected for optimization."""
+    # Preserve a direct import of the source model for reporting and for the
+    # final equivalence check. Optional preprocessing is never allowed to hide
+    # what the user supplied at the PONNI boundary.
     original = import_onnx(model_path)
     preprocessor_changed = False
     if onnx_preprocess:
@@ -60,6 +73,7 @@ def _shape_string(shape: tuple[object, ...]) -> str:
 
 
 def _fusion_rejections(graph, schedule: DenseChainSchedule) -> list[str]:
+    """Explain materialized dense outputs that might otherwise look unfused."""
     graph.rebuild_links()
     reasons: list[str] = []
     for node in graph.nodes:
@@ -78,6 +92,7 @@ def _fusion_rejections(graph, schedule: DenseChainSchedule) -> list[str]:
 
 
 def _optimized_component_operations(graph) -> list[str]:
+    """Flatten nested fused programs so reports retain their source operations."""
     operations: list[str] = []
 
     def record_steps(steps) -> None:
@@ -97,6 +112,7 @@ def _optimized_component_operations(graph) -> list[str]:
 def _report(original, optimized, pass_report, sample_plan, sample_mask_plan,
             schedule: DenseChainSchedule, scalar_bytes: int,
             workspace_oracle: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Build the machine-readable contract emitted by validate and compile."""
     input_tensor = original.tensors[original.inputs[0]]
     output_tensor = original.tensors[original.outputs[0]]
     learned_parameter_count = sum(
@@ -161,14 +177,12 @@ def _report(original, optimized, pass_report, sample_plan, sample_mask_plan,
         "half2": {
             "batch_lanes": "two adjacent samples",
             "input_output_views": f"{optimized.tensors[optimized.inputs[0]].dtype.value} API boundary",
-            "weight_storage": "persistent scalar FP16 DeviceSpace view, splatted across both lanes",
+            "weight_storage": "persistent scalar FP16 model-memory view, splatted across both lanes",
             "multiply_type": "FP16",
             "accumulator_type": "one dependent FP16 chain",
             "launch": "Kokkos RangePolicy over ceil(batch_size / 2)",
         },
-        "batch_fastest": True,
         "fusion_rejections": _fusion_rejections(optimized, schedule),
-        "rejected_constructs": [],
     }
     if workspace_oracle is not None:
         report["workspace_oracle"] = workspace_oracle
@@ -189,6 +203,9 @@ def _plan_comparison(native_plan, heuristic_plan, exact_plan) -> dict[str, Any]:
 
 def _plans(optimized, workspace_reduction_aggressiveness: int,
            analyze_workspace: bool = False):
+    """Create the execution schedule and separate floating/Boolean arenas."""
+    # Boolean intermediates use byte storage, while floating intermediates use
+    # the model scalar type. They therefore need independent liveness arenas.
     schedule = schedule_dense_chains(optimized, workspace_reduction_aggressiveness)
     floating = {DType.FLOAT32, DType.FLOAT64}
     sample_plan = plan_storage(
@@ -198,6 +215,8 @@ def _plans(optimized, workspace_reduction_aggressiveness: int,
     sample_mask_plan = plan_storage(optimized, dtypes={DType.BOOL})
     oracle = None
     if analyze_workspace:
+        # The oracle is diagnostic only. Native plans still use the bounded,
+        # deterministic strategy selected by plan_storage above.
         floating_heuristic = plan_storage(
             optimized, schedule.eliminated_tensors,
             schedule.recompute_liveness_extensions(optimized), floating,
@@ -230,6 +249,7 @@ def validate_model(model_path: str | Path, disabled_passes: set[str] | None = No
                    workspace_reduction_aggressiveness: int = 3,
                    onnx_preprocess: bool = False,
                    analyze_workspace: bool = False) -> dict[str, Any]:
+    """Validate a model and return the same analysis used by compilation."""
     _validate_workspace_reduction_aggressiveness(workspace_reduction_aggressiveness)
     original, optimized, pass_report = load_and_optimize(
         model_path, disabled_passes, onnx_preprocess,
@@ -249,6 +269,7 @@ def compile_model(model_path: str | Path, output_dir: str | Path,
                   workspace_reduction_aggressiveness: int = 3,
                   onnx_preprocess: bool = False,
                   analyze_workspace: bool = False) -> dict[str, Any]:
+    """Compile one ONNX model into a header, weights, canonical IR, and report."""
     _validate_workspace_reduction_aggressiveness(workspace_reduction_aggressiveness)
     original, optimized, pass_report = load_and_optimize(
         model_path, disabled_passes, onnx_preprocess,
@@ -273,6 +294,8 @@ def compile_model(model_path: str | Path, output_dir: str | Path,
     report["weights"] = "weights.bin"
     report["manifest"] = "weights.json"
 
+    # Compare source and optimized IRs before committing the report. The fixed
+    # seed keeps failures reproducible and covers several batch samples at once.
     rng = np.random.default_rng(20260802)
     input_size = optimized.tensors[optimized.inputs[0]].sample_size
     verification_input = rng.standard_normal((input_size, 7)).astype(

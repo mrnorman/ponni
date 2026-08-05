@@ -1,3 +1,5 @@
+"""Focused ONNX edge-semantics tests for numerically subtle operators."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -32,6 +34,7 @@ def _unary_model(path: Path, operation: str) -> Path:
 
 
 class MathOperatorTests(unittest.TestCase):
+    """Compare canonical interpretation directly with ONNX Runtime."""
     def test_round_and_sign_match_onnx_edge_semantics(self) -> None:
         values = np.array([2.5, 1.5, -4.5, -3.5, 0.0, -0.0, np.nan, np.inf], dtype=np.float32).reshape(8, 1)
         with tempfile.TemporaryDirectory() as directory:

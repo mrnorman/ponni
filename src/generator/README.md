@@ -6,6 +6,10 @@ weight blob. Python and ONNX are build-time dependencies only. Generated inferen
 The complete operator matrix is generated in [ONNX_OPERATOR_SUPPORT.md](ONNX_OPERATOR_SUPPORT.md). It records the
 reviewed ONNX schema range, supported restrictions, and unsupported operators.
 
+For a beginner-oriented walkthrough of the compiler pipeline, internal representation, optimization passes, storage
+planning, generated Kokkos APIs, testing strategy, and extension workflow, see
+[kokkos_nn/TUTORIAL.md](kokkos_nn/TUTORIAL.md).
+
 ## Pipeline
 
 The compiler imports ONNX into PONNI's canonical graph, validates it, applies deterministic folding and fusion passes,
@@ -142,12 +146,24 @@ and writes the valid lane when the batch size is odd. It has lower-precision sem
 All three paths support the complete operator set described in `ONNX_OPERATOR_SUPPORT.md`. Boolean intermediates use
 compact byte or `TwoMask` local storage. No generated inference API requests Kokkos team scratch.
 
+Generated classes default to `Kokkos::DefaultExecutionSpace` and its native memory space. Both are template
+parameters, so an application may select another accessible pair once for its generated View aliases and parameters:
+
+```cpp
+using Model = ponni::generated::MyModel<
+    float,
+    Kokkos::DefaultHostExecutionSpace,
+    Kokkos::HostSpace>;
+```
+
+PONNI uses ordinary Kokkos Views and does not require a custom allocator or pool initialization.
+
 ## Weights and learned parameters
 
 `weights.bin` has a fixed header with magic, version, scalar metadata, payload size, and checksum. `weights.json`
 describes tensor offsets and learned parameters. `load_weights()` validates the blob and creates persistent scalar and
-FP16 device views. `get_parameters()`, `set_parameters()`, `save_parameters()`, and `refresh_half_parameters()` support
-online parameter updates while keeping both representations synchronized.
+FP16 Views in the model's memory space. `get_parameters()`, `set_parameters()`, `save_parameters()`, and
+`refresh_half_parameters()` support online parameter updates while keeping both representations synchronized.
 
 ## Verification
 

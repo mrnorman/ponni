@@ -10,46 +10,18 @@
 #include "WorkspaceLevel3Model.hpp"
 #include "WorkspaceLevel4Model.hpp"
 #include "WorkspaceLevel5Model.hpp"
+#include "generator_test_utils.hpp"
 
 #include <cmath>
 #include <cstdio>
-#include <fstream>
 #include <iostream>
 #include <string>
-#include <vector>
 
 namespace {
 
-struct ReferenceCase {
-  int batch_size;
-  std::vector<float> inputs;
-  std::vector<float> outputs;
-};
-
-struct ReferenceData {
-  int num_inputs;
-  int num_outputs;
-  std::vector<ReferenceCase> cases;
-};
-
-ReferenceData load_reference(std::string const & path) {
-  std::ifstream stream(path);
-  if (!stream) throw std::runtime_error("cannot open reference file: " + path);
-  int num_cases;
-  ReferenceData data;
-  stream >> num_cases >> data.num_inputs >> data.num_outputs;
-  for (int icase = 0; icase < num_cases; icase++) {
-    ReferenceCase reference;
-    stream >> reference.batch_size;
-    reference.inputs.resize(data.num_inputs * reference.batch_size);
-    reference.outputs.resize(data.num_outputs * reference.batch_size);
-    for (float & value : reference.inputs) stream >> value;
-    for (float & value : reference.outputs) stream >> value;
-    data.cases.push_back(std::move(reference));
-  }
-  if (!stream) throw std::runtime_error("malformed reference file: " + path);
-  return data;
-}
+using ponni::test::ReferenceCase;
+using ponni::test::ReferenceData;
+using ponni::test::load_reference;
 
 template <class Model, class TransferScalar>
 bool check_parameter_api(std::string const & weight_path, std::string const & label,
@@ -64,7 +36,9 @@ bool check_parameter_api(std::string const & weight_path, std::string const & la
     std::cerr << label << " initial parameter diagnostics failed" << std::endl;
     return false;
   }
-  using HostView = Kokkos::View<TransferScalar*,Kokkos::HostSpace>;
+  // Parameter transfer APIs are host-facing. The generated model performs the
+  // required deep copies and refreshes its packed-half device representation.
+  using HostView = Kokkos::View<TransferScalar*, Kokkos::HostSpace>;
   HostView original("parameter_api_original", Model::get_num_parameters());
   HostView updated("parameter_api_updated", Model::get_num_parameters());
   HostView result("parameter_api_result", Model::get_num_parameters());
@@ -150,6 +124,7 @@ bool check_model(std::string const & weight_path, std::string const & reference_
     typename Model::OutputView batch_outputs("generator_batch_outputs", Model::num_outputs, test.batch_size);
     typename Model::OutputView inline_outputs("generator_inline_outputs", Model::num_outputs, test.batch_size);
     typename Model::OutputView half2_outputs("generator_half2_outputs", Model::num_outputs, test.batch_size);
+    // Populate only the host mirror; device Views are never indexed by host code.
     auto inputs_host = Kokkos::create_mirror_view(inputs);
     for (int i = 0; i < Model::num_inputs; i++) {
       for (int ibatch = 0; ibatch < test.batch_size; ibatch++) {
@@ -160,6 +135,8 @@ bool check_model(std::string const & weight_path, std::string const & reference_
     model.infer_batch(inputs, batch_outputs);
     model.infer_batch_half2(inputs, half2_outputs);
 
+    // A model copy is a shallow copy of device Views and is safe to capture in
+    // the kernel. infer_one is exercised inside a caller-owned device region.
     auto const device_model = model;
     Kokkos::parallel_for("GeneratedModel::embedded_infer_one", test.batch_size, KOKKOS_LAMBDA(int ibatch) {
       ponni::SArray<float,Model::num_inputs> sample_inputs;
@@ -213,7 +190,6 @@ int main(int argc, char ** argv) {
     return 2;
   }
   Kokkos::initialize(argc, argv);
-  ponni::init_device_pool(128ULL * 1024ULL * 1024ULL);
   bool passed = true;
   float maximum_error = 0;
   {
@@ -248,7 +224,6 @@ int main(int argc, char ** argv) {
     passed = check_parameter_api<ponni::generated::MlpModel<double>,double>(
                  argv[1], "double model/double parameters", true) && passed;
   }
-  ponni::finalize_device_pool();
   Kokkos::finalize();
   std::cout << "generator integration maximum absolute error: " << maximum_error << std::endl;
   return passed ? 0 : 1;

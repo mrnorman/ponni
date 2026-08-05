@@ -1,3 +1,5 @@
+"""Integration tests for Keras/TensorFlow export and PONNI compilation."""
+
 from __future__ import annotations
 
 import os
@@ -27,6 +29,7 @@ from kokkos_nn.onnx_reference import run_onnx_reference
 
 
 class FrameworkExportTests(unittest.TestCase):
+    """Check real framework spellings, numerical agreement, and diagnostics."""
     def _assert_onnx_matches(self, model_path: Path, inputs: np.ndarray, expected: np.ndarray) -> None:
         model = onnx.load(model_path)
         input_name = model.graph.input[0].name

@@ -2,6 +2,7 @@
 #pragma once
 
 #include <Kokkos_Core.hpp>
+#include <iostream>
 #include "ponni_kokkos_utils.h"
 #include <iomanip>
 

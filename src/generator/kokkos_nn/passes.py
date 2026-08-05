@@ -1,3 +1,9 @@
+"""Deterministic canonicalization and fusion passes over PONNI IR.
+
+The ordered pipeline exposes dense structure, recognizes reviewed exporter
+decompositions, and finally forms compound regions for efficient emission.
+"""
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -10,6 +16,8 @@ from .errors import CompilerError
 from .ir import ConstantTensor, DType, Graph, Node
 
 
+# These families define which operations are safe to embed in fused pointwise
+# programs without changing evaluation order or broadcasting semantics.
 ACTIVATIONS = {
     "Elu", "Gelu", "HardSigmoid", "HardSwish", "LeakyRelu", "Mish", "Relu", "Sigmoid", "Silu",
     "Softplus", "Tanh",
@@ -44,6 +52,7 @@ def _replace_tensor(graph: Graph, old_id: int, new_id: int) -> None:
 
 
 def topological_schedule(graph: Graph) -> bool:
+    """Restore deterministic topological order after graph rewrites."""
     graph.rebuild_links()
     node_map = {node.id: node for node in graph.nodes}
     indegree = {node.id: 0 for node in graph.nodes}
@@ -76,6 +85,7 @@ def topological_schedule(graph: Graph) -> bool:
 
 
 def constant_fold(graph: Graph) -> bool:
+    """Evaluate operations whose inputs are all compile-time constants."""
     changed = False
     retained: list[Node] = []
     for node in graph.nodes:
@@ -195,6 +205,7 @@ def eliminate_identity(graph: Graph) -> bool:
 
 
 def fold_layout_operations(graph: Graph) -> bool:
+    """Remove static layout scaffolding while preserving feature-major order."""
     # Validate reshape semantics before replacing any neighboring layout tensor.
     # Otherwise folding a preceding Transpose would hide whether batch was first
     # or last in the original ONNX operation.
@@ -310,6 +321,7 @@ def _add_constant(graph: Graph, name: str, values: np.ndarray, template_tensor_i
 
 
 def canonicalize_dense(graph: Graph) -> bool:
+    """Convert MatMul/Gemm spellings into PONNI's common Dense operation."""
     changed = False
     for node in graph.nodes:
         if node.op == "Gemm":
@@ -423,6 +435,7 @@ def fuse_dense_activation(graph: Graph) -> bool:
 
 
 def fuse_virtual_dense_inputs(graph: Graph) -> bool:
+    """Represent static Concat/Gather chains as dense-input index maps."""
     """Let a dense read recursively composed static Concat/Gather index maps."""
     graph.rebuild_links()
     changed = False
@@ -647,6 +660,7 @@ def fuse_silu(graph: Graph) -> bool:
 
 
 def canonicalize_decomposed_activations(graph: Graph) -> bool:
+    """Recognize exact exporter decompositions of native activations."""
     """Recognize common activation spellings emitted as small pointwise graphs."""
     graph.rebuild_links()
     changed = False
@@ -755,6 +769,7 @@ def canonicalize_decomposed_activations(graph: Graph) -> bool:
 
 
 def canonicalize_decomposed_softmax(graph: Graph) -> bool:
+    """Replace a reviewed stable Softmax/LogSoftmax decomposition."""
     """Recognize stable full-feature Softmax and LogSoftmax reduction DAGs."""
     graph.rebuild_links()
     changed = False
@@ -822,6 +837,7 @@ def canonicalize_decomposed_softmax(graph: Graph) -> bool:
 
 
 def canonicalize_decomposed_layernorm(graph: Graph) -> bool:
+    """Replace the reviewed reduction-based LayerNormalization decomposition."""
     """Recognize the conventional mean/variance LayerNormalization DAG."""
     graph.rebuild_links()
     changed = False
@@ -1005,6 +1021,7 @@ def fuse_mapped_reductions(graph: Graph) -> bool:
 
 
 def fuse_pointwise_regions(graph: Graph) -> bool:
+    """Fuse connected pointwise DAGs without changing expression ordering."""
     """Fuse reconverging pointwise producers into one per-element loop."""
     graph.rebuild_links()
     supported = POINTWISE | {"ElementwiseChain"}
@@ -1131,10 +1148,13 @@ PASS_STAGES: list[list[tuple[str, Callable[[Graph], bool]]]] = [
         ("final-schedule", topological_schedule),
     ],
 ]
+# Stage boundaries explain intentional repetition: fusion can expose new
+# cleanup opportunities before the next recognizer family runs.
 PASS_PIPELINE: list[tuple[str, Callable[[Graph], bool]]] = [entry for stage in PASS_STAGES for entry in stage]
 
 
 def optimize(graph: Graph, disabled: set[str] | None = None) -> tuple[Graph, list[dict[str, object]]]:
+    """Run the ordered pipeline and return an auditable per-pass report."""
     disabled = disabled or set()
     unknown = disabled - {name for name, _ in PASS_PIPELINE}
     if unknown:

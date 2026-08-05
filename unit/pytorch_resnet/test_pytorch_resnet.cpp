@@ -4,7 +4,6 @@
 
 int main( int argc , char **argv ) {
   Kokkos::initialize( argc , argv );
-  ponni::init_device_pool(128ULL*1024ULL*1024ULL); // 128 MB
   {
     using ponni::create_inference_model;
     using ponni::Matvec;
@@ -77,6 +76,5 @@ int main( int argc , char **argv ) {
       }
     }
   }
-  ponni::finalize_device_pool();
   Kokkos::finalize();
 }

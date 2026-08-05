@@ -1,3 +1,9 @@
+"""Unit tests for canonicalization, fusion, planning, and artifact emission.
+
+Small synthetic ONNX graphs isolate individual compiler invariants; exported
+operator-zoo coverage provides the broader end-to-end semantic check.
+"""
+
 from __future__ import annotations
 
 import json
@@ -77,6 +83,7 @@ def _matmul_residual_model(path: Path, multiple_consumers: bool = False) -> Path
 
 
 class CompilerTests(unittest.TestCase):
+    """Exercise graph rewrites and the generated artifacts they influence."""
     def test_operator_zoo_matches_onnx_runtime_before_and_after_optimization(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

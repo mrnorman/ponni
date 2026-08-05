@@ -1,3 +1,10 @@
+"""Validate ONNX semantics and lower accepted models into PONNI's canonical IR.
+
+Import is the compatibility boundary. It resolves the schema selected by each
+model opset, materializes schema defaults, folds compile-time shape machinery,
+and rejects semantics the generated kernels cannot reproduce exactly.
+"""
+
 from __future__ import annotations
 
 from collections import Counter
@@ -11,6 +18,8 @@ from .errors import CompilerError
 from .ir import ConstantTensor, DType, Graph, Node, Symbol, TensorValue
 
 
+# Raising either maximum requires reviewing every newly selected schema, not
+# merely confirming that the operator names still exist.
 MIN_SUPPORTED_IR_VERSION = 8
 MAX_SUPPORTED_IR_VERSION = 13
 MIN_SUPPORTED_ONNX_OPSET = 13
@@ -19,6 +28,8 @@ MAX_SUPPORTED_ONNX_OPSET = 22
 # These are the immutable ONNX operator schema versions reached by models whose
 # ai.onnx opset is in the supported range above. Any new schema version requires
 # an explicit semantic review even when the operator name is already familiar.
+# Immutable schema versions with explicit importer and emitter coverage. The
+# generated operator-support document is derived from this registry.
 SUPPORTED_OPERATOR_SCHEMAS = {
     "Abs": {13},
     "Acos": {7, 22},
@@ -128,15 +139,17 @@ REDUCTION_OPS = {
 
 
 def _onnx_modules():
+    """Import ONNX lazily so package import and CLI help remain lightweight."""
     try:
         import onnx
         from onnx import numpy_helper
     except ImportError as exc:
-        raise CompilerError("ONNX support is not installed; install src/generator/requirements.txt") from exc
+        raise CompilerError("ONNX support is not installed; install the package from src/generator") from exc
     return onnx, numpy_helper
 
 
 def _dtype(element_type: int) -> DType:
+    """Map an ONNX tensor element type to a generated-kernel scalar type."""
     onnx, _ = _onnx_modules()
     if element_type == onnx.TensorProto.BOOL:
         return DType.BOOL
@@ -225,6 +238,7 @@ def _validate_schema_arity(node: Any, schema: Any) -> None:
 
 
 def _schema_attributes(node: Any, opsets: dict[str, int]) -> tuple[dict[str, Any], int]:
+    """Resolve one node's schema and return explicit, default-filled attributes."""
     onnx, _ = _onnx_modules()
     domain = _canonical_domain(node.domain)
     if domain != "ai.onnx":
@@ -274,6 +288,7 @@ def _schema_attributes(node: Any, opsets: dict[str, int]) -> tuple[dict[str, Any
 
 
 def _shape(value_info: Any, batch_symbol: str, allow_derived_batch: bool = False) -> tuple[int | Symbol, ...]:
+    """Read a shape while enforcing one symbolic batch dimension."""
     tensor_type = value_info.type.tensor_type
     if not tensor_type.HasField("shape"):
         raise CompilerError(f"tensor {value_info.name!r} has no inferred shape")
@@ -299,6 +314,7 @@ def _value_info_map(model: Any) -> dict[str, Any]:
 
 
 def _fold_static_shape_nodes(graph: Graph) -> None:
+    """Evaluate shape-only subgraphs whose values are known at compile time."""
     """Evaluate shape/index glue whose result is independent of the runtime batch size."""
     retained: list[Node] = []
     for node in graph.nodes:
@@ -350,6 +366,7 @@ def _fold_static_shape_nodes(graph: Graph) -> None:
 
 
 def import_onnx(path: str | Path | Any) -> Graph:
+    """Load, validate, and canonicalize one ONNX model into PONNI IR."""
     onnx, numpy_helper = _onnx_modules()
     model_path = Path(path) if isinstance(path, (str, Path)) else None
     try:
@@ -378,10 +395,12 @@ def import_onnx(path: str | Path | Any) -> Graph:
         )
 
     initializer_names = {initializer.name for initializer in model.graph.initializer}
+    # Some older producers also list initializers as graph inputs. They are
+    # parameters, not runtime inputs, so exclude them from the execution API.
     graph_inputs = [value for value in model.graph.input if value.name not in initializer_names]
     if len(graph_inputs) != 1 or len(model.graph.output) != 1:
         raise CompilerError(
-            f"the prototype requires exactly one model input and one output; found {len(graph_inputs)} and "
+            f"PONNI requires exactly one model input and one output; found {len(graph_inputs)} and "
             f"{len(model.graph.output)}"
         )
 
@@ -600,6 +619,7 @@ def import_onnx(path: str | Path | Any) -> Graph:
 
 
 def validate_graph(graph: Graph) -> None:
+    """Check canonical invariants required by planning and C++ emission."""
     if len(graph.inputs) != 1 or len(graph.outputs) != 1:
         raise CompilerError("canonical graph requires exactly one input and one output")
     for tensor_id in graph.inputs + graph.outputs:
