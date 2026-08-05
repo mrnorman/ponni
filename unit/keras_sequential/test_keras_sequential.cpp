@@ -1,63 +1,48 @@
 
 #include "ponni.h"
-#include "ponni_load_h5_weights.h"
 
 int main( int argc , char **argv ) {
   Kokkos::initialize( argc , argv );
-  yakl::init();
   {
     if (argc == 1) {
-      std::cerr << "Usage: " << argv[0] << " <weights.h5>" << std::endl;
+      std::cerr << "Usage: " << argv[0] << " <weights.ponni>" << std::endl;
       return -1;
     }
 
-    // This is the file with the saved tensorflow weights
     std::string fname = argv[1];
+    ponni::PonniFile file;
+    std::string error;
+    if (!file.load(fname,&error)) throw std::runtime_error(error);
 
     // Create the layers that will form the model
-    ponni::Matvec<float> matvec_1( ponni::load_h5_weights<2>( fname , "/dense/dense"     , "kernel:0" ) );
-    ponni::Bias  <float> bias_1  ( ponni::load_h5_weights<1>( fname , "/dense/dense"     , "bias:0"   ) );
-    ponni::Relu  <float> relu_1  ( 10 , 0.1 );
-    ponni::Matvec<float> matvec_2( ponni::load_h5_weights<2>( fname , "/dense_1/dense_1" , "kernel:0" ) );
-    ponni::Bias  <float> bias_2  ( ponni::load_h5_weights<1>( fname , "/dense_1/dense_1" , "bias:0"   ) );
+    ponni::Matvec<float> matvec_1(ponni::load_ponni_tensor<2>(file,"dense.kernel"));
+    ponni::Bias  <float> bias_1  (ponni::load_ponni_tensor<1>(file,"dense.bias"));
+    ponni::Tanh<float> act_1(10);
+    ponni::Matvec<float> matvec_2(ponni::load_ponni_tensor<2>(file,"dense_1.kernel"));
+    ponni::Bias  <float> bias_2  (ponni::load_ponni_tensor<1>(file,"dense_1.bias"));
 
     // Create an inference model to perform batched forward predictions
-    auto inference = ponni::create_inference_model( matvec_1 , bias_1 , relu_1 , matvec_2 , bias_2 );
+    auto inference = ponni::create_inference_model( matvec_1 , bias_1 , act_1 , matvec_2 , bias_2 );
     inference.print();
 
-    // Load one test sample to ensure we're getting the same outputs
-    yakl::Array<float**,Kokkos::HostSpace> inputs("inputs",12,1);
-    inputs( 0,0) = 5.08810276e-01;
-    inputs( 1,0) = 4.78929254e-01;
-    inputs( 2,0) = 4.54260898e-01;
-    inputs( 3,0) = 6.02555739e-02;
-    inputs( 4,0) = 4.85583159e-02;
-    inputs( 5,0) = 3.79940443e-02;
-    inputs( 6,0) = 1.20564349e-04;
-    inputs( 7,0) = 6.27402543e-04;
-    inputs( 8,0) = 3.41872996e-03;
-    inputs( 9,0) = 1.34502158e-03;
-    inputs(10,0) = 4.29940776e-04;
-    inputs(11,0) = 6.08758314e-06;
+    auto inputs   = ponni::load_ponni_tensor<2>(file,"test.input");
+    auto expected = ponni::load_ponni_tensor<2>(file,"test.output");
+    auto outputs  = inference.forward_batch_parallel( inputs );
 
-    // Perform a batched inference
-    auto outputs = inference.forward_batch_parallel( inputs.createDeviceCopy() );
+    auto out_host = ponni::create_host_copy(outputs);
+    auto exp_host = ponni::create_host_copy(expected);
 
-    auto out_host = outputs.createHostCopy();
+    if (out_host.extent(0) != exp_host.extent(0) || out_host.extent(1) != exp_host.extent(1)) {
+      Kokkos::abort("ERROR: output dimensions do not match expected dimensions");
+    }
 
-    std::cout << "Absolute difference for Output 1: " << std::abs( out_host(0,0) - 4.7658795e-01 ) << std::endl;
-    std::cout << "Absolute difference for Output 2: " << std::abs( out_host(1,0) - 4.8446856e-02 ) << std::endl;
-    std::cout << "Absolute difference for Output 3: " << std::abs( out_host(2,0) - 1.2472458e-03 ) << std::endl;
-    std::cout << "Absolute difference for Output 4: " << std::abs( out_host(3,0) - 4.0419400e-05 ) << std::endl;
-
-    if ( std::abs( out_host(0,0) - 4.7658795e-01 ) > 1.e-6 ) Kokkos::abort("ERROR Output 1 diff too large");
-    if ( std::abs( out_host(1,0) - 4.8446856e-02 ) > 1.e-6 ) Kokkos::abort("ERROR Output 2 diff too large");
-    if ( std::abs( out_host(2,0) - 1.2472458e-03 ) > 1.e-6 ) Kokkos::abort("ERROR Output 3 diff too large");
-    if ( std::abs( out_host(3,0) - 4.0419400e-05 ) > 1.e-6 ) Kokkos::abort("ERROR Output 4 diff too large");
-
-    // 4.7658795e-01 4.8446856e-02 1.2472458e-03 4.0419400e-05
+    for (int j = 0; j < out_host.extent(1); j++) {
+      for (int i = 0; i < out_host.extent(0); i++) {
+        float diff = std::abs(out_host(i,j) - exp_host(i,j));
+        std::cout << "Absolute difference for Output(" << i << "," << j << "): " << diff << std::endl;
+        if (diff > 1.e-5f) Kokkos::abort("ERROR: output diff too large");
+      }
+    }
   }
-  yakl::finalize();
   Kokkos::finalize();
 }
-

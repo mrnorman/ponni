@@ -5,16 +5,21 @@
 namespace ponni {
 
 
-  template <class real = float, int N = 1>
+  template <class real = float, int N = 1, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>
   struct Bias {
-    typedef yakl::Array<double * ,Kokkos::HostSpace> doubleHost1d;
-    typedef yakl::Array<real   * ,Kokkos::HostSpace> realHost1d;
-    typedef yakl::Array<real   *                   > real1d;
-    typedef yakl::Array<real   **                  > real2d;
+    using memory_space = MemorySpace;
+    template <class NewMemorySpace> using rebind_memory_space = Bias<real,N,NewMemorySpace>;
+    typedef Kokkos::View<real   * ,Kokkos::LayoutRight,MemorySpace> real1d;
+    typedef Kokkos::View<real   **,Kokkos::LayoutRight,MemorySpace> real2d;
     
     bool static constexpr overwrite_input = true;
     bool static constexpr binop           = false; // Use two inputs?
     bool static constexpr save            = false;
+
+    // Bias is pointwise even though its parameter depends on the feature
+    // index. Custom indexed pointwise layers may use this trait and the same
+    // apply_fused(value, feature, params) contract to join a dense epilogue.
+    LayerFusionKind static constexpr fusion_kind = LayerFusionKind::pointwise;
 
     int static constexpr INPUT_SIZE  = static_cast<int>(N);
     int static constexpr OUTPUT_SIZE = static_cast<int>(N);
@@ -42,33 +47,50 @@ namespace ponni {
       params.trainable = trainable;
     }
 
+    // Factory rebinding is an explicit semantic copy, not serialization.
+    // Custom layers owning Views should provide the same operation and copy
+    // each View into the requested memory space.
+    template <class NewMemorySpace>
+    auto copy_to_memory_space(NewMemorySpace const & memory_space = NewMemorySpace()) const {
+      return rebind_memory_space<NewMemorySpace>(
+          ponni::create_memory_space_copy(params.weights, memory_space), params.trainable);
+    }
+
     char const * get_label() const { return "Bias"; }
     KOKKOS_INLINE_FUNCTION static int get_num_inputs (Params const &params_in) { return params_in.weights.extent(0); }
     KOKKOS_INLINE_FUNCTION static int get_num_outputs(Params const &params_in) { return params_in.weights.extent(0); }
     int get_num_inputs               () const { return params.weights.extent(0); }
     int get_num_outputs              () const { return params.weights.extent(0); }
     int get_num_trainable_parameters () const { return params.trainable ? params.weights.size() : 0; }
-    int get_array_representation_size() const { return params.weights.size() + 2; }
 
-    KOKKOS_INLINE_FUNCTION static void compute_all_outputs( real2d const & input     ,
-                                                            real2d const & output    ,
+    KOKKOS_INLINE_FUNCTION static real apply_fused(real value, int feature, Params const & params_in) {
+      return value + params_in.weights(feature);
+    }
+
+    template <class InputView, class OutputView>
+    KOKKOS_INLINE_FUNCTION static void compute_all_outputs( InputView const & input     ,
+                                                            OutputView const & output    ,
                                                             int            ibatch    ,
                                                             Params const & params_in ) {
+      ponni::require_layout_right_views<InputView,OutputView>();
       int num_outputs = get_num_outputs(params_in);
-      auto &weights = params_in.weights;
       for (int irow = 0; irow < num_outputs; irow++) {
-        output(irow,ibatch) = input(irow,ibatch) + weights(irow);
+        output(irow,ibatch) = apply_fused(input(irow,ibatch), irow, params_in);
       }
     }
 
-    KOKKOS_INLINE_FUNCTION static void compute_all_outputs(SArray<real,N> const & input     ,
-                                                           SArray<real,N>       & output    ,
-                                                           Params         const & params_in ) {
+    KOKKOS_INLINE_FUNCTION static void compute_all_outputs(ponni::SArray<real,N> const & input     ,
+                                                           ponni::SArray<real,N>       & output    ,
+                                                           Params                const & params_in ) {
       for (int i = 0; i < N; i++) { output(i) = input(i) + params_in.weights(i); }
     }
 
     void set_trainable_parameters(real1d const &in) {
-      if (params.trainable) in.subset_slowest_dimension(get_num_trainable_parameters()).deep_copy_to(params.weights);
+      if (params.trainable) {
+        if (in.extent(0) < get_num_trainable_parameters()) Kokkos::abort("ERROR: Bias trainable input too small");
+        auto in_reduced = Kokkos::subview(in,std::pair<int,int>(0,get_num_trainable_parameters()));
+        Kokkos::deep_copy(params.weights,in_reduced);
+      }
     }
 
     real1d get_trainable_parameters() const {
@@ -76,28 +98,10 @@ namespace ponni {
       return real1d();
     }
 
-    doubleHost1d to_array() const {
-      doubleHost1d data("Bias_weights",get_array_representation_size());
-      data(0) = get_num_inputs   ();
-      data(1) = params.trainable ? 1 : 0;
-      auto weights = params.weights.createHostCopy().collapse();
-      for (int i=0; i < weights.size(); i++) { data(2+i) = weights(i); }
-      return data;
-    }
-
-    void from_array(doubleHost1d const & data) {
-      int  num_inputs    = data(0);
-      bool trainable     = data(1) == 1;
-      realHost1d weights("Bias_weights",num_inputs);
-      for (int i=0; i < num_inputs; i++) { weights(i) = data(2+i); }
-      init( weights.createDeviceCopy() , trainable );
-    }
-
     void validate() const {
       if (! params.weights.is_allocated()) Kokkos::abort("ERROR: weights not is_allocated");
+      if (params.weights.extent(0) == 0) Kokkos::abort("ERROR: Bias weights must not be empty");
     }
   };
 
 }
-
-
