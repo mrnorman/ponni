@@ -13,6 +13,7 @@ venv_dir="$4"
 backend="$5"
 venv_python="${venv_dir}/bin/python"
 backend_marker="${venv_dir}/.ponni-backend"
+onnx_requirement='onnx==1.22.0'
 onnxruntime_requirement='onnxruntime>=1.25,<2'
 export UV_CACHE_DIR="$(dirname "${python_install_dir}")/cache"
 export UV_NO_CONFIG=1
@@ -81,10 +82,18 @@ version = tuple(int(part) for part in parts[:2])
 assert (1, 25) <= version < (2, 0)
 assert "CPUExecutionProvider" in ort.get_available_providers()'
 
+# ONNX 1.23 changed the default model IR version to 14, which PONNI rejects.
+onnx_check='import onnx
+assert onnx.__version__ == "1.22.0" and onnx.IR_VERSION <= 13'
+
 # Keep a reused build-local environment within PONNI's reviewed ONNX Runtime
 # envelope without reinstalling the larger framework packages.
 if ! "${venv_python}" -c "${onnxruntime_check}" >/dev/null 2>&1; then
   "${uv_bin}" pip install --python "${venv_python}" --upgrade 'numpy>=2.0.2' "${onnxruntime_requirement}"
+fi
+
+if ! "${venv_python}" -c "${onnx_check}" >/dev/null 2>&1; then
+  "${uv_bin}" pip install --python "${venv_python}" --upgrade "${onnx_requirement}"
 fi
 
 frameworks_ready=false
@@ -93,6 +102,7 @@ if "${venv_python}" -c \
      >/dev/null 2>&1 && \
    "${venv_python}" -c "${backend_check}" >/dev/null 2>&1 && \
    "${venv_python}" -c "${onnxruntime_check}" >/dev/null 2>&1 && \
+   "${venv_python}" -c "${onnx_check}" >/dev/null 2>&1 && \
    "${uv_bin}" pip check --python "${venv_python}" >/dev/null 2>&1; then
   frameworks_ready=true
 fi
@@ -104,7 +114,7 @@ if [[ "${frameworks_ready}" != "true" ]]; then
 
   common_requirements=(
     'numpy>=2.0.2' flax jax keras scikit-learn tf2onnx
-    "${onnxruntime_requirement}" onnx onnxscript safetensors
+    "${onnxruntime_requirement}" "${onnx_requirement}" onnxscript safetensors
   )
   "${uv_bin}" pip install --python "${venv_python}" "${common_requirements[@]}"
 fi
@@ -114,6 +124,7 @@ if ! "${venv_python}" -c \
        >/dev/null 2>&1 || \
    ! "${venv_python}" -c "${backend_check}" >/dev/null 2>&1 || \
    ! "${venv_python}" -c "${onnxruntime_check}" >/dev/null 2>&1 || \
+  ! "${venv_python}" -c "${onnx_check}" >/dev/null 2>&1 || \
    ! "${uv_bin}" pip check --python "${venv_python}" >/dev/null 2>&1; then
   echo "ERROR: python_env packages do not match the required CPU framework backend" >&2
   echo "Replace python_env only with explicit user permission" >&2
