@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Ahead-of-time ONNX to Kokkos compiler for PONNI"
 requires-python = ">=3.10"
 dependencies = [
-  "flax", "jax", "keras", "numpy", "onnx", "onnxruntime", "onnxscript", "safetensors",
+  "flax", "jax", "keras", "numpy", "onnx==1.22.0", "onnxruntime", "onnxscript", "safetensors",
   "scikit-learn", "tensorflow", "tf2onnx", "torch",
 ]
 
