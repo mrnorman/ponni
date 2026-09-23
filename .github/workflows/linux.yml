@@ -1,0 +1,53 @@
+name: linux
+
+on:
+  push:
+    branches:
+      - main
+      - github*
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+concurrency:
+  group: ${{ github.event_name }}-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CMAKE_BUILD_PARALLEL_LEVEL: 4
+  CTEST_OUTPUT_ON_FAILURE: 1
+  CTEST_PARALLEL_LEVEL: 4
+  MAKEFLAGS: "--jobs=4"
+
+jobs:
+  serial:
+    name: ubuntu-24.04-serial
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v7
+      - name: dependencies
+        run: |
+          g++ -v
+          cmake --version
+          sudo apt-get update
+          sudo apt-get install -yq --no-install-recommends \
+              libopenmpi-dev \
+              openmpi-bin
+          git clone --branch 5.2.0 https://github.com/kokkos/kokkos.git
+      - name: ponni
+        run: |
+          cd unit/build
+          export KOKKOS_HOME=${GITHUB_WORKSPACE}/kokkos/
+          cmake ..
+          make
+      - name: test
+        run: |
+          cd unit/build
+          ctest -V -j 4
