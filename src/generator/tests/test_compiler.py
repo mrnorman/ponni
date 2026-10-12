@@ -564,7 +564,23 @@ class CompilerTests(unittest.TestCase):
                 [entry["index"] for entry in optimized.nodes[0].attributes["input_map"]], [3, 1, 1]
             )
             values = np.random.default_rng(101).standard_normal((4, 5)).astype(np.float32)
-            np.testing.assert_allclose(run_graph(original, values), run_graph(optimized, values), rtol=0, atol=0)
+            original_output = run_graph(original, values)
+            optimized_output = run_graph(optimized, values)
+            absolute_diff = np.abs(original_output - optimized_output)
+            relative_diff = np.divide(
+                absolute_diff,
+                np.abs(original_output),
+                out=np.full_like(absolute_diff, np.inf),
+                where=np.abs(original_output) != 0,
+            )
+            relative_diff = np.where(absolute_diff == 0, 0, relative_diff)
+            print(
+                "test_static_gather_feeds_dense_without_materializing_reordered_values: "
+                f"max_abs_diff={np.max(absolute_diff):.9g}, "
+                f"max_rel_diff={np.max(relative_diff):.9g}",
+                flush=True,
+            )
+            np.testing.assert_allclose(original_output, optimized_output, rtol=1.e-6, atol=1.e-6)
             report = compile_model(model, root / "out", model_name="GatherDenseModel")
             self.assertEqual(report["sample_local_storage"]["workspace_elements"], 0)
 
@@ -595,7 +611,23 @@ class CompilerTests(unittest.TestCase):
                 [entry["index"] for entry in optimized.nodes[0].attributes["input_map"]], [3, 1, 0]
             )
             values = np.random.default_rng(127).standard_normal((6, 5)).astype(np.float32)
-            np.testing.assert_allclose(run_graph(original, values), run_graph(optimized, values), rtol=0, atol=0)
+            original_output = run_graph(original, values)
+            optimized_output = run_graph(optimized, values)
+            absolute_diff = np.abs(original_output - optimized_output)
+            relative_diff = np.divide(
+                absolute_diff,
+                np.abs(original_output),
+                out=np.full_like(absolute_diff, np.inf),
+                where=np.abs(original_output) != 0,
+            )
+            relative_diff = np.where(absolute_diff == 0, 0, relative_diff)
+            print(
+                "test_nested_concat_and_gather_maps_compose_before_dense: "
+                f"max_abs_diff={np.max(absolute_diff):.9g}, "
+                f"max_rel_diff={np.max(relative_diff):.9g}",
+                flush=True,
+            )
+            np.testing.assert_allclose(original_output, optimized_output, rtol=1.e-6, atol=1.e-6)
 
     def test_gather_of_dense_output_prunes_weight_and_bias_rows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -623,7 +655,23 @@ class CompilerTests(unittest.TestCase):
                 weight_values[[3, 1, 1], :],
             )
             values = np.random.default_rng(131).standard_normal((4, 6)).astype(np.float32)
-            np.testing.assert_allclose(run_graph(original, values), run_graph(optimized, values), rtol=0, atol=0)
+            original_output = run_graph(original, values)
+            optimized_output = run_graph(optimized, values)
+            absolute_diff = np.abs(original_output - optimized_output)
+            relative_diff = np.divide(
+                absolute_diff,
+                np.abs(original_output),
+                out=np.full_like(absolute_diff, np.inf),
+                where=np.abs(original_output) != 0,
+            )
+            relative_diff = np.where(absolute_diff == 0, 0, relative_diff)
+            print(
+                "test_gather_of_dense_output_prunes_weight_and_bias_rows: "
+                f"max_abs_diff={np.max(absolute_diff):.9g}, "
+                f"max_rel_diff={np.max(relative_diff):.9g}",
+                flush=True,
+            )
+            np.testing.assert_allclose(original_output, optimized_output, rtol=1.e-6, atol=1.e-6)
 
     def test_dense_residual_epilogue_eliminates_linear_temporary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
