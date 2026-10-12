@@ -60,7 +60,7 @@ namespace ponni {
     // Rebinding copies all owned parameter Views and preserves scalar
     // configuration. This is the extension contract for custom layers too.
     template <class NewMemorySpace>
-    auto copy_to_memory_space(NewMemorySpace const & memory_space = NewMemorySpace()) const {
+    auto copy_to_memory_space(NewMemorySpace const & memory_space = NewMemorySpace{}) const {
       return rebind_memory_space<NewMemorySpace>(
           ponni::create_memory_space_copy(params.gamma, memory_space),
           ponni::create_memory_space_copy(params.beta, memory_space), params.epsilon, params.trainable);

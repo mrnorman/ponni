@@ -181,7 +181,7 @@ int main(int argc, char** argv) {
     // Verify Initializer_None performs no write.
     real1d unchanged("unchanged", 8);
     Kokkos::deep_copy(unchanged, 3.0f);
-    ponni::Initializer_None<float>().fill(unchanged);
+    ponni::Initializer_None<float>{}.fill(unchanged);
     auto unchanged_host = ponni::create_host_copy(unchanged);
     for (int i = 0; i < unchanged_host.extent(0); ++i) {
       require_true(nearly_equal(unchanged_host(i), 3.0f), "Initializer_None should not modify values");
@@ -382,8 +382,8 @@ int main(int argc, char** argv) {
     using HostExecutionSpace = Kokkos::DefaultHostExecutionSpace;
     using HostMemorySpace = Kokkos::HostSpace;
     auto host_model = ponni::create_inference_model(
-        HostExecutionSpace(),
-        HostMemorySpace(),
+        HostExecutionSpace{},
+        HostMemorySpace{},
         ponni::Matvec<float>(weights),
         ponni::Bias<float>(bias),
         ponni::LeakyRelu<float>(2, 0.1f));
@@ -893,11 +893,11 @@ int main(int argc, char** argv) {
         return sample_stats(values);
       };
 
-      ponni::Initializer_Zeros<float>().fill(values);
+      ponni::Initializer_Zeros<float>{}.fill(values);
       auto stats = sample_stats(values);
       require_true(stats.minimum == 0.0 && stats.maximum == 0.0, "Initializer_Zeros failed");
 
-      ponni::Initializer_Ones<float>().fill(values);
+      ponni::Initializer_Ones<float>{}.fill(values);
       stats = sample_stats(values);
       require_true(stats.minimum == 1.0 && stats.maximum == 1.0, "Initializer_Ones failed");
 
@@ -960,9 +960,9 @@ int main(int argc, char** argv) {
       // Zero-length Views are valid no-op targets for every initializer,
       // including fan-based formulas that would otherwise divide by zero.
       real2d empty("initializer_empty", 0, fan_out);
-      ponni::Initializer_None<float>().fill(empty);
-      ponni::Initializer_Zeros<float>().fill(empty);
-      ponni::Initializer_Ones<float>().fill(empty);
+      ponni::Initializer_None<float>{}.fill(empty);
+      ponni::Initializer_Zeros<float>{}.fill(empty);
+      ponni::Initializer_Ones<float>{}.fill(empty);
       ponni::Initializer_Constant<float>(2.5f).fill(empty);
       ponni::Initializer_Random_Uniform<float>(-1.0f,1.0f,1).fill(empty);
       ponni::Initializer_Random_Normal<float>(0.0f,1.0f,2).fill(empty);

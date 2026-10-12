@@ -32,7 +32,7 @@ namespace ponni {
     // Model creation may rebind a layer to another memory space. Layers
     // without Views only need to preserve their scalar configuration.
     template <class NewMemorySpace>
-    auto copy_to_memory_space(NewMemorySpace const & = NewMemorySpace()) const {
+    auto copy_to_memory_space(NewMemorySpace const & = NewMemorySpace{}) const {
       return rebind_memory_space<NewMemorySpace>(params.num_inputs);
     }
     char const * get_label() const { return "SELU"; }

@@ -22,6 +22,7 @@ namespace ponni {
 #include <random>
 #include <algorithm>
 #include <type_traits>
+#include <optional>
 #include "initializers/ponni_initializer.h"
 #include "ponni_LayerTraits.h"
 #include "layers/ponni_Matvec.h"

@@ -431,7 +431,7 @@ namespace ponni {
     } else {
       for (std::size_t i = 0; i < elements; i++) host.data()[i] = static_cast<float>(detail::read_scalar<double>(data + 8 * i));
     }
-    return create_memory_space_copy(host,MemorySpace());
+    return create_memory_space_copy(host,MemorySpace{});
   }
 
   template <int N, class MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space>

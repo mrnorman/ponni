@@ -41,7 +41,7 @@ namespace detail {
   inline auto create_inference_model(Layers const &... layers) {
     using ExecutionSpace = Kokkos::DefaultExecutionSpace;
     using MemorySpace = typename ExecutionSpace::memory_space;
-    return detail::create_model<float>(ExecutionSpace(), MemorySpace(), layers...);
+    return detail::create_model<float>(ExecutionSpace{}, MemorySpace{}, layers...);
   }
 
 
@@ -52,7 +52,7 @@ namespace detail {
   inline auto create_inference_model(ExecutionSpace const & execution_space,
                                      Layers const &... layers) {
     using MemorySpace = typename ExecutionSpace::memory_space;
-    return detail::create_model<float>(execution_space, MemorySpace(), layers...);
+    return detail::create_model<float>(execution_space, MemorySpace{}, layers...);
   }
 
 
@@ -70,7 +70,7 @@ namespace detail {
   inline auto create_inference_model_single_precision(Layers const &... layers) {
     using ExecutionSpace = Kokkos::DefaultExecutionSpace;
     using MemorySpace = typename ExecutionSpace::memory_space;
-    return detail::create_model<float>(ExecutionSpace(), MemorySpace(), layers...);
+    return detail::create_model<float>(ExecutionSpace{}, MemorySpace{}, layers...);
   }
 
 
@@ -78,7 +78,7 @@ namespace detail {
   inline auto create_inference_model_double_precision(Layers const &... layers) {
     using ExecutionSpace = Kokkos::DefaultExecutionSpace;
     using MemorySpace = typename ExecutionSpace::memory_space;
-    return detail::create_model<double>(ExecutionSpace(), MemorySpace(), layers...);
+    return detail::create_model<double>(ExecutionSpace{}, MemorySpace{}, layers...);
   }
 
 
@@ -86,7 +86,7 @@ namespace detail {
   inline auto create_inference_model_half_precision(Layers const &... layers) {
     using ExecutionSpace = Kokkos::DefaultExecutionSpace;
     using MemorySpace = typename ExecutionSpace::memory_space;
-    return detail::create_model<Kokkos::Experimental::half_t>(ExecutionSpace(), MemorySpace(), layers...);
+    return detail::create_model<Kokkos::Experimental::half_t>(ExecutionSpace{}, MemorySpace{}, layers...);
   }
 
 
@@ -94,7 +94,7 @@ namespace detail {
   inline auto create_inference_model_bhalf_precision(Layers const &... layers) {
     using ExecutionSpace = Kokkos::DefaultExecutionSpace;
     using MemorySpace = typename ExecutionSpace::memory_space;
-    return detail::create_model<Kokkos::Experimental::bhalf_t>(ExecutionSpace(), MemorySpace(), layers...);
+    return detail::create_model<Kokkos::Experimental::bhalf_t>(ExecutionSpace{}, MemorySpace{}, layers...);
   }
 
 } // namespace ponni

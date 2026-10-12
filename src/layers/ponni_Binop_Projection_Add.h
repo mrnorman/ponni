@@ -40,7 +40,7 @@ namespace ponni {
 
     template <class INIT = Initializer_Random_Uniform<real> >
     Binop_Projection_Add(int num_inputs, int num_saved_inputs, bool trainable = true,
-                         INIT initializer = Initializer_Random_Uniform<real>()) {
+                         INIT initializer = Initializer_Random_Uniform<real>{}) {
       real2d weights("Projection_skip_weights", num_saved_inputs, num_inputs);
       real1d bias("Projection_skip_bias", num_inputs);
       initializer.fill(weights);
@@ -65,7 +65,7 @@ namespace ponni {
     // Copy both parameter Views when the model factory selects a new memory
     // space. Configuration fields remain ordinary constructor arguments.
     template <class NewMemorySpace>
-    auto copy_to_memory_space(NewMemorySpace const & memory_space = NewMemorySpace()) const {
+    auto copy_to_memory_space(NewMemorySpace const & memory_space = NewMemorySpace{}) const {
       return rebind_memory_space<NewMemorySpace>(
           ponni::create_memory_space_copy(params.weights, memory_space),
           ponni::create_memory_space_copy(params.bias, memory_space), params.trainable);

@@ -37,7 +37,7 @@ namespace ponni {
     ~Matvec() = default;
     template < class INIT = Initializer_Random_Uniform<real> >
     Matvec( int num_inputs , int num_outputs , bool trainable = true ,
-            INIT initializer = Initializer_Random_Uniform<real>() ) {
+            INIT initializer = Initializer_Random_Uniform<real>{} ) {
       real2d weights("Bias_weights",num_inputs,num_outputs);
       initializer.fill( weights );
       init(weights,trainable);
@@ -53,7 +53,7 @@ namespace ponni {
     // A memory-space rebound owns an independent copy of the weights. Custom
     // parameterized layers should follow this contract for every owned View.
     template <class NewMemorySpace>
-    auto copy_to_memory_space(NewMemorySpace const & memory_space = NewMemorySpace()) const {
+    auto copy_to_memory_space(NewMemorySpace const & memory_space = NewMemorySpace{}) const {
       return rebind_memory_space<NewMemorySpace>(
           ponni::create_memory_space_copy(params.weights, memory_space), params.trainable);
     }

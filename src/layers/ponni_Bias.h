@@ -34,7 +34,7 @@ namespace ponni {
     Bias () = default;
     ~Bias() = default;
     template < class INIT = Initializer_Random_Uniform<real> >
-    Bias( int num_inputs , bool trainable = true , INIT initializer = Initializer_Random_Uniform<real>() ) {
+    Bias( int num_inputs , bool trainable = true , INIT initializer = Initializer_Random_Uniform<real>{} ) {
       real1d weights("Bias_weights",num_inputs);
       initializer.fill( weights );
       init(weights,trainable);
@@ -51,7 +51,7 @@ namespace ponni {
     // Custom layers owning Views should provide the same operation and copy
     // each View into the requested memory space.
     template <class NewMemorySpace>
-    auto copy_to_memory_space(NewMemorySpace const & memory_space = NewMemorySpace()) const {
+    auto copy_to_memory_space(NewMemorySpace const & memory_space = NewMemorySpace{}) const {
       return rebind_memory_space<NewMemorySpace>(
           ponni::create_memory_space_copy(params.weights, memory_space), params.trainable);
     }

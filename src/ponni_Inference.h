@@ -145,7 +145,7 @@ namespace ponni {
     };
 
     Params params;
-    ExecutionSpace execution_space_;
+    std::optional<ExecutionSpace> execution_space_;
     int internal_state_capacity_ = 0;
  
     // **********************************
@@ -156,9 +156,20 @@ namespace ponni {
     ~Inference() = default;
 
     // This is not intended to be called directly by the user per se. It's easier to call ponni::create_inference_model
-    Inference(TUPLE const & layers, ExecutionSpace const & execution_space = ExecutionSpace())
-      : execution_space_(execution_space) {
+    Inference(TUPLE const & layers) {
       this->params.layers = layers;
+    }
+
+    Inference(TUPLE const & layers, ExecutionSpace const & execution_space)
+      : execution_space_(std::make_optional(execution_space)) {
+      this->params.layers = layers;
+    }
+
+
+
+    ExecutionSpace get_execution_space() const {
+      if (execution_space_) { return *execution_space_; }
+      else                  { return ExecutionSpace{};  }
     }
 
 
@@ -168,7 +179,7 @@ namespace ponni {
     // method is useful for shrinking or releasing retained capacity.
     void reallocate_internal_state(int batch_size) {
       if (batch_size < 0) Kokkos::abort("Inference internal-state batch size must be nonnegative");
-      execution_space_.fence("PONNI internal-state reallocation");
+      get_execution_space().fence("PONNI internal-state reallocation");
       reallocate_saved_states(batch_size);
       reallocate_temporary(params.tmp1, get_planned_temporary_size<0>(), batch_size);
       reallocate_temporary(params.tmp2, get_planned_temporary_size<1>(), batch_size);
@@ -187,7 +198,7 @@ namespace ponni {
       if (feature_size == 0 || batch_size == 0) {
         temporary = real2d();
       } else {
-        Kokkos::realloc(Kokkos::view_alloc(execution_space_, Kokkos::WithoutInitializing),
+        Kokkos::realloc(Kokkos::view_alloc(get_execution_space(), Kokkos::WithoutInitializing),
                         temporary, feature_size, batch_size);
       }
     }
@@ -231,7 +242,7 @@ namespace ponni {
       if constexpr (I < num_layers) {
         if constexpr (LAYER_TYPE::save) {
           int constexpr index = LAYER_TYPE::index;
-          Kokkos::realloc(Kokkos::view_alloc(execution_space_, Kokkos::WithoutInitializing),
+          Kokkos::realloc(Kokkos::view_alloc(get_execution_space(), Kokkos::WithoutInitializing),
                           params.saved_states(index).state,
                           get_saved_state_size<index>(params.layers), batch_size);
         }
@@ -311,7 +322,7 @@ namespace ponni {
       } else {
         for (int i = 0; i < parameter_count; i++) host(i) = static_cast<real>(detail::read_scalar<float>(bytes + 4 * i));
       }
-      set_trainable_parameters(create_memory_space_copy(host,MemorySpace()));
+      set_trainable_parameters(create_memory_space_copy(host,MemorySpace{}));
       return true;
     }
 
@@ -382,7 +393,7 @@ namespace ponni {
       // materializes barriers, and erases unused buffer-selection branches in
       // each concrete model instantiation.
       Kokkos::parallel_for(PONNI_AUTO_LABEL(),
-                           Kokkos::RangePolicy<ExecutionSpace>(execution_space_, 0, batch_size),
+                           Kokkos::RangePolicy<ExecutionSpace>(get_execution_space(), 0, batch_size),
                            KOKKOS_LAMBDA(int ibatch) {
         traverse_mixed_batch_parallel(layers, saved_states, input, output, tmp1, tmp2, ibatch);
       });
@@ -599,7 +610,7 @@ namespace ponni {
         LOCAL_SAVED_TYPE saved_states;
         ponni::SArray<real,std::tuple_element_t<0,TUPLE>::OUTPUT_SIZE> tmp;
         traverse_layers_batch_parallel(params_in.layers, saved_states, input, output,
-                                       ponni::SArray<real,IN_GL>(), tmp);
+                                       ponni::SArray<real,IN_GL>{}, tmp);
       }
     } // forward_batch_parallel_in_kernel
 
@@ -717,7 +728,7 @@ namespace ponni {
 
     // Validate that the input and output sizes of each layer match up
     template <int I = 0>
-    void validate( SAVED_TYPE saved_states = SAVED_TYPE() ) const {
+    void validate( SAVED_TYPE saved_states = SAVED_TYPE{} ) const {
       using LAYER_TYPE = typename std::tuple_element<I,TUPLE>::type;
       auto &this_layer = std::get<I>(params.layers);
       if constexpr (LAYER_TYPE::save) saved_states(LAYER_TYPE::index).size = this_layer.get_num_inputs();

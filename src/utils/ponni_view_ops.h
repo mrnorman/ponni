@@ -9,7 +9,7 @@ namespace ponni {
   // factories when rebinding layer-owned parameters to the model's memory.
   template <class MemorySpace, class ViewType> requires Kokkos::is_view_v<ViewType>
   inline Kokkos::View<typename ViewType::non_const_data_type,Kokkos::LayoutRight,MemorySpace>
-  create_memory_space_copy(ViewType const & view, MemorySpace const & memory_space = MemorySpace()) {
+  create_memory_space_copy(ViewType const & view, MemorySpace const & memory_space = MemorySpace{}) {
     ponni::require_layout_right_views<ViewType>();
     return Kokkos::create_mirror_view_and_copy(memory_space, view);
   }
@@ -24,7 +24,7 @@ namespace ponni {
   create_device_copy(ViewType const & view) {
     ponni::require_layout_right_views<ViewType>();
     using MemorySpace = typename Kokkos::DefaultExecutionSpace::memory_space;
-    return create_memory_space_copy(view, MemorySpace());
+    return create_memory_space_copy(view, MemorySpace{});
   }
 
 

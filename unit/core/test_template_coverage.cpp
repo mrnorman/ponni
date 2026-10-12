@@ -114,7 +114,7 @@ struct TestDense {
   int get_num_trainable_parameters() const { return 0; }
 
   template <class NewMemorySpace>
-  auto copy_to_memory_space(NewMemorySpace const & = NewMemorySpace()) const {
+  auto copy_to_memory_space(NewMemorySpace const & = NewMemorySpace{}) const {
     TestDense<Real,N,NewMemorySpace> result;
     result.params = {params.num_inputs,params.m00,params.m01,params.m10,params.m11};
     return result;
@@ -177,7 +177,7 @@ struct TestIndexedPointwise {
   int get_num_trainable_parameters() const { return 0; }
 
   template <class NewMemorySpace>
-  auto copy_to_memory_space(NewMemorySpace const & = NewMemorySpace()) const {
+  auto copy_to_memory_space(NewMemorySpace const & = NewMemorySpace{}) const {
     TestIndexedPointwise<Real,N,NewMemorySpace> result;
     result.params = {params.num_inputs,params.offset};
     return result;
@@ -237,7 +237,7 @@ struct TestBarrier {
   int get_num_trainable_parameters() const { return 0; }
 
   template <class NewMemorySpace>
-  auto copy_to_memory_space(NewMemorySpace const & = NewMemorySpace()) const {
+  auto copy_to_memory_space(NewMemorySpace const & = NewMemorySpace{}) const {
     TestBarrier<Real,N,NewMemorySpace> result;
     result.params = {params.num_inputs,params.scale};
     return result;
@@ -744,7 +744,7 @@ void test_custom_layer_contract(Check & check) {
   static_assert(ponni::is_pointwise_layer_v<TestIndexedPointwise<float,2>>);
 
   auto model = ponni::create_inference_model(
-      TestDense<float,2>(), TestIndexedPointwise<float,2>(), TestBarrier<float,2>(), TestDense<float,2>());
+      TestDense<float,2>{}, TestIndexedPointwise<float,2>{}, TestBarrier<float,2>{}, TestDense<float,2>{});
   using Model = decltype(model);
   static_assert(Model::get_num_fused_dense_blocks() == 2);
   typename Model::real2d input("custom_layer_input",2,1);
@@ -776,8 +776,8 @@ void test_custom_layer_contract(Check & check) {
   // forces every custom test layer through its copy_to_memory_space contract.
   using HostExecutionSpace = Kokkos::DefaultHostExecutionSpace;
   auto host_model = ponni::create_inference_model(
-      HostExecutionSpace(),
-      TestDense<float,2>(), TestIndexedPointwise<float,2>(), TestBarrier<float,2>(), TestDense<float,2>());
+      HostExecutionSpace{},
+      TestDense<float,2>{}, TestIndexedPointwise<float,2>{}, TestBarrier<float,2>{}, TestDense<float,2>{});
   static_assert(std::is_same_v<typename decltype(host_model)::memory_space,typename HostExecutionSpace::memory_space>);
   Kokkos::View<float**,Kokkos::LayoutRight,typename HostExecutionSpace::memory_space> host_input("custom_host_input",2,1);
   host_input(0,0) = 1.0f;

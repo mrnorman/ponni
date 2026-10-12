@@ -183,9 +183,9 @@ bool check_model(std::string const & weight_path, std::string const & reference_
       for (int i = 0; i < Model::num_outputs; i++) inline_outputs(i,ibatch) = sample_outputs(i);
     });
 
-    auto batch_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), batch_outputs);
-    auto inline_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), inline_outputs);
-    auto half2_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), half2_outputs);
+    auto batch_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, batch_outputs);
+    auto inline_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, inline_outputs);
+    auto half2_host = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, half2_outputs);
     for (int i = 0; i < Model::num_outputs; i++) {
       for (int ibatch = 0; ibatch < test.batch_size; ibatch++) {
         double const expected = test.outputs[i * test.batch_size + ibatch];
