@@ -1614,9 +1614,9 @@ public:
   using ParameterView = Kokkos::View<Scalar*,Kokkos::LayoutRight,MemorySpace>;
   using HalfParameterView =
       Kokkos::View<Kokkos::Experimental::half_t*,Kokkos::LayoutRight,MemorySpace>;
+  ParameterView parameters_;
 
 private:
-  ParameterView parameters_;
   HalfParameterView half_parameters_;
   bool weights_loaded_ = storage_parameter_elements == 0;
 
@@ -1718,6 +1718,8 @@ public:
   {self.model_name}() = default;
 
   static constexpr int get_num_parameters() {{ return learned_parameter_elements; }}
+
+  ParameterView const & get_parameters() const {{ return parameters_; }}
 
   bool weights_loaded() const {{ return weights_loaded_; }}
 
@@ -1895,8 +1897,9 @@ public:
   }}
 
   KOKKOS_INLINE_FUNCTION
-  void infer_one(ponni::SArray<Scalar,num_inputs> const & inputs,
-                 ponni::SArray<Scalar,num_outputs> & outputs) const {{
+  static void infer_one(ponni::SArray<Scalar,num_inputs> const & inputs,
+                        ponni::SArray<Scalar,num_outputs> & outputs,
+                        ParameterView const parameters_) {{
 {inline_workspace_declaration}{inline_mask_workspace_declaration}{body_text}
   }}
 

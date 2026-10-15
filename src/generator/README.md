@@ -40,10 +40,14 @@ python -m pip install -e src/generator
 
 ### End-to-end trained-model example
 
-The following small PyTorch example defines and trains a network using ordinary sample-major framework tensors. Its
-`forward()` method transposes the boundary tensors so the exported ONNX model follows PONNI's `(features, batch)`
-contract. The standalone weight export is a portable, named-tensor checkpoint and also validates that the exported
-ONNX graph is supported by PONNI.
+The following small PyTorch example trains with ordinary `(batch, features)` tensors. Its `forward()` method is an
+export adapter: PONNI's ONNX boundary is `(features, batch)`, while `Linear` layers consume `(batch, features)`, so
+the adapter transposes into the PyTorch layout and transposes the output back. PONNI recognizes this batch-axis
+movement and removes it when generating Kokkos code. The architecture, including its `4 -> 8 -> 2` layer widths and
+operations, determines the generated graph and per-sample dimensions. The synthetic target, training sample count,
+optimizer settings, and optimization steps only affect the learned parameter values; the export example batch size
+does not specialize the generated batch dimension. The standalone weight export is a portable, named-tensor
+checkpoint and also validates that the exported ONNX graph is supported by PONNI.
 
 ```python
 import onnx
@@ -62,25 +66,30 @@ class SmallBatchNetwork(torch.nn.Module):
         )
 
     def forward(self, feature_batch):
+        # Convert the feature-major ONNX boundary to PyTorch's sample-major layout and back.
         return self.network(feature_batch.transpose(0, 1)).transpose(0, 1)
 
 
 model = SmallBatchNetwork()
 optimizer = torch.optim.Adam(model.parameters(), lr=1.e-2)
-training_inputs = torch.randn(4, 64)
+# The training data and target are synthetic examples, not a recommended training task.
+training_inputs = torch.randn(64, 4)
 training_targets = torch.stack((
-    training_inputs[0] + 0.5 * training_inputs[1],
-    torch.tanh(training_inputs[2] - training_inputs[3]),
-))
+    training_inputs[:, 0] + 0.5 * training_inputs[:, 1],
+    torch.tanh(training_inputs[:, 2] - training_inputs[:, 3]),
+), dim=1)
+# Train the network in PyTorch's sample-major layout; forward() is the ONNX boundary adapter.
 for _ in range(200):
     optimizer.zero_grad()
-    loss = torch.nn.functional.mse_loss(model(training_inputs), training_targets)
+    loss = torch.nn.functional.mse_loss(model.network(training_inputs), training_targets)
     loss.backward()
     optimizer.step()
 
 model.eval()
+# Three is just the concrete export example; axis 1 is made dynamic below.
 example = torch.zeros(4, 3)
-batch_dimension = torch.export.Dim("batch", min=1, max=4096)
+# PONNI requires a nonempty batch. No artificial maximum batch size is needed.
+batch_dimension = torch.export.Dim("batch", min=1)
 torch.onnx.export(
     model,
     args=(example,),
@@ -90,10 +99,12 @@ torch.onnx.export(
     verify=True,
     input_names=["features"],
     output_names=["predictions"],
+    # Axis 1 is the batch axis in the feature-major input contract.
     dynamic_shapes=({1: batch_dimension},),
 )
 
 # Record the feature-major boundary contract expected by the generator.
+# The batch_symbol value must match the symbolic axis exported above.
 onnx_model = onnx.load("small_batch.onnx")
 for key, value in {
     "ponni.orientation": "features_batch",
@@ -141,15 +152,16 @@ int main(int argc, char ** argv) {
     throw std::runtime_error("Unable to load PONNI weights: " + error);
   }
 
-  int constexpr batch_size = 32;
+  int constexpr batch_size = 32; // Runtime example size; the generated model accepts other positive batch sizes.
   Model::InputView inputs("inputs",Model::num_inputs,batch_size);
   Model::OutputView batch_outputs("batch_outputs",Model::num_outputs,batch_size);
   Model::OutputView inline_outputs("inline_outputs",Model::num_outputs,batch_size);
 
   auto inputs_host = Kokkos::create_mirror_view(inputs);
+  // Simple synthetic inputs for the example; replace with application data.
   for (int i = 0; i < Model::num_inputs; i++) {
     for (int ibatch = 0; ibatch < batch_size; ibatch++) {
-      inputs_host(i,ibatch) = static_cast<float>(i + ibatch) / 32.f;
+      inputs_host(i,ibatch) = static_cast<float>(i + ibatch) / static_cast<float>(batch_size);
     }
   }
   Kokkos::deep_copy(inputs,inputs_host);
@@ -158,12 +170,12 @@ int main(int argc, char ** argv) {
   model.infer_batch(inputs,batch_outputs);
 
   // Intra-kernel use: each caller iteration owns one fixed-size sample.
-  auto const device_model = model;
+  auto const parameters = model.get_parameters();
   Kokkos::parallel_for("application_kernel",batch_size,KOKKOS_LAMBDA(int ibatch) {
     ponni::SArray<float,Model::num_inputs> sample_inputs;
     ponni::SArray<float,Model::num_outputs> sample_outputs;
     for (int i = 0; i < Model::num_inputs; i++) sample_inputs(i) = inputs(i,ibatch);
-    device_model.infer_one(sample_inputs,sample_outputs);
+    Model::infer_one(sample_inputs,sample_outputs,parameters);
     for (int i = 0; i < Model::num_outputs; i++) inline_outputs(i,ibatch) = sample_outputs(i);
   });
   Kokkos::fence();
@@ -223,6 +235,10 @@ python -m kokkos_nn compile model.onnx --output-dir generated \
   --workspace-reduction-aggressiveness 4
 ```
 
+This deliberately selects nondefault level 4 to demonstrate the option; level 3 remains the default. Use the
+optimization report to decide whether recomputation's workspace savings justify its additional dense work for a
+particular model.
+
 The optimization report records the selected level, streamed pairs, recomputed activations, eliminated workspace
 elements, and additional dense multiply-adds. These levels describe generated workspace policy, not measured hardware
 register allocation.
@@ -269,7 +285,7 @@ Every generated model exposes exactly these inference APIs:
 
 | API | Execution model | Arithmetic |
 |---|---|---|
-| `infer_one` | `KOKKOS_INLINE_FUNCTION`, caller-owned `SArray` input/output | model scalar type |
+| `infer_one` | `static KOKKOS_INLINE_FUNCTION`, caller-owned `SArray` input/output and `ParameterView` | model scalar type |
 | `infer_batch` | one `Kokkos::RangePolicy` iteration per sample | model scalar type |
 | `infer_batch_half2` | one `Kokkos::RangePolicy` iteration per adjacent sample pair | `ponni::TwoHalf` FP16 |
 

@@ -174,12 +174,12 @@ bool check_model(std::string const & weight_path, std::string const & reference_
 
     // A model copy is a shallow copy of device Views and is safe to capture in
     // the kernel. infer_one is exercised inside a caller-owned device region.
-    auto const device_model = model;
+    auto const parameters = model.get_parameters();
     Kokkos::parallel_for("GeneratedModel::embedded_infer_one", test.batch_size, KOKKOS_LAMBDA(int ibatch) {
       ponni::SArray<typename Model::scalar_type,Model::num_inputs> sample_inputs;
       ponni::SArray<typename Model::scalar_type,Model::num_outputs> sample_outputs;
       for (int i = 0; i < Model::num_inputs; i++) sample_inputs(i) = inputs(i,ibatch);
-      device_model.infer_one(sample_inputs, sample_outputs);
+      Model::infer_one(sample_inputs, sample_outputs, parameters);
       for (int i = 0; i < Model::num_outputs; i++) inline_outputs(i,ibatch) = sample_outputs(i);
     });
 

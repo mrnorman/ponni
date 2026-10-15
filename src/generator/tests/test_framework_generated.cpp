@@ -45,12 +45,12 @@ bool check_model(std::string const & weight_path, std::string const & reference_
     model.infer_batch_half2(inputs, half2_outputs);
 
     // Exercise infer_one in its intended setting: embedded in a device kernel.
-    auto const device_model = model;
+    auto const parameters = model.get_parameters();
     Kokkos::parallel_for("FrameworkModel::embedded_infer_one", test.batch_size, KOKKOS_LAMBDA(int ibatch) {
       ponni::SArray<float,Model::num_inputs> sample_inputs;
       ponni::SArray<float,Model::num_outputs> sample_outputs;
       for (int i = 0; i < Model::num_inputs; i++) sample_inputs(i) = inputs(i,ibatch);
-      device_model.infer_one(sample_inputs, sample_outputs);
+      Model::infer_one(sample_inputs, sample_outputs, parameters);
       for (int i = 0; i < Model::num_outputs; i++) inline_outputs(i,ibatch) = sample_outputs(i);
     });
 
