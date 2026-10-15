@@ -29,6 +29,10 @@ def check_header(path: Path) -> None:
     for target in ("infer_one", "infer_batch", "infer_batch_half2"):
         if f"void {target}(" not in generated:
             raise RuntimeError(f"{path.name}: missing generated target {target}")
+    if "static void infer_one(" not in generated:
+        raise RuntimeError(f"{path.name}: infer_one must be static")
+    if "ParameterView const & get_parameters() const" not in generated:
+        raise RuntimeError(f"{path.name}: missing parameter View accessor")
     for forbidden in ("infer_batch_hierarchical", "infer_batch_team", "Kokkos::TeamPolicy", "team_shmem"):
         if forbidden in generated:
             raise RuntimeError(f"{path.name}: obsolete generated construct {forbidden!r} remains")

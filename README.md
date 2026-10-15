@@ -46,7 +46,7 @@ int main(int argc, char ** argv) {
     using DeviceMatrix = Kokkos::View<float**, Kokkos::LayoutRight, MemorySpace>;
     using DeviceVector = Kokkos::View<float*, Kokkos::LayoutRight, MemorySpace>;
 
-    int constexpr batch_size = 1000000;
+    int constexpr batch_size = 1000000; // Runtime workload size; the layer widths define the model shape.
 
     DeviceMatrix weights_1("weights_1", 2, 3);
     DeviceVector bias_1("bias_1", 3);
@@ -68,6 +68,7 @@ int main(int argc, char ** argv) {
     model.validate();
 
     DeviceMatrix inputs("inputs", 2, batch_size);
+    // Uniform synthetic input for this example; applications supply their own data.
     Kokkos::deep_copy(inputs, 1.0f);
 
     // Scratch storage grows automatically and is retained for later batches.
@@ -154,9 +155,10 @@ selected Kokkos memory space. Standard Safetensors tools can inspect the same `.
 
 ### Use the generated model inside an existing kernel
 
-`infer_one` is a `KOKKOS_INLINE_FUNCTION` that accepts fixed-size `ponni::SArray` values. Load weights on the host
-before launching the kernel, then capture the model's parameter Views by value. The fragment below belongs inside an
-initialized Kokkos scope, like the scope in the template-mode example.
+`infer_one` is a static `KOKKOS_INLINE_FUNCTION` that accepts fixed-size `ponni::SArray` values and the model's
+parameter View. Load weights on the host before launching the kernel, then copy the View handle returned by
+`model.get_parameters()` into a local variable for capture. The fragment below belongs inside an initialized Kokkos
+scope, like the scope in the template-mode example.
 
 ```cpp
 #include "MyModel.hpp"
@@ -165,7 +167,7 @@ initialized Kokkos scope, like the scope in the template-mode example.
 #include <string>
 
 using Model = ponni::generated::MyModel<float>;
-int constexpr batch_size = 1000000;
+int constexpr batch_size = 1000000; // Runtime batch size; it is not baked into the generated model.
 
 Model model;
 std::string error;
@@ -178,6 +180,7 @@ Model::OutputView outputs("outputs", Model::num_outputs, batch_size);
 
 // Initialize inputs through a host mirror; do not index GPU-resident memory on the host.
 auto inputs_host = Kokkos::create_mirror_view(inputs);
+// Deterministic synthetic inputs for the example; replace with application data.
 for (int ibatch = 0; ibatch < batch_size; ibatch++) {
   for (int i = 0; i < Model::num_inputs; i++) {
     inputs_host(i,ibatch) = static_cast<float>(i + ibatch % 4);
@@ -185,7 +188,7 @@ for (int ibatch = 0; ibatch < batch_size; ibatch++) {
 }
 Kokkos::deep_copy(inputs, inputs_host);
 
-auto const device_model = model;
+auto const parameters = model.get_parameters();
 Kokkos::parallel_for("application_with_embedded_nn", batch_size, KOKKOS_LAMBDA(int ibatch) {
   ponni::SArray<float, Model::num_inputs> sample_inputs;
   ponni::SArray<float, Model::num_outputs> sample_outputs;
@@ -193,7 +196,7 @@ Kokkos::parallel_for("application_with_embedded_nn", batch_size, KOKKOS_LAMBDA(i
   for (int i = 0; i < Model::num_inputs; i++) {
     sample_inputs(i) = inputs(i,ibatch);
   }
-  device_model.infer_one(sample_inputs, sample_outputs);
+  Model::infer_one(sample_inputs, sample_outputs, parameters);
   for (int i = 0; i < Model::num_outputs; i++) {
     outputs(i,ibatch) = sample_outputs(i);
   }
@@ -215,7 +218,7 @@ batch API; it launches one Kokkos iteration per sample.
 #include <string>
 
 using Model = ponni::generated::MyModel<float>;
-int constexpr batch_size = 1000000;
+int constexpr batch_size = 1000000; // Runtime batch size; it is not baked into the generated model.
 
 Model model;
 std::string error;
@@ -227,6 +230,7 @@ Model::InputView inputs("inputs", Model::num_inputs, batch_size);
 Model::OutputView outputs("outputs", Model::num_outputs, batch_size);
 
 auto inputs_host = Kokkos::create_mirror_view(inputs);
+// Deterministic synthetic inputs for the example; replace with application data.
 for (int ibatch = 0; ibatch < batch_size; ibatch++) {
   for (int i = 0; i < Model::num_inputs; i++) {
     inputs_host(i,ibatch) = static_cast<float>(i + ibatch % 4);
@@ -252,7 +256,7 @@ Kokkos first, then PONNI, and link the application against `ponni`:
 cmake_minimum_required(VERSION 3.22)
 project(MyApplication LANGUAGES CXX)
 
-# These may also be provided through find_package() in an installed workflow.
+# Replace these placeholders with local source paths, or use find_package() in an installed workflow.
 add_subdirectory(/path/to/kokkos kokkos)
 add_subdirectory(/path/to/ponni ponni)
 

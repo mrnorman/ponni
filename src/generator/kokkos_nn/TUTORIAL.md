@@ -401,8 +401,9 @@ storage planning.
 a production runtime. Its purpose is to give the compiler an independent executable meaning for its IR.
 
 During compilation, [compiler.py](compiler.py) creates deterministic random input with seven batch samples, executes
-the original imported graph and optimized graph, and compares their outputs. Compilation fails if the difference
-exceeds the dtype-appropriate tolerance.
+the original imported graph and optimized graph, and compares their outputs. Seven is just the internal verification
+batch size; it is not a limit or specialization in the generated model. Compilation fails if the difference exceeds
+the dtype-appropriate tolerance.
 
 This catches many pass bugs, but it is not a mathematical proof over all possible input values. Each optimization
 still needs focused tests for edge cases, shapes, attributes, and graph ownership.
@@ -523,7 +524,8 @@ The emitter maintains parallel access modes so the same optimized graph can targ
 ### `infer_one`
 
 - `KOKKOS_INLINE_FUNCTION`;
-- accepts caller-owned `ponni::SArray` input and output;
+- static member function accepting caller-owned `ponni::SArray` input/output and a `ParameterView` from
+  `model.get_parameters()`;
 - intended to be called inside an existing device kernel;
 - uses fixed local floating and Boolean arrays determined by the planner.
 
